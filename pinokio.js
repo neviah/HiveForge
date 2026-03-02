@@ -1,13 +1,15 @@
 // Pinokio app manifest for RamClaw with dynamic menu (install / start / update)
 
 module.exports = {
-	id: 'ramclaw',
-	version: '0.1.0',
+	version: '2.0',
 	title: 'RamClaw',
-	description: 'Fully sandboxed, LM Studio-only OpenClaw fork packaged for Pinokio.',
+	description: 'Sandboxed LM Studio-only OpenClaw fork packaged for Pinokio.',
 	icon: 'icon.png',
 	menu: async (kernel, info) => {
-		const installed = info.exists('sandbox/venv');
+		const sandboxExists = info.exists('sandbox');
+		const venvExists = info.exists('sandbox/venv');
+		const installed = sandboxExists && venvExists;
+
 		const running = {
 			install: info.running('install.js'),
 			start: info.running('start.js'),
@@ -55,7 +57,7 @@ module.exports = {
 				}];
 			}
 
-			// Idle, installed
+			// Idle + installed: show Start, Update, Logs, Workspace, Key
 			return [
 				{
 					default: true,
