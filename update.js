@@ -15,9 +15,9 @@ module.exports = {
       method: 'shell.run',
       params: {
         message: [
-          'sandbox/venv/Scripts/python.exe -m pip install --upgrade ./openclaw',
-          'sandbox/venv/Scripts/python.exe -m pip install --upgrade playwright gitpython',
-          'sandbox/venv/Scripts/python.exe -m playwright install chromium',
+          '".\\sandbox\\venv\\Scripts\\python.exe" -m pip install --upgrade ./openclaw',
+          '".\\sandbox\\venv\\Scripts\\python.exe" -m pip install --upgrade playwright gitpython',
+          '".\\sandbox\\venv\\Scripts\\python.exe" -m playwright install chromium',
           'node create_sandbox.js'
         ]
       }
