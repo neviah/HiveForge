@@ -27,9 +27,26 @@ async function pingLMStudio(endpoint) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2500);
   try {
-    const resp = await fetch(`${endpoint.replace(/\/$/, '')}/models`, { signal: controller.signal });
+    const base = endpoint.replace(/\/$/, '');
+    const candidates = [
+      `${base}/models`,
+      `${base.replace(/\/v1$/, '')}/v1/models`,
+      `${base.replace(/\/v1$/, '')}/models`,
+    ];
+
+    for (const url of candidates) {
+      try {
+        const resp = await fetch(url, { signal: controller.signal });
+        if (resp.ok) {
+          clearTimeout(timeout);
+          return true;
+        }
+      } catch (err) {
+      }
+    }
+
     clearTimeout(timeout);
-    return resp.ok;
+    return false;
   } catch (err) {
     clearTimeout(timeout);
     return false;
@@ -115,8 +132,7 @@ async function main() {
   const endpoint = cfg.llm?.endpoint || 'http://127.0.0.1:1234/v1';
   const ok = await pingLMStudio(endpoint);
   if (!ok) {
-    log(`LM Studio is not reachable at ${endpoint}`);
-    process.exit(1);
+    log(`Warning: LM Studio is not reachable at ${endpoint}. UI will still start; tasks may fail until LM Studio API is enabled.`);
   }
 
   const server = http.createServer((req, res) => {
