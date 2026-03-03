@@ -536,13 +536,29 @@ function runAgentTask(task, responseStream) {
   return { taskRun, child };
 }
 
+function runCanonicalSmokeTest(responseStream) {
+  const smokePrompt = [
+    'Run a real filesystem smoke test using the file tool only (no simulation).',
+    '1) Create /sandbox/workspace/healthcheck directory.',
+    '2) Write /sandbox/workspace/healthcheck/status.json with keys timestamp, writable_root, checks.',
+    '3) Append "openclaw smoke test ok" plus newline to /sandbox/workspace/healthcheck/log.txt.',
+    '4) Read back both files and report contents.',
+    '5) List files in /sandbox/workspace/healthcheck.',
+    'End with SMOKE_TEST_PASS only if all operations actually succeeded.'
+  ].join(' ');
+
+  const result = runAgentTask(smokePrompt, responseStream);
+  result.taskRun.source = 'smoke-test';
+  return result;
+}
+
 function isSmokePrompt(taskText) {
   const text = (taskText || '').toLowerCase();
   return text.includes('smoke test') || text.includes('healthcheck');
 }
 
 function verifySmokeArtifacts(taskRun) {
-  if (!isSmokePrompt(taskRun.task) || taskRun.source !== 'task') {
+  if (!isSmokePrompt(taskRun.task) || !['task', 'smoke-test'].includes(taskRun.source)) {
     return;
   }
 
@@ -755,6 +771,18 @@ async function main() {
     if (req.url === '/api/task' && req.method === 'POST') {
       readRequestBody(req).then((body) => handleTask(req, res, body)).catch((err) => {
         writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
+    if (req.url === '/api/task/smoke' && req.method === 'POST') {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      const { taskRun, child } = runCanonicalSmokeTest(res);
+      req.on('close', () => {
+        if (taskRun.status === 'running' && child) {
+          child.kill();
+          completeTaskRun(taskRun, 'failed', -1, `Task ${taskRun.id} interrupted by client disconnect`);
+        }
       });
       return;
     }

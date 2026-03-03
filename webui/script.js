@@ -11,6 +11,7 @@ const exportTaskBtn = document.getElementById('exportTask');
 const historyActionStatusEl = document.getElementById('historyActionStatus');
 const taskEl = document.getElementById('task');
 const runBtn = document.getElementById('run');
+const runSmokeBtn = document.getElementById('runSmoke');
 const stopBtn = document.getElementById('stop');
 const taskStatusEl = document.getElementById('taskStatus');
 const keyBtn = document.getElementById('showKey');
@@ -370,14 +371,23 @@ async function exportSelectedTask() {
 async function runTask() {
   const task = taskEl.value.trim();
   if (!task) return;
+  await runTaskRequest('/api/task', { task });
+}
+
+async function runSmokeTask() {
+  await runTaskRequest('/api/task/smoke', {});
+}
+
+async function runTaskRequest(endpoint, payload) {
   runBtn.disabled = true;
+  runSmokeBtn.disabled = true;
   stopBtn.disabled = false;
   taskStatusEl.textContent = 'Running...';
   currentRunningTaskId = null;
-  const res = await fetch('/api/task', {
+  const res = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ task })
+    body: JSON.stringify(payload || {})
   });
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -387,6 +397,7 @@ async function runTask() {
     decoder.decode(value);
   }
   runBtn.disabled = false;
+  runSmokeBtn.disabled = false;
   stopBtn.disabled = true;
   taskStatusEl.textContent = 'Idle';
   currentRunningTaskId = null;
@@ -514,6 +525,7 @@ function initEventStream() {
 }
 
 runBtn.addEventListener('click', runTask);
+runSmokeBtn.addEventListener('click', runSmokeTask);
 stopBtn.addEventListener('click', stopRunningTask);
 
 [historySearchEl, historyStatusEl, historyRangeEl, historyTagEl].forEach((el) => {
@@ -543,6 +555,7 @@ exportTaskBtn.addEventListener('click', exportSelectedTask);
 initTabs();
 initTheme();
 stopBtn.disabled = true;
+runSmokeBtn.disabled = false;
 initEventStream();
 refreshState();
 refreshPublicKey();
