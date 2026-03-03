@@ -110,9 +110,9 @@
 <body data-theme="light">
   <div class="layout">
     <aside class="sidebar">
-      <div class="brand">
+      <div class="brand" style="display:flex; align-items:center; gap:0.6rem;">
+        <img src="/assets/logo.png" alt="RamClaw logo" style="width:28px; height:28px; object-fit:contain;" onerror="this.style.display='none';" />
         <h2 style="margin:0;">RamClaw</h2>
-        <div class="muted">Dashboard</div>
       </div>
 
       <div class="tabs" style="border-bottom: 1px solid var(--border);">
@@ -136,9 +136,8 @@
 
     <div class="panel">
       <div class="header">
-        <div style="display:flex; align-items:center; gap:0.65rem;">
-          <img src="/assets/logo-transparent.png" alt="RamClaw logo" style="width:36px; height:36px; object-fit:contain;" onerror="this.style.display='none';" />
-          <h1 class="title-main">RamClaw Dashboard</h1>
+        <div>
+          <h1 class="title-main">Dashboard</h1>
         </div>
         <div>
           <div class="muted title-sub">Sandboxed, LM Studio only, live action telemetry.</div>
