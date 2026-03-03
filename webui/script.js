@@ -42,6 +42,7 @@ let appState = {
 let selectedTaskId = null;
 let selectedTask = null;
 let currentRunningTaskId = null;
+const tokenBuffers = new WeakMap();
 
 workspaceLink.href = '/workspace';
 
@@ -61,6 +62,46 @@ function addChatLine(container, entry) {
   if (message.trim() === '<think>' || message.trim() === '</think>') {
     return;
   }
+
+  const buffer = tokenBuffers.get(container) || new Map();
+  tokenBuffers.set(container, buffer);
+  const key = `${entry.taskId || 'global'}:${entry.type || 'event'}`;
+  const canCoalesce = (entry.type === 'stdout' || entry.type === 'stream') && !message.includes('\n');
+
+  if (canCoalesce) {
+    let line = buffer.get(key);
+    if (!line || !line.isConnected) {
+      line = document.createElement('div');
+      line.className = 'chat-line';
+      line.dataset.taskId = String(entry.taskId || '');
+      line.dataset.type = entry.type || 'stream';
+
+      const ts = document.createElement('small');
+      ts.textContent = formatTs(entry.ts);
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = `[${entry.type}]`;
+      const text = document.createElement('span');
+      text.className = 'msg';
+      text.textContent = message;
+
+      line.appendChild(ts);
+      line.appendChild(tag);
+      line.appendChild(text);
+      container.appendChild(line);
+      buffer.set(key, line);
+    } else {
+      const textNode = line.querySelector('.msg');
+      if (textNode) {
+        textNode.textContent += message;
+      }
+    }
+
+    container.scrollTop = container.scrollHeight;
+    return;
+  }
+
+  buffer.delete(key);
   const line = document.createElement('div');
   line.className = 'chat-line';
   line.innerHTML = `<small>${formatTs(entry.ts)}</small><span class="tag">[${entry.type}]</span>${escapeHtml(message)}`;
@@ -71,6 +112,10 @@ function addChatLine(container, entry) {
 function clearElement(el) {
   while (el.firstChild) {
     el.removeChild(el.firstChild);
+  }
+  const buffer = tokenBuffers.get(el);
+  if (buffer) {
+    buffer.clear();
   }
 }
 
@@ -338,12 +383,7 @@ async function runTask() {
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    const text = decoder.decode(value);
-    addChatLine(liveChatEl, {
-      ts: new Date().toISOString(),
-      type: 'stream',
-      message: text
-    });
+    decoder.decode(value);
   }
   runBtn.disabled = false;
   stopBtn.disabled = true;
@@ -440,6 +480,7 @@ function initEventStream() {
       const data = JSON.parse(evt.data);
       addChatLine(liveChatEl, {
         ts: data.ts,
+        taskId: data.taskId,
         type: data.type || 'event',
         message: `#${data.taskId || '-'} ${data.message || ''}`
       });
@@ -459,6 +500,7 @@ function initEventStream() {
       if (selectedTaskId && data.taskId === selectedTaskId) {
         addChatLine(historyChatEl, {
           ts: data.ts,
+          taskId: data.taskId,
           type: data.type || 'event',
           message: data.message || ''
         });
