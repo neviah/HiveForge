@@ -12,6 +12,7 @@ const historyActionStatusEl = document.getElementById('historyActionStatus');
 const taskEl = document.getElementById('task');
 const runBtn = document.getElementById('run');
 const runSmokeBtn = document.getElementById('runSmoke');
+const runBrowserSmokeBtn = document.getElementById('runBrowserSmoke');
 const stopBtn = document.getElementById('stop');
 const taskStatusEl = document.getElementById('taskStatus');
 const keyBtn = document.getElementById('showKey');
@@ -378,9 +379,14 @@ async function runSmokeTask() {
   await runTaskRequest('/api/task/smoke', {});
 }
 
+async function runBrowserSmokeTask() {
+  await runTaskRequest('/api/task/smoke-browser', {});
+}
+
 async function runTaskRequest(endpoint, payload) {
   runBtn.disabled = true;
   runSmokeBtn.disabled = true;
+  runBrowserSmokeBtn.disabled = true;
   stopBtn.disabled = false;
   taskStatusEl.textContent = 'Running...';
   currentRunningTaskId = null;
@@ -398,6 +404,7 @@ async function runTaskRequest(endpoint, payload) {
   }
   runBtn.disabled = false;
   runSmokeBtn.disabled = false;
+  runBrowserSmokeBtn.disabled = false;
   stopBtn.disabled = true;
   taskStatusEl.textContent = 'Idle';
   currentRunningTaskId = null;
@@ -526,6 +533,7 @@ function initEventStream() {
 
 runBtn.addEventListener('click', runTask);
 runSmokeBtn.addEventListener('click', runSmokeTask);
+runBrowserSmokeBtn.addEventListener('click', runBrowserSmokeTask);
 stopBtn.addEventListener('click', stopRunningTask);
 
 [historySearchEl, historyStatusEl, historyRangeEl, historyTagEl].forEach((el) => {
@@ -556,6 +564,7 @@ initTabs();
 initTheme();
 stopBtn.disabled = true;
 runSmokeBtn.disabled = false;
+runBrowserSmokeBtn.disabled = false;
 initEventStream();
 refreshState();
 refreshPublicKey();

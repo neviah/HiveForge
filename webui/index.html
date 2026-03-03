@@ -34,18 +34,18 @@
       --link: #38bdf8;
     }
     body[data-theme='ambient'] {
-      --bg: #eef2ff;
-      --panel-bg: #ffffff;
-      --sidebar-bg: #f5f3ff;
-      --card-bg: #ffffff;
-      --text: #1f1147;
-      --muted: #6b5aa8;
-      --border: #ddd6fe;
-      --accent: #7c3aed;
+      --bg: #25282c;
+      --panel-bg: #2f3338;
+      --sidebar-bg: #262a2f;
+      --card-bg: #33383f;
+      --text: #e5e7eb;
+      --muted: #aab1bb;
+      --border: #434a53;
+      --accent: #8b5cf6;
       --accent-text: #ffffff;
-      --chat-bg: #f5f3ff;
-      --input-bg: #ffffff;
-      --link: #6d28d9;
+      --chat-bg: #22262b;
+      --input-bg: #2b2f35;
+      --link: #c4b5fd;
     }
     body { font-family: sans-serif; margin: 0; background: var(--bg); color: var(--text); }
     .layout { display: grid; grid-template-columns: 260px 1fr; gap: 1rem; max-width: 1380px; margin: 1rem auto; padding: 0 1rem; }
@@ -75,6 +75,8 @@
     button { background: var(--accent); color: var(--accent-text); border: none; padding: 0.65rem 1rem; border-radius: 8px; cursor: pointer; font-weight: 700; }
     button.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
     button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .task-actions { margin-top: 0.75rem; display:flex; gap:0.5rem; align-items:center; flex-wrap: wrap; }
+    .task-actions .smoke-actions { margin-left: auto; display:flex; gap:0.5rem; padding-left: 0.75rem; border-left: 1px dashed var(--border); }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
     .card { border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem; background: var(--card-bg); }
     .chat { height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--chat-bg); padding: 0.75rem; }
@@ -147,10 +149,13 @@
       <section id="taskTab" class="tab active">
         <label for="task">Task</label>
         <textarea id="task" placeholder="What should RamClaw do?"></textarea>
-        <div style="margin-top: 0.75rem; display:flex; gap:0.5rem; align-items:center; flex-wrap: wrap;">
+        <div class="task-actions">
           <button id="run">Run Task</button>
-          <button id="runSmoke" class="secondary">Run Verified Smoke Test</button>
           <button id="stop" class="secondary">Stop Task</button>
+          <div class="smoke-actions">
+            <button id="runSmoke" class="secondary">Run Verified Smoke Test</button>
+            <button id="runBrowserSmoke" class="secondary">Run Browser Smoke Test</button>
+          </div>
           <span id="taskStatus" class="muted">Idle</span>
         </div>
         <h3>Live Task Chat</h3>

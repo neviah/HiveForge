@@ -36,6 +36,26 @@ class Agent:
                         "required": ["action", "path"]
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "browser",
+                    "description": "Fetch web pages and return status, title, and preview content.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "enum": ["fetch"]
+                            },
+                            "url": {"type": "string"},
+                            "timeout": {"type": "integer"},
+                            "max_chars": {"type": "integer"}
+                        },
+                        "required": ["action", "url"]
+                    }
+                }
             }
         ]
 

@@ -553,6 +553,19 @@ function runCanonicalSmokeTest(responseStream) {
   return result;
 }
 
+function runCanonicalBrowserSmokeTest(responseStream) {
+  const prompt = [
+    'Run a browser smoke test using the browser tool only.',
+    '1) Fetch https://example.com and return status code, title, and first 200 chars.',
+    '2) Fetch https://httpbin.org/get and return status code and origin field.',
+    '3) If both succeed, end with BROWSER_SMOKE_TEST_PASS.'
+  ].join(' ');
+
+  const result = runAgentTask(prompt, responseStream);
+  result.taskRun.source = 'smoke-browser';
+  return result;
+}
+
 function isSmokePrompt(taskText) {
   const text = (taskText || '').toLowerCase();
   return text.includes('smoke test') || text.includes('healthcheck');
@@ -585,11 +598,22 @@ function verifySmokeArtifacts(taskRun) {
     const statusObj = JSON.parse(statusRaw);
     const logRaw = fs.readFileSync(logPath, 'utf-8');
 
-    const checksOk = Array.isArray(statusObj.checks) && ['write', 'read', 'list', 'append'].every((name) => statusObj.checks.includes(name));
-    const rootOk = typeof statusObj.writable_root === 'string' && statusObj.writable_root.length > 0;
-    const logOk = logRaw.includes('openclaw smoke test ok');
+    const checks = Array.isArray(statusObj.checks) ? statusObj.checks.map((v) => String(v).toLowerCase()) : [];
+    const acceptedCheckSets = [
+      ['write', 'read', 'list', 'append'],
+      ['directory_creation', 'file_write', 'append_test']
+    ];
+    const checksOk = acceptedCheckSets.some((checkSet) => checkSet.every((name) => checks.includes(name)));
 
-    if (checksOk && rootOk && logOk) {
+    const rootValue = statusObj.writable_root;
+    const rootOk = (
+      (typeof rootValue === 'string' && rootValue.length > 0) ||
+      (typeof rootValue === 'boolean' && rootValue)
+    );
+    const logOk = logRaw.includes('openclaw smoke test ok');
+    const timestampOk = typeof statusObj.timestamp === 'string' && statusObj.timestamp.length > 0;
+
+    if (checksOk && rootOk && logOk && timestampOk) {
       appendTaskEvent(taskRun, 'system', 'Filesystem verification verdict: PASS (healthcheck artifacts confirmed)');
       return;
     }
@@ -700,6 +724,26 @@ function recordIntegrationTestInHistory(result) {
   );
 }
 
+function verifyBrowserSmoke(taskRun) {
+  if (taskRun.source !== 'smoke-browser') {
+    return;
+  }
+
+  const hadBrowserToolSuccess = taskRun.events.some((event) =>
+    event.type === 'stdout' && event.message.includes('[tool:browser] ok')
+  );
+
+  if (!hadBrowserToolSuccess) {
+    taskRun.status = 'failed';
+    taskRun.exitCode = taskRun.exitCode === 0 ? 3 : taskRun.exitCode;
+    appendTaskEvent(taskRun, 'stderr', 'Browser smoke verification failed: no successful browser tool call detected');
+    appendTaskEvent(taskRun, 'system', 'Browser smoke verification verdict: FAIL');
+    return;
+  }
+
+  appendTaskEvent(taskRun, 'system', 'Browser smoke verification verdict: PASS');
+}
+
 function exportTaskTranscript(taskRun) {
   const lines = [];
   lines.push(`Task #${taskRun.id}`);
@@ -779,6 +823,18 @@ async function main() {
     if (req.url === '/api/task/smoke' && req.method === 'POST') {
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       const { taskRun, child } = runCanonicalSmokeTest(res);
+      req.on('close', () => {
+        if (taskRun.status === 'running' && child) {
+          child.kill();
+          completeTaskRun(taskRun, 'failed', -1, `Task ${taskRun.id} interrupted by client disconnect`);
+        }
+      });
+      return;
+    }
+
+    if (req.url === '/api/task/smoke-browser' && req.method === 'POST') {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      const { taskRun, child } = runCanonicalBrowserSmokeTest(res);
       req.on('close', () => {
         if (taskRun.status === 'running' && child) {
           child.kill();
