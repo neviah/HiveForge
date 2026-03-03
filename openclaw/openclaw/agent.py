@@ -56,6 +56,47 @@ class Agent:
                         "required": ["action", "url"]
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "npm",
+                    "description": "Manage npm packages in the workspace. Install packages or list installed dependencies.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "enum": ["install", "list"]
+                            },
+                            "packages": {"type": "string"},
+                            "save_dev": {"type": "boolean"}
+                        },
+                        "required": ["action"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "playwright",
+                    "description": "Interact with web pages: click, fill, navigate, take screenshots, wait for elements.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "enum": ["navigate", "click", "fill", "wait_for_selector", "screenshot", "get_content"]
+                            },
+                            "url": {"type": "string"},
+                            "selector": {"type": "string"},
+                            "text": {"type": "string"},
+                            "path": {"type": "string"},
+                            "timeout": {"type": "integer"}
+                        },
+                        "required": ["action"]
+                    }
+                }
             }
         ]
 
@@ -156,6 +197,10 @@ class Agent:
         raise ValueError(f"Tool {name} has no run method")
 
     def run_task(self, prompt: str) -> Generator[str, None, None]:
+        # Initialize npm tool with workspace
+        from .tools.npm import NpmTool
+        self.tools["npm"] = NpmTool(str(self._workspace_root()))
+        
         messages: list[Dict[str, Any]] = [self._system_message(), {"role": "user", "content": prompt}]
 
         for _ in range(8):

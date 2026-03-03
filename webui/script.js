@@ -34,6 +34,7 @@ const testWhatsappBtn = document.getElementById('testWhatsapp');
 const githubTestResultEl = document.getElementById('githubTestResult');
 const telegramTestResultEl = document.getElementById('telegramTestResult');
 const whatsappTestResultEl = document.getElementById('whatsappTestResult');
+const copyChatBtn = document.getElementById('copyChatBtn');
 const tabButtons = document.querySelectorAll('.tab-btn');
 const tabs = document.querySelectorAll('.tab');
 const themeButtons = document.querySelectorAll('.theme-btn');
@@ -120,6 +121,31 @@ function clearElement(el) {
   if (buffer) {
     buffer.clear();
   }
+}
+
+function copyLiveChatContent() {
+  const lines = [];
+  const chatLines = liveChatEl.querySelectorAll('.chat-line');
+  
+  chatLines.forEach((line) => {
+    const ts = line.querySelector('small')?.textContent || '';
+    const tag = line.querySelector('.tag')?.textContent || '';
+    const msg = line.querySelector('.msg')?.textContent || line.textContent.replace(ts, '').replace(tag, '').trim();
+    lines.push(`${ts} ${tag} ${msg}`.trim());
+  });
+  
+  const text = lines.join('\n');
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copyChatBtn');
+    const originalText = btn.textContent;
+    btn.textContent = '✓ Copied!';
+    setTimeout(() => {
+      btn.textContent = originalText;
+    }, 2000);
+  }).catch((err) => {
+    console.error('Failed to copy:', err);
+    alert('Could not copy to clipboard');
+  });
 }
 
 function getRangeStart(rangeValue) {
@@ -535,6 +561,7 @@ runBtn.addEventListener('click', runTask);
 runSmokeBtn.addEventListener('click', runSmokeTask);
 runBrowserSmokeBtn.addEventListener('click', runBrowserSmokeTask);
 stopBtn.addEventListener('click', stopRunningTask);
+copyChatBtn.addEventListener('click', copyLiveChatContent);
 
 [historySearchEl, historyStatusEl, historyRangeEl, historyTagEl].forEach((el) => {
   el.addEventListener('input', () => {

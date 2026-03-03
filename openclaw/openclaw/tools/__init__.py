@@ -10,6 +10,8 @@ from .gmail import GmailTool
 from .browser import BrowserTool
 from .github import GitHubTool
 from .file import FileTool
+from .npm import NpmTool
+from .playwright_interact import PlaywrightTool
 
 TOOLS = {
     "telegram": TelegramTool(),
@@ -19,6 +21,8 @@ TOOLS = {
     "browser": BrowserTool(),
     "github": GitHubTool(),
     "file": FileTool(),
+    "npm": None,  # Initialized per-task with workspace
+    "playwright": PlaywrightTool(),
 }
 
 __all__ = ["TOOLS"]
