@@ -440,8 +440,9 @@ async function pingLMStudio(endpoint) {
 }
 
 function serveStatic(req, res) {
-  const urlPath = req.url === '/' ? '/index.html' : req.url.split('?')[0];
-  const target = path.join(WEBUI_ROOT, urlPath);
+  const rawPath = (req.url || '/').split('?')[0] || '/';
+  const normalizedPath = rawPath === '/' ? 'index.html' : rawPath.replace(/^\/+/, '');
+  const target = path.join(WEBUI_ROOT, normalizedPath);
   if (!target.startsWith(WEBUI_ROOT)) {
     res.writeHead(403);
     res.end('Forbidden');
