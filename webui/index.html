@@ -5,47 +5,125 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RamClaw</title>
   <style>
-    body { font-family: sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
-    .layout { max-width: 1200px; margin: 1.5rem auto; padding: 0 1rem; }
-    .panel { border: 1px solid #1e293b; border-radius: 12px; background: linear-gradient(135deg, #111827, #0b1224); overflow: hidden; }
-    .header { display: flex; justify-content: space-between; gap: 1rem; align-items: center; padding: 1rem 1.25rem; border-bottom: 1px solid #1e293b; }
-    .tabs { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-    .tab-btn { background: #0b1224; color: #e2e8f0; border: 1px solid #1e293b; padding: 0.5rem 0.8rem; border-radius: 8px; cursor: pointer; }
-    .tab-btn.active { background: #22d3ee; color: #0b1224; border-color: #22d3ee; font-weight: 700; }
+    :root {
+      --bg: #f8fafc;
+      --panel-bg: #ffffff;
+      --sidebar-bg: #ffffff;
+      --card-bg: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --accent: #2563eb;
+      --accent-text: #ffffff;
+      --chat-bg: #f8fafc;
+      --input-bg: #ffffff;
+      --link: #2563eb;
+    }
+    body[data-theme='dark'] {
+      --bg: #0f172a;
+      --panel-bg: #111827;
+      --sidebar-bg: #0b1224;
+      --card-bg: #0b1224;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --border: #1e293b;
+      --accent: #22d3ee;
+      --accent-text: #0b1224;
+      --chat-bg: #020617;
+      --input-bg: #0b1224;
+      --link: #38bdf8;
+    }
+    body[data-theme='ambient'] {
+      --bg: #eef2ff;
+      --panel-bg: #ffffff;
+      --sidebar-bg: #f5f3ff;
+      --card-bg: #ffffff;
+      --text: #1f1147;
+      --muted: #6b5aa8;
+      --border: #ddd6fe;
+      --accent: #7c3aed;
+      --accent-text: #ffffff;
+      --chat-bg: #f5f3ff;
+      --input-bg: #ffffff;
+      --link: #6d28d9;
+    }
+    body { font-family: sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+    .layout { display: grid; grid-template-columns: 260px 1fr; gap: 1rem; max-width: 1380px; margin: 1rem auto; padding: 0 1rem; }
+    .sidebar { border: 1px solid var(--border); border-radius: 12px; background: var(--sidebar-bg); display: flex; flex-direction: column; min-height: calc(100vh - 2rem); position: sticky; top: 1rem; }
+    .brand { padding: 1rem; border-bottom: 1px solid var(--border); }
+    .tabs { display: flex; flex-direction: column; gap: 0.45rem; padding: 0.75rem; }
+    .tab-btn { background: transparent; color: var(--text); border: 1px solid var(--border); padding: 0.6rem 0.8rem; border-radius: 8px; cursor: pointer; text-align: left; }
+    .tab-btn.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 700; }
+    .theme-controls { margin-top: auto; padding: 0.75rem; border-top: 1px solid var(--border); }
+    .theme-controls h4 { margin: 0 0 0.5rem 0; font-size: 0.9rem; color: var(--muted); }
+    .theme-grid { display: grid; grid-template-columns: 1fr; gap: 0.4rem; }
+    .theme-btn { background: transparent; color: var(--text); border: 1px solid var(--border); padding: 0.5rem 0.6rem; border-radius: 8px; cursor: pointer; text-align: left; }
+    .theme-btn.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+    .panel { border: 1px solid var(--border); border-radius: 12px; background: var(--panel-bg); overflow: hidden; }
+    .header { display: flex; justify-content: space-between; gap: 1rem; align-items: center; padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); }
     .tab { display: none; padding: 1.25rem; }
     .tab.active { display: block; }
-    textarea { width: 100%; height: 110px; margin-top: 0.5rem; background: #0b1224; color: #e2e8f0; border: 1px solid #1e293b; border-radius: 8px; padding: 0.75rem; }
-    button { background: #22d3ee; color: #0b1224; border: none; padding: 0.65rem 1rem; border-radius: 8px; cursor: pointer; font-weight: 700; }
-    button.secondary { background: #1e293b; color: #e2e8f0; }
-    button:disabled { background: #334155; cursor: not-allowed; }
+    textarea { width: 100%; height: 110px; margin-top: 0.5rem; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; }
+    button { background: var(--accent); color: var(--accent-text); border: none; padding: 0.65rem 1rem; border-radius: 8px; cursor: pointer; font-weight: 700; }
+    button.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-    .card { border: 1px solid #1e293b; border-radius: 8px; padding: 0.85rem; background: #0b1224; }
-    .chat { height: 320px; overflow: auto; border: 1px solid #1e293b; border-radius: 8px; background: #020617; padding: 0.75rem; }
+    .card { border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem; background: var(--card-bg); }
+    .chat { height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--chat-bg); padding: 0.75rem; }
     .chat-line { margin: 0 0 0.5rem 0; white-space: pre-wrap; }
-    .chat-line small { color: #94a3b8; margin-right: 0.5rem; }
-    .chat-line .tag { color: #67e8f9; margin-right: 0.4rem; }
-    .list { max-height: 320px; overflow: auto; border: 1px solid #1e293b; border-radius: 8px; background: #020617; }
-    .list-item { padding: 0.75rem; border-bottom: 1px solid #1e293b; cursor: pointer; }
-    .list-item:hover, .list-item.active { background: #0b1224; }
+    .chat-line small { color: var(--muted); margin-right: 0.5rem; }
+    .chat-line .tag { color: var(--accent); margin-right: 0.4rem; }
+    .list { max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--chat-bg); }
+    .list-item { padding: 0.75rem; border-bottom: 1px solid var(--border); cursor: pointer; }
+    .list-item:hover, .list-item.active { background: var(--card-bg); }
     .filter-grid { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 0.5rem; margin-bottom: 0.75rem; }
-    .filter-grid input, .filter-grid select { background: #0b1224; color: #e2e8f0; border: 1px solid #1e293b; border-radius: 8px; padding: 0.55rem 0.6rem; }
-    .timeline { max-height: 240px; overflow: auto; border: 1px solid #1e293b; border-radius: 8px; background: #020617; padding: 0.6rem; margin-bottom: 0.75rem; }
-    .timeline-phase { border: 1px solid #1e293b; border-radius: 8px; padding: 0.5rem; margin-bottom: 0.5rem; background: #0b1224; }
-    .timeline-phase h4 { margin: 0 0 0.4rem 0; font-size: 0.9rem; color: #67e8f9; }
+    .filter-grid input, .filter-grid select { background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 0.55rem 0.6rem; }
+    .timeline { max-height: 240px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--chat-bg); padding: 0.6rem; margin-bottom: 0.75rem; }
+    .timeline-phase { border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem; margin-bottom: 0.5rem; background: var(--card-bg); }
+    .timeline-phase h4 { margin: 0 0 0.4rem 0; font-size: 0.9rem; color: var(--accent); }
     .kpi { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 0.75rem; }
     .kpi .card strong { display: block; font-size: 1.25rem; margin-top: 0.35rem; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-    a { color: #38bdf8; }
-    .muted { color: #94a3b8; }
+    a { color: var(--link); }
+    .muted { color: var(--muted); }
     @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar { position: static; min-height: auto; }
+      .tabs { flex-direction: row; flex-wrap: wrap; }
+      .theme-grid { grid-template-columns: repeat(3, minmax(90px, 1fr)); }
       .row { grid-template-columns: 1fr; }
       .kpi { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
       .filter-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
-<body>
+<body data-theme="light">
   <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <h2 style="margin:0;">RamClaw</h2>
+        <div class="muted">Dashboard</div>
+      </div>
+
+      <div class="tabs" style="border-bottom: 1px solid var(--border);">
+        <button class="tab-btn active" data-tab="taskTab">Task</button>
+        <button class="tab-btn" data-tab="historyTab">History</button>
+        <button class="tab-btn" data-tab="llmTab">LLM</button>
+        <button class="tab-btn" data-tab="metricsTab">Metrics</button>
+        <button class="tab-btn" data-tab="credentialsTab">Credentials</button>
+        <button class="tab-btn" data-tab="integrationsTab">Integrations</button>
+      </div>
+
+      <div class="theme-controls">
+        <h4>Theme</h4>
+        <div class="theme-grid">
+          <button class="theme-btn active" data-theme="light">Light</button>
+          <button class="theme-btn" data-theme="dark">Dark</button>
+          <button class="theme-btn" data-theme="ambient">Ambient</button>
+        </div>
+      </div>
+    </aside>
+
     <div class="panel">
       <div class="header">
         <div>
@@ -53,15 +131,6 @@
           <div class="muted">Sandboxed, LM Studio only, live action telemetry.</div>
         </div>
         <a id="workspaceLink" href="#" target="_blank">Open workspace folder</a>
-      </div>
-
-      <div class="tabs" style="padding: 0.75rem 1.25rem; border-bottom: 1px solid #1e293b;">
-        <button class="tab-btn active" data-tab="taskTab">Task</button>
-        <button class="tab-btn" data-tab="historyTab">History</button>
-        <button class="tab-btn" data-tab="llmTab">LLM</button>
-        <button class="tab-btn" data-tab="metricsTab">Metrics</button>
-        <button class="tab-btn" data-tab="credentialsTab">Credentials</button>
-        <button class="tab-btn" data-tab="integrationsTab">Integrations</button>
       </div>
 
       <section id="taskTab" class="tab active">

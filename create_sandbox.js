@@ -20,7 +20,7 @@ function writeConfig() {
   const config = {
     llm: {
       provider: 'lmstudio',
-      endpoint: 'http://127.0.0.1:1234/v1',
+      endpoint: 'http://127.0.0.1:1234/api/v1',
       model: 'REPLACE_WITH_LOCAL_MODEL_NAME',
       streaming: true,
       cloudProviders: false,

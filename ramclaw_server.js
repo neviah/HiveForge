@@ -414,10 +414,12 @@ async function pingLMStudio(endpoint) {
   const timeout = setTimeout(() => controller.abort(), 2500);
   try {
     const base = endpoint.replace(/\/$/, '');
+    const rootNoV1 = base.replace(/\/(api\/)?v1$/, '');
     const candidates = [
       `${base}/models`,
-      `${base.replace(/\/v1$/, '')}/v1/models`,
-      `${base.replace(/\/v1$/, '')}/models`,
+      `${rootNoV1}/api/v1/models`,
+      `${rootNoV1}/v1/models`,
+      `${rootNoV1}/models`,
     ];
 
     for (const url of candidates) {

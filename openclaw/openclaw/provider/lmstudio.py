@@ -25,16 +25,54 @@ class LMStudioProvider(BaseProvider):
             payload["tool_choice"] = "auto"
         return payload
 
-    def complete(self, messages: Iterable[Dict[str, Any]], tools: Dict[str, Any] | None = None) -> Generator[str, None, None]:
-        url = f"{self.endpoint}/chat/completions"
-        payload = self._build_payload(messages, tools)
-        try:
-            resp = requests.post(url, json=payload, headers=self.headers, stream=True, timeout=self.timeout)
-        except Exception as exc:  # pragma: no cover - network error
-            raise ProviderError(f"Failed to reach LM Studio at {self.endpoint}: {exc}") from exc
+    def _candidate_endpoints(self) -> list[str]:
+        base = self.endpoint.rstrip('/')
+        candidates: list[str] = []
 
-        if resp.status_code != 200:
-            raise ProviderError(f"LM Studio returned status {resp.status_code}: {resp.text}")
+        def add(value: str):
+            value = value.rstrip('/')
+            if value and value not in candidates:
+                candidates.append(value)
+
+        add(base)
+        if base.endswith('/v1'):
+            root = base[:-3].rstrip('/')
+            add(f"{root}/api/v1")
+            add(root)
+        elif base.endswith('/api/v1'):
+            root = base[:-7].rstrip('/')
+            add(f"{root}/v1")
+            add(root)
+        else:
+            add(f"{base}/api/v1")
+            add(f"{base}/v1")
+
+        return candidates
+
+    def complete(self, messages: Iterable[Dict[str, Any]], tools: Dict[str, Any] | None = None) -> Generator[str, None, None]:
+        payload = self._build_payload(messages, tools)
+        attempts: list[str] = []
+        resp = None
+
+        for endpoint in self._candidate_endpoints():
+            url = f"{endpoint}/chat/completions"
+            try:
+                current = requests.post(url, json=payload, headers=self.headers, stream=True, timeout=self.timeout)
+            except Exception as exc:  # pragma: no cover - network error
+                attempts.append(f"{url} -> network error: {exc}")
+                continue
+
+            if current.status_code == 200:
+                resp = current
+                self.endpoint = endpoint
+                break
+
+            attempts.append(f"{url} -> HTTP {current.status_code}")
+
+        if resp is None:
+            raise ProviderError(
+                "Failed to reach LM Studio chat endpoint. Tried: " + " | ".join(attempts)
+            )
 
         for line in resp.iter_lines():
             if not line:

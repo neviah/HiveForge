@@ -61,7 +61,7 @@ def load_config(path: str | os.PathLike | None = None) -> AppConfig:
 
     llm_cfg = LLMConfig(
         provider=llm.get('provider', 'lmstudio'),
-        endpoint=llm.get('endpoint', 'http://127.0.0.1:1234/v1'),
+        endpoint=llm.get('endpoint', 'http://127.0.0.1:1234/api/v1'),
         model=llm.get('model', ''),
         streaming=bool(llm.get('streaming', True)),
         cloud_providers=bool(llm.get('cloudProviders', llm.get('cloud_providers', False))),

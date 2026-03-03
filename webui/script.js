@@ -31,6 +31,7 @@ const telegramTestResultEl = document.getElementById('telegramTestResult');
 const whatsappTestResultEl = document.getElementById('whatsappTestResult');
 const tabButtons = document.querySelectorAll('.tab-btn');
 const tabs = document.querySelectorAll('.tab');
+const themeButtons = document.querySelectorAll('.theme-btn');
 
 let appState = {
   history: []
@@ -367,6 +368,26 @@ function initTabs() {
   });
 }
 
+function applyTheme(themeName) {
+  const valid = ['light', 'dark', 'ambient'];
+  const theme = valid.includes(themeName) ? themeName : 'light';
+  document.body.setAttribute('data-theme', theme);
+  localStorage.setItem('ramclaw-theme', theme);
+  themeButtons.forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.theme === theme);
+  });
+}
+
+function initTheme() {
+  const saved = localStorage.getItem('ramclaw-theme') || 'light';
+  applyTheme(saved);
+  themeButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      applyTheme(btn.dataset.theme || 'light');
+    });
+  });
+}
+
 function initEventStream() {
   const es = new EventSource('/api/events');
   es.onmessage = (evt) => {
@@ -419,6 +440,7 @@ rerunTaskBtn.addEventListener('click', rerunSelectedTask);
 exportTaskBtn.addEventListener('click', exportSelectedTask);
 
 initTabs();
+initTheme();
 initEventStream();
 refreshState();
 refreshPublicKey();
