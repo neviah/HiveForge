@@ -13,23 +13,18 @@ module.exports = {
     },
     {
       when: "{{exists('sandbox/config.json')}}",
-      method: 'shell.run',
+      method: 'local.set',
       params: {
-        daemon: true,
-        message: [
-          'node ramclaw_server.js'
-        ],
-        on: [{
-          event: '/RamClaw UI running at http:\\/\\/localhost:\\d+/',
-          done: true
-        }]
+        url: 'http://127.0.0.1:3000/'
       }
     },
     {
       when: "{{exists('sandbox/config.json')}}",
-      method: 'local.set',
+      method: 'shell.run',
       params: {
-        url: 'http://localhost:3000/'
+        message: [
+          'node ramclaw_server.js'
+        ]
       }
     }
   ]
