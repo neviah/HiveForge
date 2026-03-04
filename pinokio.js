@@ -37,7 +37,7 @@ module.exports = {
 						default: true,
 						icon: 'fa-solid fa-rocket',
 						text: 'OpenWebUI',
-						href: local.url + '?ts=' + Date.now()
+						href: local.url
 					}, {
 						icon: 'fa-solid fa-terminal',
 						text: 'Terminal',
@@ -67,7 +67,7 @@ module.exports = {
 					default: true,
 					icon: 'fa-solid fa-power-off',
 					text: 'Start',
-					href: 'start.js?ts=' + Date.now()
+					href: 'start.js'
 				},
 				{
 					icon: 'fa-solid fa-plug',
