@@ -3,12 +3,6 @@
 module.exports = {
   run: [
     {
-      method: 'local.set',
-      params: {
-        url: 'http://localhost:3000/'
-      }
-    },
-    {
       when: "{{!exists('sandbox/config.json')}}",
       method: 'shell.run',
       params: {
@@ -23,7 +17,17 @@ module.exports = {
       params: {
         message: [
           'node ramclaw_server.js'
-        ]
+        ],
+        on: [{
+          "event": "/http:\/\/\\S+/",
+          "done": true
+        }]
+      }
+    },
+    {
+      method: 'local.set',
+      params: {
+        url: "http://127.0.0.1:{{input.event[0].split(':').pop()}}"
       }
     }
   ]
