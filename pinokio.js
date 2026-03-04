@@ -31,21 +31,12 @@ module.exports = {
 
 		if (installed) {
 			if (running.start) {
-				const local = info.local('start.js');
-				if (local && local.url) {
-					return [{
-						default: true,
-						icon: 'fa-solid fa-rocket',
-						text: 'OpenWebUI',
-						href: local.url
-					}, {
-						icon: 'fa-solid fa-terminal',
-						text: 'Terminal',
-						href: 'start.js'
-					}];
-				}
 				return [{
 					default: true,
+					icon: 'fa-solid fa-rocket',
+					text: 'OpenWebUI',
+					href: 'http://localhost:3000/'
+				}, {
 					icon: 'fa-solid fa-terminal',
 					text: 'Terminal',
 					href: 'start.js'
