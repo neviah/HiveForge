@@ -395,6 +395,7 @@ function formatLogLine(entry) {
 
 function renderLogs(logs, filter = 'all') {
   const stream = document.getElementById('logsStream');
+  renderPolicyDecisionKpis(logs);
   const filtered = filter === 'all' ? logs : logs.filter(l => l.type === filter);
   if (!filtered.length) {
     stream.innerHTML = `<div style="color:var(--muted);">No log entries${filter !== 'all' ? ' for this filter' : ''} yet.</div>`;
@@ -404,6 +405,16 @@ function renderLogs(logs, filter = 'all') {
     const icon = { message:'💬', task:'✅', deploy:'🚀', error:'❌', fix:'🔧', heartbeat:'💓', policy_allow:'🛡️', policy_deny:'⛔' }[l.type] ?? '•';
     return `<div><span style="color:var(--muted)">[${l.ts.slice(11,19)}]</span> ${icon} ${esc(formatLogLine(l))}</div>`;
   }).join('');
+}
+
+function renderPolicyDecisionKpis(logs) {
+  const allowCount = logs.filter(l => l.type === 'policy_allow').length;
+  const denyCount = logs.filter(l => l.type === 'policy_deny').length;
+  const total = allowCount + denyCount;
+
+  setText('policyAllowCount', allowCount);
+  setText('policyDenyCount', denyCount);
+  setText('policyTotalCount', total);
 }
 
 // Marketplace
