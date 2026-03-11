@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import base64
 import hashlib
+import re
 import uuid
 import json
 import os
@@ -28,10 +29,22 @@ SERVICE_OPERATION_ALLOWLIST = {
 }
 
 ERR_AUTH_NOT_COORDINATOR = "AUTH_NOT_COORDINATOR"
+ERR_POLICY_DENIED_ROLE = "POLICY_DENIED_ROLE"
+ERR_POLICY_DENIED_OPERATION = "POLICY_DENIED_OPERATION"
 ERR_POLICY_DENIED_SCOPE = "POLICY_DENIED_SCOPE"
 ERR_APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
 ERR_SECRET_MISSING = "SECRET_MISSING"
+ERR_BUDGET_DAILY_EXCEEDED = "BUDGET_DAILY_EXCEEDED"
+ERR_BUDGET_MONTHLY_EXCEEDED = "BUDGET_MONTHLY_EXCEEDED"
 ERR_VALIDATION_ERROR = "VALIDATION_ERROR"
+
+DEFAULT_SERVICE_ROLE_ALLOWLIST = {
+    "netlify": ["Coordinator Agent", "DevOps", "CTO", "PM", "Developer"],
+    "stripe": ["Coordinator Agent", "CFO", "CEO"],
+    "google_ads": ["Coordinator Agent", "Marketing", "PPC Campaign Strategist"],
+    "analytics": ["Coordinator Agent", "Data Analyst", "Analytics Reporter", "Marketing"],
+    "email_provider": ["Coordinator Agent", "Marketing", "Support", "Social Media Manager"],
+}
 
 
 @dataclass(slots=True)
@@ -63,6 +76,14 @@ class CredentialManager:
     @property
     def _audit_log_path(self) -> Path:
         return self.vault_dir / "audit.log.ndjson"
+
+    @property
+    def _policy_dir(self) -> Path:
+        return self.vault_dir / "policies"
+
+    @property
+    def _budget_counters_path(self) -> Path:
+        return self.vault_dir / "budget_counters.json"
 
     def _ensure_placeholders(self) -> None:
         for service, filename in SUPPORTED_SERVICES.items():
@@ -113,6 +134,129 @@ class CredentialManager:
         self._audit_log_path.parent.mkdir(parents=True, exist_ok=True)
         with self._audit_log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=True) + "\n")
+
+    @staticmethod
+    def _safe_key(raw: str) -> str:
+        value = raw.strip().lower()
+        return re.sub(r"[^a-z0-9_.-]+", "_", value)
+
+    def _project_policy_path(self, project_id: str, service: str) -> Path:
+        self._policy_dir.mkdir(parents=True, exist_ok=True)
+        return self._policy_dir / f"{self._safe_key(project_id)}__{self._safe_key(service)}.json"
+
+    def _read_budget_counters(self) -> Dict[str, Any]:
+        data = self._read_json(self._budget_counters_path)
+        if not data:
+            return {"daily": {}, "monthly": {}, "updated_at": None}
+        data.setdefault("daily", {})
+        data.setdefault("monthly", {})
+        return data
+
+    def _write_budget_counters(self, counters: Dict[str, Any]) -> None:
+        counters["updated_at"] = self._utc_now()
+        self._write_json(self._budget_counters_path, counters)
+
+    @staticmethod
+    def _daily_counter_key(project_id: str, service: str, ts: datetime) -> str:
+        return f"{project_id}:{service}:{ts.strftime('%Y-%m-%d')}"
+
+    @staticmethod
+    def _monthly_counter_key(project_id: str, service: str, ts: datetime) -> str:
+        return f"{project_id}:{service}:{ts.strftime('%Y-%m')}"
+
+    @staticmethod
+    def _role_allowed(agent_role: str, allowed_roles: list[str]) -> bool:
+        role_norm = agent_role.strip().casefold()
+        return any(role_norm == item.strip().casefold() for item in allowed_roles)
+
+    def upsert_project_policy(
+        self,
+        requester_id: str,
+        project_id: str,
+        service: str,
+        *,
+        allowed_roles: list[str],
+        allowed_operations: list[str],
+        allowed_scopes: list[str],
+        max_daily_spend: float | None,
+        max_monthly_spend: float | None,
+        require_human_approval_over: float | None = None,
+        enabled: bool = True,
+    ) -> Dict[str, Any]:
+        if not self._is_coordinator(requester_id):
+            raise PermissionError("Only coordinator may write project policies")
+        if service not in SUPPORTED_SERVICES:
+            raise ValueError(f"Unsupported service: {service}")
+
+        policy = {
+            "project_id": project_id,
+            "service": service,
+            "allowed_roles": sorted(set(allowed_roles)),
+            "allowed_operations": sorted(set(allowed_operations)),
+            "allowed_scopes": sorted(set(allowed_scopes)),
+            "max_daily_spend": max_daily_spend,
+            "max_monthly_spend": max_monthly_spend,
+            "require_human_approval_over": require_human_approval_over,
+            "enabled": bool(enabled),
+            "updated_at": self._utc_now(),
+        }
+        self._write_json(self._project_policy_path(project_id, service), policy)
+        return policy
+
+    def get_project_policy(self, project_id: str, service: str) -> Dict[str, Any]:
+        path = self._project_policy_path(project_id, service)
+        if path.exists():
+            return self._read_json(path)
+
+        metadata = self._read_json(self._service_json_path(service))
+        return {
+            "project_id": project_id,
+            "service": service,
+            "allowed_roles": DEFAULT_SERVICE_ROLE_ALLOWLIST.get(service, ["Coordinator Agent"]),
+            "allowed_operations": sorted(SERVICE_OPERATION_ALLOWLIST.get(service, [])),
+            "allowed_scopes": metadata.get("scopes", []),
+            "max_daily_spend": metadata.get("budget", {}).get("daily"),
+            "max_monthly_spend": metadata.get("budget", {}).get("monthly"),
+            "require_human_approval_over": None,
+            "enabled": True,
+            "updated_at": None,
+        }
+
+    def budget_snapshot(self, project_id: str) -> Dict[str, Any]:
+        counters = self._read_budget_counters()
+        prefix = f"{project_id}:"
+        daily = {k: v for k, v in counters["daily"].items() if k.startswith(prefix)}
+        monthly = {k: v for k, v in counters["monthly"].items() if k.startswith(prefix)}
+        return {"project_id": project_id, "daily": daily, "monthly": monthly}
+
+    def _check_budget_limits(self, project_id: str, service: str, estimated_cost: float, policy: Dict[str, Any]) -> tuple[bool, str | None]:
+        now = datetime.now(timezone.utc)
+        counters = self._read_budget_counters()
+        daily_key = self._daily_counter_key(project_id, service, now)
+        monthly_key = self._monthly_counter_key(project_id, service, now)
+
+        current_daily = float(counters["daily"].get(daily_key, 0.0))
+        current_monthly = float(counters["monthly"].get(monthly_key, 0.0))
+
+        daily_limit = policy.get("max_daily_spend")
+        monthly_limit = policy.get("max_monthly_spend")
+
+        if isinstance(daily_limit, (int, float)) and current_daily + estimated_cost > float(daily_limit):
+            return False, ERR_BUDGET_DAILY_EXCEEDED
+        if isinstance(monthly_limit, (int, float)) and current_monthly + estimated_cost > float(monthly_limit):
+            return False, ERR_BUDGET_MONTHLY_EXCEEDED
+        return True, None
+
+    def _increment_budget_counters(self, project_id: str, service: str, cost: float) -> None:
+        if cost <= 0:
+            return
+        now = datetime.now(timezone.utc)
+        counters = self._read_budget_counters()
+        daily_key = self._daily_counter_key(project_id, service, now)
+        monthly_key = self._monthly_counter_key(project_id, service, now)
+        counters["daily"][daily_key] = float(counters["daily"].get(daily_key, 0.0)) + float(cost)
+        counters["monthly"][monthly_key] = float(counters["monthly"].get(monthly_key, 0.0)) + float(cost)
+        self._write_budget_counters(counters)
 
     def read_audit_records(self, limit: int = 100) -> list[Dict[str, Any]]:
         if limit <= 0:
@@ -325,6 +469,134 @@ class CredentialManager:
             )
             return result
 
+        policy = self.get_project_policy(normalized["project_id"], service)
+        if not bool(policy.get("enabled", True)):
+            result = self._new_result(
+                request_id=request_id,
+                service=service,
+                operation=operation,
+                status="denied",
+                error_code=ERR_POLICY_DENIED_OPERATION,
+                error_message=f"Service policy disabled for {service}",
+            )
+            self._write_audit_record(
+                {
+                    "audit_id": str(uuid.uuid4()),
+                    "request_id": request_id,
+                    "project_id": normalized["project_id"],
+                    "agent_id": normalized["agent_id"],
+                    "agent_role": normalized["agent_role"],
+                    "service": service,
+                    "operation": operation,
+                    "scope": normalized["scope"],
+                    "decision": "deny",
+                    "policy_reason": "Service policy disabled",
+                    "estimated_cost": normalized["estimated_cost"],
+                    "actual_cost": 0.0,
+                    "token_exposed": False,
+                    "duration_ms": 0,
+                    "error_code": ERR_POLICY_DENIED_OPERATION,
+                    "created_at": now,
+                }
+            )
+            return result
+
+        allowed_roles = policy.get("allowed_roles", [])
+        if allowed_roles and not self._role_allowed(normalized["agent_role"], allowed_roles):
+            result = self._new_result(
+                request_id=request_id,
+                service=service,
+                operation=operation,
+                status="denied",
+                error_code=ERR_POLICY_DENIED_ROLE,
+                error_message=f"Role denied for {service}: {normalized['agent_role']}",
+            )
+            self._write_audit_record(
+                {
+                    "audit_id": str(uuid.uuid4()),
+                    "request_id": request_id,
+                    "project_id": normalized["project_id"],
+                    "agent_id": normalized["agent_id"],
+                    "agent_role": normalized["agent_role"],
+                    "service": service,
+                    "operation": operation,
+                    "scope": normalized["scope"],
+                    "decision": "deny",
+                    "policy_reason": "Role denied",
+                    "estimated_cost": normalized["estimated_cost"],
+                    "actual_cost": 0.0,
+                    "token_exposed": False,
+                    "duration_ms": 0,
+                    "error_code": ERR_POLICY_DENIED_ROLE,
+                    "created_at": now,
+                }
+            )
+            return result
+
+        allowed_operations = policy.get("allowed_operations", [])
+        if allowed_operations and operation not in allowed_operations:
+            result = self._new_result(
+                request_id=request_id,
+                service=service,
+                operation=operation,
+                status="denied",
+                error_code=ERR_POLICY_DENIED_OPERATION,
+                error_message=f"Operation denied for {service}: {operation}",
+            )
+            self._write_audit_record(
+                {
+                    "audit_id": str(uuid.uuid4()),
+                    "request_id": request_id,
+                    "project_id": normalized["project_id"],
+                    "agent_id": normalized["agent_id"],
+                    "agent_role": normalized["agent_role"],
+                    "service": service,
+                    "operation": operation,
+                    "scope": normalized["scope"],
+                    "decision": "deny",
+                    "policy_reason": "Operation denied",
+                    "estimated_cost": normalized["estimated_cost"],
+                    "actual_cost": 0.0,
+                    "token_exposed": False,
+                    "duration_ms": 0,
+                    "error_code": ERR_POLICY_DENIED_OPERATION,
+                    "created_at": now,
+                }
+            )
+            return result
+
+        approval_threshold = policy.get("require_human_approval_over")
+        if isinstance(approval_threshold, (int, float)) and normalized["estimated_cost"] > float(approval_threshold):
+            result = self._new_result(
+                request_id=request_id,
+                service=service,
+                operation=operation,
+                status="denied",
+                error_code=ERR_APPROVAL_REQUIRED,
+                error_message="Cost exceeds policy threshold and requires human approval",
+            )
+            self._write_audit_record(
+                {
+                    "audit_id": str(uuid.uuid4()),
+                    "request_id": request_id,
+                    "project_id": normalized["project_id"],
+                    "agent_id": normalized["agent_id"],
+                    "agent_role": normalized["agent_role"],
+                    "service": service,
+                    "operation": operation,
+                    "scope": normalized["scope"],
+                    "decision": "deny",
+                    "policy_reason": "Approval threshold exceeded",
+                    "estimated_cost": normalized["estimated_cost"],
+                    "actual_cost": 0.0,
+                    "token_exposed": False,
+                    "duration_ms": 0,
+                    "error_code": ERR_APPROVAL_REQUIRED,
+                    "created_at": now,
+                }
+            )
+            return result
+
         metadata = self._read_json(self._service_json_path(service))
         if not bool(metadata.get("connected", False)):
             result = self._new_result(
@@ -357,7 +629,7 @@ class CredentialManager:
             )
             return result
 
-        configured_scopes = set(metadata.get("scopes") or [])
+        configured_scopes = set(policy.get("allowed_scopes") or metadata.get("scopes") or [])
         if configured_scopes and normalized["scope"] not in configured_scopes:
             result = self._new_result(
                 request_id=request_id,
@@ -389,12 +661,55 @@ class CredentialManager:
             )
             return result
 
+        within_budget, budget_error = self._check_budget_limits(
+            normalized["project_id"],
+            service,
+            normalized["estimated_cost"],
+            policy,
+        )
+        if not within_budget:
+            message = "Daily budget exceeded" if budget_error == ERR_BUDGET_DAILY_EXCEEDED else "Monthly budget exceeded"
+            result = self._new_result(
+                request_id=request_id,
+                service=service,
+                operation=operation,
+                status="denied",
+                error_code=budget_error,
+                error_message=message,
+            )
+            self._write_audit_record(
+                {
+                    "audit_id": str(uuid.uuid4()),
+                    "request_id": request_id,
+                    "project_id": normalized["project_id"],
+                    "agent_id": normalized["agent_id"],
+                    "agent_role": normalized["agent_role"],
+                    "service": service,
+                    "operation": operation,
+                    "scope": normalized["scope"],
+                    "decision": "deny",
+                    "policy_reason": "Budget exceeded",
+                    "estimated_cost": normalized["estimated_cost"],
+                    "actual_cost": 0.0,
+                    "token_exposed": False,
+                    "duration_ms": 0,
+                    "error_code": budget_error,
+                    "created_at": now,
+                }
+            )
+            return result
+
+        self._increment_budget_counters(normalized["project_id"], service, normalized["estimated_cost"])
+
         result = self._new_result(
             request_id=request_id,
             service=service,
             operation=operation,
             status="approved",
-            sanitized_result={"ready_for_connector": True},
+            sanitized_result={
+                "ready_for_connector": True,
+                "budget_snapshot": self.budget_snapshot(normalized["project_id"]),
+            },
         )
         self._write_audit_record(
             {

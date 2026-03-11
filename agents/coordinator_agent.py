@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+import json
+from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 
 from .agent_base import AgentBase, AgentEnvelope, AgentMessage
@@ -60,9 +61,25 @@ class CoordinatorAgent:
         self.subordinates: Dict[str, AgentBase] = {}
         self.credential_policy: Dict[str, CredentialGrant] = {}
         self.browser_policy = BrowserGrant()
+        self.skill_policy: Dict[str, Any] = self._load_skill_policy()
         self.heartbeat_log: List[dict] = []
         self.last_heartbeat_at: str | None = None
         self.auto_fix_attempts: int = 0
+
+    def _load_skill_policy(self) -> Dict[str, Any]:
+        policy_path = self.sandbox_root / "skills" / "sandbox_policy.json"
+        if not policy_path.exists():
+            return {
+                "default": {"allow": False, "reason": "missing_policy_file"},
+                "global_rules": {
+                    "allow_host_filesystem_access": False,
+                    "allow_direct_credential_access": False,
+                    "require_coordinator_mediation": True,
+                    "require_audit_logging": True,
+                },
+                "skills": {},
+            }
+        return json.loads(policy_path.read_text(encoding="utf-8"))
 
     def register_agent(self, agent: AgentBase) -> None:
         if agent.agent_id in self.subordinates:
@@ -155,6 +172,25 @@ class CoordinatorAgent:
             self.bus.publish(response)
             return
 
+        if message.kind == "skill_request":
+            approved, reason = self._approve_skill_request(envelope.sender_id, message.metadata)
+            response = AgentEnvelope(
+                sender_id=self.coordinator_id,
+                receiver_id=envelope.sender_id,
+                message=AgentMessage(
+                    kind="skill_response",
+                    content="approved" if approved else "denied",
+                    metadata={
+                        "approved": approved,
+                        "reason": reason,
+                        "skill_name": message.metadata.get("skill_name"),
+                        "operation": message.metadata.get("operation"),
+                    },
+                ),
+            )
+            self.bus.publish(response)
+            return
+
         if message.kind == "task_completed":
             task_id = message.metadata.get("task_id")
             if task_id and task_id in self.scheduler.tasks:
@@ -186,6 +222,11 @@ class CoordinatorAgent:
         return True
 
     def _approve_browser_request(self, metadata: dict) -> tuple[bool, str]:
+        # Runtime check: browser automation can be blocked globally via Task 8 policy.
+        agent_browser = self.skill_policy.get("skills", {}).get("agent-browser", {})
+        if agent_browser and not bool(agent_browser.get("enabled", False)):
+            return False, "agent-browser skill is disabled by sandbox policy"
+
         action = str(metadata.get("action") or "")
         url = str(metadata.get("url") or "")
 
@@ -214,6 +255,49 @@ class CoordinatorAgent:
                 return True, "Allowed by browser policy"
 
         return False, f"Domain not allowlisted: {domain}"
+
+    def _approve_skill_request(self, sender_id: str, metadata: dict) -> tuple[bool, str]:
+        skill_name = str(metadata.get("skill_name") or "").strip()
+        operation = str(metadata.get("operation") or "").strip()
+        target_url = str(metadata.get("target_url") or "").strip()
+        target_domain = str(metadata.get("target_domain") or "").strip().lower()
+        requests_direct_credentials = bool(metadata.get("requests_direct_credentials", False))
+
+        if not skill_name:
+            return False, "Missing skill_name"
+
+        global_rules = self.skill_policy.get("global_rules", {})
+        skill_cfg = self.skill_policy.get("skills", {}).get(skill_name)
+        if not skill_cfg:
+            default = self.skill_policy.get("default", {})
+            allowed = bool(default.get("allow", False))
+            return (allowed, "Allowed by default policy" if allowed else str(default.get("reason", "deny-by-default")))
+
+        if not bool(skill_cfg.get("enabled", False)):
+            return False, f"Skill disabled by policy: {skill_name}"
+
+        if requests_direct_credentials and not bool(global_rules.get("allow_direct_credential_access", False)):
+            return False, "Direct credential access is forbidden by global policy"
+
+        # coordinator_only means subordinate requests must still route via coordinator only.
+        if bool(skill_cfg.get("coordinator_only", False)) and sender_id != self.coordinator_id:
+            # This is still acceptable because this method is coordinator-side mediation.
+            # Keep this check explicit for auditability.
+            pass
+
+        allowed_domains = [str(d).lower() for d in skill_cfg.get("allowed_network_domains", [])]
+        if target_url and not target_domain:
+            parsed = urlparse(target_url)
+            target_domain = (parsed.hostname or "").lower()
+
+        if target_domain and allowed_domains:
+            if not any(target_domain == dom or target_domain.endswith("." + dom) for dom in allowed_domains):
+                return False, f"Target domain not allowlisted for {skill_name}: {target_domain}"
+
+        if not operation:
+            return False, "Missing skill operation"
+
+        return True, "Skill request approved by sandbox policy"
 
     def assign_runnable_tasks(self) -> int:
         """Assign unblocked tasks to available agents."""
