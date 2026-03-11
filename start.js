@@ -1,4 +1,4 @@
-// Pinokio start manifest for RamClaw
+﻿// Pinokio start manifest for HiveForge
 
 module.exports = {
   run: [
@@ -7,7 +7,7 @@ module.exports = {
       method: 'shell.run',
       params: {
         message: [
-          'echo RamClaw is not installed yet. Run install.js first.'
+          'echo HiveForge is not installed yet. Run install.js first.'
         ]
       }
     },
@@ -23,7 +23,7 @@ module.exports = {
       method: 'shell.run',
       params: {
         message: [
-          'node ramclaw_server.js'
+          'node hiveforge_server.js'
         ]
       }
     }

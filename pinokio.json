@@ -1,7 +1,7 @@
-{
+﻿{
   "version": "5.0",
-  "name": "RamClaw",
-  "title": "RamClaw",
+  "name": "HiveForge",
+  "title": "HiveForge",
   "description": "Sandboxed LM Studio-only OpenClaw fork packaged for Pinokio.",
   "icon": "icon.png",
   "platform": "*"

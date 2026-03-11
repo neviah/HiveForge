@@ -1,4 +1,4 @@
-import re
+﻿import re
 from typing import Any
 
 import requests
@@ -6,7 +6,7 @@ import requests
 
 class BrowserTool:
     def fetch(self, url: str, timeout: int = 15, max_chars: int = 4000) -> dict[str, Any]:
-        response = requests.get(url, timeout=timeout, headers={"User-Agent": "RamClaw BrowserTool"}, verify=False)
+        response = requests.get(url, timeout=timeout, headers={"User-Agent": "HiveForge BrowserTool"}, verify=False)
         body = response.text or ""
         title_match = re.search(r"<title>(.*?)</title>", body, re.IGNORECASE | re.DOTALL)
         title = title_match.group(1).strip() if title_match else ""

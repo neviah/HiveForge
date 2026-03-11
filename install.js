@@ -1,4 +1,4 @@
-// Pinokio install manifest for RamClaw
+﻿// Pinokio install manifest for HiveForge
 
 module.exports = {
   run: [
@@ -37,7 +37,7 @@ module.exports = {
       params: {
         message: [
           'node create_sandbox.js',
-          'echo RamClaw install completed.'
+          'echo HiveForge install completed.'
         ]
       }
     }

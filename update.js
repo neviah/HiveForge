@@ -1,4 +1,4 @@
-// Pinokio update manifest for RamClaw
+﻿// Pinokio update manifest for HiveForge
 
 module.exports = {
   run: [
@@ -14,7 +14,7 @@ module.exports = {
       method: 'shell.run',
       params: {
         message: [
-          'echo RamClaw update completed. No install or start steps were executed.'
+          'echo HiveForge update completed. No install or start steps were executed.'
         ]
       }
     }

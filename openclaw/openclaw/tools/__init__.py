@@ -1,4 +1,4 @@
-"""Tool stubs retained for sandboxed RamClaw.
+﻿"""Tool stubs retained for sandboxed HiveForge.
 
 These are placeholders that can be expanded with concrete integrations.
 """

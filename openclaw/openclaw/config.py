@@ -1,10 +1,10 @@
-import json
+﻿import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
 
-DEFAULT_CONFIG_PATH = Path(os.environ.get('RAMCLAW_CONFIG', 'config.json')).expanduser()
+DEFAULT_CONFIG_PATH = Path(os.environ.get('HiveForge_CONFIG', 'config.json')).expanduser()
 
 
 @dataclass
@@ -69,8 +69,8 @@ def load_config(path: str | os.PathLike | None = None) -> AppConfig:
     )
 
     git_cfg = GitConfig(
-        name=git.get('user', {}).get('name', 'RamClaw Agent'),
-        email=git.get('user', {}).get('email', 'ramclaw@sandbox.local'),
+        name=git.get('user', {}).get('name', 'HiveForge Agent'),
+        email=git.get('user', {}).get('email', 'HiveForge@sandbox.local'),
         ssh_key_path=Path(git.get('sshKeyPath', '/sandbox/.ssh/id_rsa')),
     )
 

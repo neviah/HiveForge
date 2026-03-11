@@ -1,4 +1,4 @@
-// RamClaw sandbox bootstrapper
+﻿// HiveForge sandbox bootstrapper
 // Creates sandbox directories, config, git defaults, and SSH keys
 
 const fs = require('fs');
@@ -37,8 +37,8 @@ function writeConfig() {
     },
     git: {
       user: {
-        name: 'RamClaw Agent',
-        email: 'ramclaw@sandbox.local'
+        name: 'HiveForge Agent',
+        email: 'HiveForge@sandbox.local'
       },
       sshKeyPath: '/sandbox/.ssh/id_rsa'
     }
@@ -65,7 +65,7 @@ function ensureSshKeys() {
 }
 
 function configureGit() {
-  const gitConfig = [['user.name', 'RamClaw Agent'], ['user.email', 'ramclaw@sandbox.local']];
+  const gitConfig = [['user.name', 'HiveForge Agent'], ['user.email', 'HiveForge@sandbox.local']];
   gitConfig.forEach(([key, value]) => {
     spawnSync('git', ['config', '--global', key, value], {
       env: {

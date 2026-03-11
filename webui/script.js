@@ -1,4 +1,4 @@
-const liveChatEl = document.getElementById('liveChat');
+﻿const liveChatEl = document.getElementById('liveChat');
 const historyChatEl = document.getElementById('historyChat');
 const historyTimelineEl = document.getElementById('historyTimeline');
 const historyListEl = document.getElementById('historyList');
@@ -389,7 +389,7 @@ async function exportSelectedTask() {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `ramclaw-task-${selectedTaskId}.txt`;
+    anchor.download = `HiveForge-task-${selectedTaskId}.txt`;
     anchor.click();
     URL.revokeObjectURL(url);
     historyActionStatusEl.textContent = 'Transcript exported.';
@@ -507,14 +507,14 @@ function applyTheme(themeName) {
   const valid = ['light', 'dark', 'ambient'];
   const theme = valid.includes(themeName) ? themeName : 'light';
   document.body.setAttribute('data-theme', theme);
-  localStorage.setItem('ramclaw-theme', theme);
+  localStorage.setItem('HiveForge-theme', theme);
   themeButtons.forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.theme === theme);
   });
 }
 
 function initTheme() {
-  const saved = localStorage.getItem('ramclaw-theme') || 'light';
+  const saved = localStorage.getItem('HiveForge-theme') || 'light';
   applyTheme(saved);
   themeButtons.forEach((btn) => {
     btn.addEventListener('click', () => {

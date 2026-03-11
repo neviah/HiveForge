@@ -1,8 +1,8 @@
-// Pinokio app manifest for RamClaw with dynamic menu (install / start / update)
+﻿// Pinokio app manifest for HiveForge with dynamic menu (install / start / update)
 
 module.exports = {
 	version: '2.0',
-	title: 'RamClaw',
+	title: 'HiveForge',
 	description: 'Sandboxed LM Studio-only OpenClaw fork packaged for Pinokio.',
 	icon: 'icon.png',
 	menu: async (kernel, info) => {
@@ -68,7 +68,7 @@ module.exports = {
 				{
 					icon: 'fa-solid fa-eye',
 					text: 'View Logs',
-					href: 'sandbox/ramclaw.log'
+					href: 'sandbox/hiveforge.log'
 				},
 				{
 					icon: 'fa-solid fa-folder-open',

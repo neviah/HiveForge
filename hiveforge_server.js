@@ -1,4 +1,4 @@
-const fs = require('fs');
+﻿const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const { spawn, spawnSync } = require('child_process');
@@ -7,7 +7,7 @@ const SANDBOX_ROOT = path.join(__dirname, 'sandbox');
 const WEBUI_ROOT = path.join(__dirname, 'webui');
 const OPENCLAW_SRC_ROOT = path.join(__dirname, 'openclaw');
 const CONFIG_PATH = path.join(SANDBOX_ROOT, 'config.json');
-const LOG_PATH = path.join(SANDBOX_ROOT, 'ramclaw.log');
+const LOG_PATH = path.join(SANDBOX_ROOT, 'hiveforge.log');
 const MAX_TASK_HISTORY = 100;
 const MAX_EVENTS_PER_TASK = 500;
 const sseClients = new Set();
@@ -265,7 +265,7 @@ async function testGithubIntegration() {
       const resp = await fetchWithTimeout('https://api.github.com/user', {
         headers: {
           Authorization: `Bearer ${githubCfg.token}`,
-          'User-Agent': 'RamClaw'
+          'User-Agent': 'HiveForge'
         }
       });
       if (!resp.ok) {
@@ -506,7 +506,7 @@ function runAgentTask(task, responseStream) {
       ...process.env,
       HOME: SANDBOX_ROOT,
       USERPROFILE: SANDBOX_ROOT,
-      RAMCLAW_CONFIG: CONFIG_PATH,
+      HiveForge_CONFIG: CONFIG_PATH,
       PYTHONPATH: mergedPythonPath,
       PYTHONIOENCODING: 'utf-8',
       PYTHONUTF8: '1',
@@ -653,7 +653,7 @@ function runPythonCheck(args) {
       ...process.env,
       HOME: SANDBOX_ROOT,
       USERPROFILE: SANDBOX_ROOT,
-      RAMCLAW_CONFIG: CONFIG_PATH,
+      HiveForge_CONFIG: CONFIG_PATH,
       PYTHONPATH: OPENCLAW_SRC_ROOT,
       PYTHONIOENCODING: 'utf-8',
       PYTHONUTF8: '1',
@@ -1017,7 +1017,7 @@ async function main() {
       const transcript = exportTaskTranscript(taskRun);
       res.writeHead(200, {
         'Content-Type': 'text/plain; charset=utf-8',
-        'Content-Disposition': `attachment; filename="ramclaw-task-${id}.txt"`
+        'Content-Disposition': `attachment; filename="HiveForge-task-${id}.txt"`
       });
       res.end(transcript);
       return;
@@ -1045,7 +1045,7 @@ async function main() {
 
   const port = Number(process.env.PORT || 3000);
   const host = process.env.HOST || '0.0.0.0';
-  server.listen(port, host, () => log(`RamClaw UI running at http://localhost:${port}`));
+  server.listen(port, host, () => log(`HiveForge UI running at http://localhost:${port}`));
 }
 
 main().catch((err) => {

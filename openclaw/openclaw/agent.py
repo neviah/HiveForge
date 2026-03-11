@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 import json
 from pathlib import Path
 from typing import Dict, Any, Iterable, Generator
@@ -104,7 +104,7 @@ class Agent:
         return {
             "role": "system",
             "content": (
-                "You are RamClaw. You run fully locally, use LM Studio only, never call cloud models. "
+                "You are HiveForge. You run fully locally, use LM Studio only, never call cloud models. "
                 "All file writes must remain inside /sandbox/workspace. "
                 "Do not claim filesystem actions unless they were executed via the file tool and returned success. "
                 "If tool execution fails, state the failure explicitly."

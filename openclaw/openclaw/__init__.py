@@ -1,4 +1,4 @@
-"""RamClaw bundled OpenClaw fork (sandboxed, LM Studio only)."""
+﻿"""HiveForge bundled OpenClaw fork (sandboxed, LM Studio only)."""
 
 from .config import load_config
 from .provider import LMStudioProvider, ProviderError
