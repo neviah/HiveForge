@@ -348,15 +348,49 @@ function renderPlatformConnections(connections = {}) {
 
 // Log stream
 function appendLogEntry(entry) {
-  state.logs.unshift(entry);
+  const normalized = normalizeLogEntry(entry);
+  state.logs.unshift(normalized);
   if (state.logs.length > 500) state.logs.length = 500;
   if (state.activeSection === 'logs') renderLogs(state.logs, document.getElementById('logsFilter').value);
-  if (state.activeSection === 'heartbeat' && entry.type === 'heartbeat') {
+  if (state.activeSection === 'heartbeat' && normalized.type === 'heartbeat') {
     const log = document.getElementById('heartbeatLog');
     const line = document.createElement('div');
-    line.textContent = `[${entry.ts.slice(11,19)}] ${JSON.stringify(entry.data)}`;
+    line.textContent = `[${normalized.ts.slice(11,19)}] ${JSON.stringify(normalized.data)}`;
     log.prepend(line);
   }
+}
+
+function normalizeLogEntry(entry) {
+  const out = {
+    ts: entry?.ts || new Date().toISOString(),
+    type: entry?.type || 'message',
+    data: entry?.data || {},
+  };
+
+  const payload = out.data || {};
+  const kind = String(payload.kind || payload.event || '').toLowerCase();
+  const hasDecision = typeof payload.approved === 'boolean' || typeof payload.decision === 'string' || typeof payload.error_code === 'string';
+  const isPolicyKind = kind === 'skill_response' || kind === 'browser_response' || kind === 'credential_response';
+
+  if (hasDecision || isPolicyKind) {
+    const decision = String(payload.decision || (payload.approved === true ? 'allow' : payload.approved === false ? 'deny' : '')).toLowerCase();
+    out.type = decision === 'allow' || payload.approved === true ? 'policy_allow' : 'policy_deny';
+  }
+
+  return out;
+}
+
+function formatLogLine(entry) {
+  const payload = entry.data || {};
+
+  if (entry.type === 'policy_allow' || entry.type === 'policy_deny') {
+    const subject = payload.skill_name || payload.service || payload.action || payload.kind || 'policy check';
+    const operation = payload.operation ? ` (${payload.operation})` : '';
+    const reason = payload.reason || payload.error_message || payload.policy_reason || (entry.type === 'policy_allow' ? 'Allowed by coordinator policy' : 'Denied by coordinator policy');
+    return `${subject}${operation} — ${reason}`;
+  }
+
+  return JSON.stringify(payload);
 }
 
 function renderLogs(logs, filter = 'all') {
@@ -367,8 +401,8 @@ function renderLogs(logs, filter = 'all') {
     return;
   }
   stream.innerHTML = filtered.map(l => {
-    const icon = { message:'💬', task:'✅', deploy:'🚀', error:'❌', fix:'🔧', heartbeat:'💓' }[l.type] ?? '•';
-    return `<div><span style="color:var(--muted)">[${l.ts.slice(11,19)}]</span> ${icon} ${esc(JSON.stringify(l.data))}</div>`;
+    const icon = { message:'💬', task:'✅', deploy:'🚀', error:'❌', fix:'🔧', heartbeat:'💓', policy_allow:'🛡️', policy_deny:'⛔' }[l.type] ?? '•';
+    return `<div><span style="color:var(--muted)">[${l.ts.slice(11,19)}]</span> ${icon} ${esc(formatLogLine(l))}</div>`;
   }).join('');
 }
 
