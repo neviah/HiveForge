@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HiveForge Template",
+  "type": "object",
+  "required": [
+    "template_id",
+    "display_name",
+    "version",
+    "goal_definition",
+    "coordinator_agent",
+    "subordinate_agents",
+    "optional_agents",
+    "workflow_definition",
+    "task_breakdown",
+    "dependency_graph"
+  ],
+  "properties": {
+    "template_id": {"type": "string"},
+    "display_name": {"type": "string"},
+    "version": {"type": "string"},
+    "goal_definition": {"type": "string"},
+    "coordinator_agent": {
+      "type": "object",
+      "required": ["required", "role", "system_prompt_profile"],
+      "properties": {
+        "required": {"type": "boolean"},
+        "role": {"type": "string"},
+        "system_prompt_profile": {"type": "string"}
+      }
+    },
+    "subordinate_agents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["role", "required", "personality_prompt_path"],
+        "properties": {
+          "role": {"type": "string"},
+          "alias": {"type": "string"},
+          "required": {"type": "boolean"},
+          "personality_prompt_path": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "optional_agents": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "workflow_definition": {
+      "type": "object",
+      "required": ["phases", "heartbeat_enabled"],
+      "properties": {
+        "phases": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "heartbeat_enabled": {"type": "boolean"}
+      }
+    },
+    "task_breakdown": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "phase"],
+        "properties": {
+          "id": {"type": "string"},
+          "title": {"type": "string"},
+          "phase": {"type": "string"}
+        }
+      }
+    },
+    "dependency_graph": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {"type": "string"}
+      }
+    }
+  }
+}

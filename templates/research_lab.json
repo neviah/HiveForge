@@ -1,0 +1,49 @@
+{
+  "template_id": "research_lab",
+  "display_name": "Research Lab",
+  "version": "1.0.0",
+  "goal_definition": "Run repeatable research workflows that produce validated findings, clear reports, and actionable recommendations.",
+  "coordinator_agent": {
+    "required": true,
+    "role": "Coordinator Agent",
+    "system_prompt_profile": "hiveforge_coordinator_v1"
+  },
+  "subordinate_agents": [
+    {"role": "Lead Scientist", "alias": "Trend Researcher", "required": true, "personality_prompt_path": null},
+    {"role": "Researcher", "alias": "Trend Researcher", "required": true, "personality_prompt_path": null},
+    {"role": "Data Analyst", "alias": "Analytics Reporter", "required": true, "personality_prompt_path": null},
+    {"role": "Writer", "alias": "Technical Writer", "required": true, "personality_prompt_path": null},
+    {"role": "Reviewer", "alias": "Reality Checker", "required": true, "personality_prompt_path": null}
+  ],
+  "optional_agents": [
+    "Feedback Synthesizer",
+    "Sprint Prioritizer",
+    "Legal Compliance Checker",
+    "Brand Guardian",
+    "SEO Specialist"
+  ],
+  "workflow_definition": {
+    "phases": [
+      "question_design",
+      "data_collection",
+      "analysis",
+      "peer_review",
+      "publication"
+    ],
+    "heartbeat_enabled": true
+  },
+  "task_breakdown": [
+    {"id": "RND-1", "title": "Define hypotheses and success criteria", "phase": "question_design"},
+    {"id": "RND-2", "title": "Collect and normalize datasets", "phase": "data_collection"},
+    {"id": "RND-3", "title": "Analyze findings and generate insights", "phase": "analysis"},
+    {"id": "RND-4", "title": "Run reviewer challenge and corrections", "phase": "peer_review"},
+    {"id": "RND-5", "title": "Publish report and recommendations", "phase": "publication"}
+  ],
+  "dependency_graph": {
+    "RND-1": [],
+    "RND-2": ["RND-1"],
+    "RND-3": ["RND-2"],
+    "RND-4": ["RND-3"],
+    "RND-5": ["RND-4"]
+  }
+}

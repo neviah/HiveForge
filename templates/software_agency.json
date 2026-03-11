@@ -1,0 +1,52 @@
+{
+  "template_id": "software_agency",
+  "display_name": "Software Agency",
+  "version": "1.0.0",
+  "goal_definition": "Deliver production-grade software projects with reliable deployment, QA, and operational excellence.",
+  "coordinator_agent": {
+    "required": true,
+    "role": "Coordinator Agent",
+    "system_prompt_profile": "hiveforge_coordinator_v1"
+  },
+  "subordinate_agents": [
+    {"role": "CTO", "alias": "Backend Architect", "required": true, "personality_prompt_path": null},
+    {"role": "Backend Dev", "alias": "Backend Architect", "required": true, "personality_prompt_path": null},
+    {"role": "Frontend Dev", "alias": "Frontend Developer", "required": true, "personality_prompt_path": null},
+    {"role": "QA", "alias": "Reality Checker", "required": true, "personality_prompt_path": null},
+    {"role": "DevOps", "alias": "DevOps Automator", "required": true, "personality_prompt_path": null},
+    {"role": "PM", "alias": "Senior Project Manager", "required": true, "personality_prompt_path": null}
+  ],
+  "optional_agents": [
+    "Security Engineer",
+    "API Tester",
+    "Incident Response Commander",
+    "Technical Writer",
+    "Feedback Synthesizer",
+    "Sprint Prioritizer",
+    "Performance Benchmarker"
+  ],
+  "workflow_definition": {
+    "phases": [
+      "discovery",
+      "implementation",
+      "testing",
+      "deployment",
+      "maintenance"
+    ],
+    "heartbeat_enabled": true
+  },
+  "task_breakdown": [
+    {"id": "SWE-1", "title": "Capture requirements and technical design", "phase": "discovery"},
+    {"id": "SWE-2", "title": "Implement backend and frontend features", "phase": "implementation"},
+    {"id": "SWE-3", "title": "Execute QA, security, and performance checks", "phase": "testing"},
+    {"id": "SWE-4", "title": "Deploy to target environment and verify", "phase": "deployment"},
+    {"id": "SWE-5", "title": "Operate, monitor, and iterate", "phase": "maintenance"}
+  ],
+  "dependency_graph": {
+    "SWE-1": [],
+    "SWE-2": ["SWE-1"],
+    "SWE-3": ["SWE-2"],
+    "SWE-4": ["SWE-3"],
+    "SWE-5": ["SWE-4"]
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "template_id": "game_studio",
+  "display_name": "Game Studio",
+  "version": "1.0.0",
+  "goal_definition": "Ship a playable game build with production-ready content pipeline, QA coverage, and community rollout plan.",
+  "coordinator_agent": {
+    "required": true,
+    "role": "Coordinator Agent",
+    "system_prompt_profile": "hiveforge_coordinator_v1"
+  },
+  "subordinate_agents": [
+    {"role": "Creative Director", "alias": "Studio Producer", "required": true, "personality_prompt_path": null},
+    {"role": "Game Designer", "required": true, "personality_prompt_path": null},
+    {"role": "Developer", "alias": "Backend Architect", "required": true, "personality_prompt_path": null},
+    {"role": "Artist", "alias": "UI Designer", "required": true, "personality_prompt_path": null},
+    {"role": "Sound Designer", "alias": "Game Audio Engineer", "required": true, "personality_prompt_path": null},
+    {"role": "QA", "alias": "Evidence Collector", "required": true, "personality_prompt_path": null},
+    {"role": "Community Manager", "alias": "Social Media Strategist", "required": true, "personality_prompt_path": null}
+  ],
+  "optional_agents": [
+    "Narrative Designer",
+    "Level Designer",
+    "Technical Artist",
+    "Reality Checker",
+    "Feedback Synthesizer",
+    "Sprint Prioritizer"
+  ],
+  "workflow_definition": {
+    "phases": [
+      "concept",
+      "prototype",
+      "production",
+      "qa",
+      "release"
+    ],
+    "heartbeat_enabled": true
+  },
+  "task_breakdown": [
+    {"id": "GAME-1", "title": "Finalize core loop and game pillars", "phase": "concept"},
+    {"id": "GAME-2", "title": "Build vertical-slice prototype", "phase": "prototype"},
+    {"id": "GAME-3", "title": "Produce art/audio content backlog", "phase": "production"},
+    {"id": "GAME-4", "title": "Execute QA test matrix and fixes", "phase": "qa"},
+    {"id": "GAME-5", "title": "Launch community campaign and release build", "phase": "release"}
+  ],
+  "dependency_graph": {
+    "GAME-1": [],
+    "GAME-2": ["GAME-1"],
+    "GAME-3": ["GAME-2"],
+    "GAME-4": ["GAME-3"],
+    "GAME-5": ["GAME-4"]
+  }
+}
