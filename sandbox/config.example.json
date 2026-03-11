@@ -22,5 +22,12 @@
       "email": "HiveForge@sandbox.local"
     },
     "sshKeyPath": "/sandbox/.ssh/id_rsa"
+  },
+  "skills": {
+    "policyFile": "/sandbox/skills/sandbox_policy.json",
+    "requireSkillVetter": true,
+    "allowHostFilesystemAccess": false,
+    "allowDirectCredentialAccess": false,
+    "coordinatorMediatedOnly": true
   }
 }

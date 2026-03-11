@@ -7,3 +7,5 @@ sandbox/ramclaw.log
 sandbox/config.json
 sandbox/workspace/
 node_modules/
+.clawhub/
+/skills/
