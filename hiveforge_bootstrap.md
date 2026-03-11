@@ -397,3 +397,102 @@ HiveForge must remain fully runnable as a **Pinokio app**.
 
 ---
 
+# **8. Next Steps to Full Autonomous Operation (Post-Task 8)**
+
+Task 8 completes the foundational scaffold. To reach the target behavior (build, market, monitor, and maintain continuously), complete the following phases in order.
+
+## **Phase 1 — Replace Dashboard API Stubs with Live Runtime Wiring (Immediate Next Step)**
+
+Goal: make dashboard actions execute real coordinator and project lifecycle logic.
+
+Implement:
+
+1. Wire `webui/dashboard/api/routes.js` endpoints to real handlers in the server runtime.
+2. Add persistent project records (create, update status, pause/resume, delete).
+3. Connect project creation to template loading and Coordinator spawn.
+4. Connect manual controls (pause, resume, force heartbeat, restart agents) to coordinator commands.
+5. Return real telemetry payloads for agents, tasks, heartbeat, and policy decisions.
+
+Exit criteria:
+
+- Dashboard no longer returns "Not implemented" for core project/agent/task endpoints.
+- Creating a template project starts a running coordinator loop.
+
+## **Phase 2 — Project Lifecycle Runtime**
+
+Goal: each project runs as a managed long-lived process.
+
+Implement:
+
+1. Add project state machine: `created -> running -> paused -> completed/failed`.
+2. Persist runtime snapshots so projects survive app restarts.
+3. Add startup recovery that rehydrates running projects and resumes heartbeat loops.
+4. Add backoff/retry policy for stalled tasks and failed agent actions.
+
+Exit criteria:
+
+- Projects resume safely after process restart.
+- Coordinator can recover from transient failures without manual intervention.
+
+## **Phase 3 — Continuous Work Pipeline (Build + Marketing + Maintenance)**
+
+Goal: convert one-shot generation into recurring autonomous operation.
+
+Implement:
+
+1. Add recurring task schedules per template (content cadence, ad checks, deployment checks, support triage).
+2. Add dependency-aware task promotion from backlog to execution.
+3. Add SLA timers and stale-task escalation to the coordinator.
+4. Add automatic maintenance cycles that run even when no new feature tasks are queued.
+
+Exit criteria:
+
+- A business template keeps producing work after initial generation.
+- Heartbeat logs show recurring maintenance and growth actions over time.
+
+## **Phase 4 — Connector Execution Paths**
+
+Goal: make external operations real while preserving credential safety.
+
+Implement:
+
+1. Implement credential-broker-backed execution adapters for GitHub/Netlify/Google services.
+2. Require all external calls to pass through coordinator policy checks and budget checks.
+3. Add dry-run mode and production mode for deployment and campaign actions.
+4. Record each external action in policy decision logs with allow/deny reason.
+
+Exit criteria:
+
+- Deployment, campaign updates, and analytics sync run through live adapters.
+- No connector path bypasses coordinator and credential manager.
+
+## **Phase 5 — Reliability, Guardrails, and QA Gates**
+
+Goal: make autonomous operation safe for long-duration use.
+
+Implement:
+
+1. Add integration tests for coordinator routing, budget enforcement, and browser gating.
+2. Add chaos tests for agent crash/restart and message-bus recovery.
+3. Add policy regression tests (deny-by-default, scope checks, overspend blocking).
+4. Add observable health metrics and alert thresholds surfaced in dashboard KPIs.
+
+Exit criteria:
+
+- Critical control paths are covered by automated tests.
+- Runtime remains stable under simulated failures.
+
+## **Phase 6 — Final Production Readiness**
+
+Goal: certify HiveForge as an autonomous, sandboxed, Pinokio-compatible operator.
+
+Definition of done:
+
+1. A new Business template project can run for multiple heartbeat cycles with no manual code edits.
+2. It can plan work, execute tasks, deploy updates, track analytics, and schedule follow-up actions continuously.
+3. It obeys policy limits, credential scopes, and budget ceilings under both normal and adversarial inputs.
+4. It survives restart and resumes prior state.
+5. It remains LM Studio-only, sandboxed, and Pinokio compatible.
+
+---
+
