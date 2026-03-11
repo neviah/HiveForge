@@ -244,6 +244,14 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .hf-cred-desc  { font-size: 0.8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hf-cred-status{ flex-shrink: 0; }
 
+/* ── Platform connections ───────────────────────────────── */
+.hf-platform-grid { display: grid; grid-template-columns: 1fr; gap: 0.65rem; }
+.hf-platform-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; border: 1px solid var(--border); border-radius: 10px; padding: 0.7rem 0.85rem; background: var(--panel-bg); }
+.hf-platform-meta { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.hf-platform-title { font-weight: 700; }
+.hf-platform-note { color: var(--muted); font-size: 0.82rem; }
+.hf-platform-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+
 /* ── Responsive ───────────────────────────────────────────── */
 @media (max-width: 1024px) {
   .hf-analytics-kpi { grid-template-columns: repeat(3, 1fr); }

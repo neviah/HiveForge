@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
+from urllib.parse import urlparse
 
 from .agent_base import AgentBase, AgentEnvelope, AgentMessage
 from .message_bus import MessageBus
@@ -16,6 +17,18 @@ class CredentialGrant:
     scopes: List[str] = field(default_factory=list)
     max_daily_spend: Optional[float] = None
     max_monthly_spend: Optional[float] = None
+
+
+@dataclass(slots=True)
+class BrowserGrant:
+    allowed_domains: List[str] = field(default_factory=list)
+    allowed_actions: List[str] = field(default_factory=lambda: [
+        "navigate",
+        "wait_for_selector",
+        "get_content",
+        "screenshot",
+    ])
+    require_https: bool = True
 
 
 class CoordinatorAgent:
@@ -46,6 +59,7 @@ class CoordinatorAgent:
 
         self.subordinates: Dict[str, AgentBase] = {}
         self.credential_policy: Dict[str, CredentialGrant] = {}
+        self.browser_policy = BrowserGrant()
         self.heartbeat_log: List[dict] = []
         self.last_heartbeat_at: str | None = None
         self.auto_fix_attempts: int = 0
@@ -57,6 +71,9 @@ class CoordinatorAgent:
 
     def register_credential_policy(self, grant: CredentialGrant) -> None:
         self.credential_policy[grant.service] = grant
+
+    def register_browser_policy(self, grant: BrowserGrant) -> None:
+        self.browser_policy = grant
 
     def route_outbound(self) -> int:
         """Persist outbound envelopes from subordinate outboxes into the bus."""
@@ -119,6 +136,25 @@ class CoordinatorAgent:
             self.bus.publish(response)
             return
 
+        if message.kind == "browser_request":
+            approved, reason = self._approve_browser_request(message.metadata)
+            response = AgentEnvelope(
+                sender_id=self.coordinator_id,
+                receiver_id=envelope.sender_id,
+                message=AgentMessage(
+                    kind="browser_response",
+                    content="approved" if approved else "denied",
+                    metadata={
+                        "approved": approved,
+                        "reason": reason,
+                        "action": message.metadata.get("action"),
+                        "url": message.metadata.get("url"),
+                    },
+                ),
+            )
+            self.bus.publish(response)
+            return
+
         if message.kind == "task_completed":
             task_id = message.metadata.get("task_id")
             if task_id and task_id in self.scheduler.tasks:
@@ -148,6 +184,36 @@ class CoordinatorAgent:
         if scope and grant.scopes and scope not in grant.scopes:
             return False
         return True
+
+    def _approve_browser_request(self, metadata: dict) -> tuple[bool, str]:
+        action = str(metadata.get("action") or "")
+        url = str(metadata.get("url") or "")
+
+        if not action:
+            return False, "Missing browser action"
+        if action not in self.browser_policy.allowed_actions:
+            return False, f"Action not allowed: {action}"
+
+        if not url:
+            return False, "Missing target URL"
+
+        parsed = urlparse(url)
+        domain = (parsed.hostname or "").lower()
+        if not domain:
+            return False, "Invalid URL"
+
+        if self.browser_policy.require_https and parsed.scheme.lower() != "https":
+            return False, "Only HTTPS targets are allowed"
+
+        if not self.browser_policy.allowed_domains:
+            return False, "No browser domains have been allowlisted"
+
+        for allowed in self.browser_policy.allowed_domains:
+            allowed_l = allowed.lower()
+            if domain == allowed_l or domain.endswith("." + allowed_l):
+                return True, "Allowed by browser policy"
+
+        return False, f"Domain not allowlisted: {domain}"
 
     def assign_runnable_tasks(self) -> int:
         """Assign unblocked tasks to available agents."""

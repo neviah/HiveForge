@@ -15,6 +15,7 @@ const API = {
   tasks:       '/api/tasks',
   heartbeat:   '/api/heartbeat',
   credentials: '/api/credentials',
+  integrations:'/api/integrations',
   analytics:   '/api/analytics',
   logs:        '/api/logs',
   marketplace: '/api/marketplace',
@@ -81,6 +82,20 @@ const CREDENTIAL_SERVICES = [
 
 const KPI_LABELS = ['Visitors (7d)', 'Conversions', 'Revenue', 'Ad Spend', 'ROAS', 'Open Rate'];
 const KPI_PLACEHOLDER = ['—', '—', '—', '—', '—', '—'];
+const PLATFORM_CONNECTIONS = [
+  {
+    id: 'github',
+    label: 'GitHub CLI',
+    note: 'Used by the github skill for deployment and repo workflows.',
+    loginUrl: 'https://github.com/login',
+  },
+  {
+    id: 'clawhub',
+    label: 'ClawHub CLI',
+    note: 'Used to install and manage skills in local workspace.',
+    loginUrl: 'https://clawhub.ai',
+  },
+];
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -138,6 +153,17 @@ async function fetchHeartbeat(projectId) {
 async function fetchCredentials() {
   try { return await apiFetch(API.credentials); }
   catch { return []; }
+}
+
+async function fetchIntegrations() {
+  try {
+    return await apiFetch(API.integrations);
+  } catch {
+    return {
+      github: localStorage.getItem('hf-github-connected') === '1',
+      clawhub: localStorage.getItem('hf-clawhub-connected') === '1',
+    };
+  }
 }
 
 async function fetchAnalytics(projectId) {
@@ -300,6 +326,26 @@ function renderCredentials(creds) {
   }).join('');
 }
 
+function renderPlatformConnections(connections = {}) {
+  const container = document.getElementById('platformConnections');
+  if (!container) return;
+  container.innerHTML = PLATFORM_CONNECTIONS.map((it) => {
+    const isConnected = Boolean(connections[it.id]);
+    return `
+    <div class="hf-platform-row">
+      <div class="hf-platform-meta">
+        <div class="hf-platform-title">${it.label}</div>
+        <div class="hf-platform-note">${it.note}</div>
+      </div>
+      <div class="hf-platform-actions">
+        <span class="hf-status-badge ${isConnected ? 'ok' : 'idle'}">${isConnected ? 'Connected' : 'Not connected'}</span>
+        <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.openPlatformLogin('${it.id}')">Connect</button>
+        <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.markPlatformDisconnected('${it.id}')">Disconnect</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 // Log stream
 function appendLogEntry(entry) {
   state.logs.unshift(entry);
@@ -395,7 +441,11 @@ async function onSectionActivate(id) {
     case 'agents':      if (pid) renderAgents(state.agents = await fetchAgents(pid)); break;
     case 'kanban':      if (pid) renderKanban(state.tasks = await fetchTasks(pid)); break;
     case 'heartbeat':   if (pid) renderHeartbeatCard(await fetchHeartbeat(pid)); break;
-    case 'credentials': renderCredentials(await fetchCredentials()); break;
+    case 'credentials': {
+      renderCredentials(await fetchCredentials());
+      renderPlatformConnections(await fetchIntegrations());
+      break;
+    }
     case 'analytics':   renderAnalytics(pid ? await fetchAnalytics(pid) : null); break;
     case 'logs':        if (pid) renderLogs(state.logs = await fetchLogs(pid)); break;
     case 'marketplace': renderMarketplace(state.marketplaceFilter); break;
@@ -505,6 +555,25 @@ const Dashboard = {
     } catch (err) {
       showStatus(status, `Failed: ${err.message}`, 'error');
     }
+  },
+
+  openPlatformLogin(platformId) {
+    const item = PLATFORM_CONNECTIONS.find(p => p.id === platformId);
+    if (!item) return;
+    window.open(item.loginUrl, '_blank', 'noopener,noreferrer');
+    localStorage.setItem(`hf-${platformId}-connected`, '1');
+    renderPlatformConnections({
+      github: localStorage.getItem('hf-github-connected') === '1',
+      clawhub: localStorage.getItem('hf-clawhub-connected') === '1',
+    });
+  },
+
+  markPlatformDisconnected(platformId) {
+    localStorage.setItem(`hf-${platformId}-connected`, '0');
+    renderPlatformConnections({
+      github: localStorage.getItem('hf-github-connected') === '1',
+      clawhub: localStorage.getItem('hf-clawhub-connected') === '1',
+    });
   },
 
   async projectControl(action) {
