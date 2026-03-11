@@ -1,50 +1,124 @@
-{
-  "template_id": "publishing_house",
-  "display_name": "Publishing House",
-  "version": "1.0.0",
-  "goal_definition": "Operate an editorial pipeline that consistently publishes high-quality, discoverable content with measurable audience growth.",
-  "coordinator_agent": {
-    "required": true,
-    "role": "Coordinator Agent",
-    "system_prompt_profile": "hiveforge_coordinator_v1"
-  },
-  "subordinate_agents": [
-    {"role": "Editor-in-Chief", "alias": "Senior Project Manager", "required": true, "personality_prompt_path": null},
-    {"role": "Writer", "alias": "Content Creator", "required": true, "personality_prompt_path": null},
-    {"role": "Researcher", "alias": "Trend Researcher", "required": true, "personality_prompt_path": null},
-    {"role": "Proofreader", "alias": "Reality Checker", "required": true, "personality_prompt_path": null},
-    {"role": "Designer", "alias": "Visual Storyteller", "required": true, "personality_prompt_path": null},
-    {"role": "Marketing", "alias": "Growth Hacker", "required": true, "personality_prompt_path": null}
-  ],
-  "optional_agents": [
-    "Technical Writer",
-    "SEO Specialist",
-    "Brand Guardian",
-    "Feedback Synthesizer",
-    "Legal Compliance Checker"
-  ],
-  "workflow_definition": {
-    "phases": [
-      "editorial_planning",
-      "research",
-      "drafting",
-      "editing",
-      "distribution"
-    ],
-    "heartbeat_enabled": true
-  },
-  "task_breakdown": [
-    {"id": "PUB-1", "title": "Define editorial calendar", "phase": "editorial_planning"},
-    {"id": "PUB-2", "title": "Collect source material and briefs", "phase": "research"},
-    {"id": "PUB-3", "title": "Draft and design content assets", "phase": "drafting"},
-    {"id": "PUB-4", "title": "Run proofing and fact checks", "phase": "editing"},
-    {"id": "PUB-5", "title": "Publish, distribute, and report performance", "phase": "distribution"}
-  ],
-  "dependency_graph": {
-    "PUB-1": [],
-    "PUB-2": ["PUB-1"],
-    "PUB-3": ["PUB-2"],
-    "PUB-4": ["PUB-3"],
-    "PUB-5": ["PUB-4"]
-  }
+﻿{
+    "template_id":  "publishing_house",
+    "display_name":  "Publishing House",
+    "version":  "1.0.0",
+    "goal_definition":  "Operate an editorial pipeline that consistently publishes high-quality, discoverable content with measurable audience growth.",
+    "coordinator_agent":  {
+                              "required":  true,
+                              "role":  "Coordinator Agent",
+                              "system_prompt_profile":  "hiveforge_coordinator_v1",
+                              "system_prompt_path":  "agents/prompts/coordinator_system_prompt.md"
+                          },
+    "subordinate_agents":  [
+                               {
+                                   "role":  "Editor-in-Chief",
+                                   "alias":  "Senior Project Manager",
+                                   "required":  true,
+                                   "personality_prompt_paths":  [
+                                                                    "../agency-agents/project-management/project-manager-senior.md"
+                                                                ]
+                               },
+                               {
+                                   "role":  "Writer",
+                                   "alias":  "Content Creator",
+                                   "required":  true,
+                                   "personality_prompt_paths":  [
+                                                                    "../agency-agents/marketing/marketing-content-creator.md"
+                                                                ]
+                               },
+                               {
+                                   "role":  "Researcher",
+                                   "alias":  "Trend Researcher",
+                                   "required":  true,
+                                   "personality_prompt_paths":  [
+                                                                    "../agency-agents/product/product-trend-researcher.md"
+                                                                ]
+                               },
+                               {
+                                   "role":  "Proofreader",
+                                   "alias":  "Reality Checker",
+                                   "required":  true,
+                                   "personality_prompt_paths":  [
+                                                                    "../agency-agents/testing/testing-reality-checker.md"
+                                                                ]
+                               },
+                               {
+                                   "role":  "Designer",
+                                   "alias":  "Visual Storyteller",
+                                   "required":  true,
+                                   "personality_prompt_paths":  [
+                                                                    "../agency-agents/design/design-visual-storyteller.md"
+                                                                ]
+                               },
+                               {
+                                   "role":  "Marketing",
+                                   "alias":  "Growth Hacker",
+                                   "required":  true,
+                                   "personality_prompt_paths":  [
+                                                                    "../agency-agents/marketing/marketing-growth-hacker.md"
+                                                                ]
+                               }
+                           ],
+    "optional_agents":  [
+                            "Technical Writer",
+                            "SEO Specialist",
+                            "Brand Guardian",
+                            "Feedback Synthesizer",
+                            "Legal Compliance Checker"
+                        ],
+    "workflow_definition":  {
+                                "phases":  [
+                                               "editorial_planning",
+                                               "research",
+                                               "drafting",
+                                               "editing",
+                                               "distribution"
+                                           ],
+                                "heartbeat_enabled":  true
+                            },
+    "task_breakdown":  [
+                           {
+                               "id":  "PUB-1",
+                               "title":  "Define editorial calendar",
+                               "phase":  "editorial_planning"
+                           },
+                           {
+                               "id":  "PUB-2",
+                               "title":  "Collect source material and briefs",
+                               "phase":  "research"
+                           },
+                           {
+                               "id":  "PUB-3",
+                               "title":  "Draft and design content assets",
+                               "phase":  "drafting"
+                           },
+                           {
+                               "id":  "PUB-4",
+                               "title":  "Run proofing and fact checks",
+                               "phase":  "editing"
+                           },
+                           {
+                               "id":  "PUB-5",
+                               "title":  "Publish, distribute, and report performance",
+                               "phase":  "distribution"
+                           }
+                       ],
+    "dependency_graph":  {
+                             "PUB-1":  [
+
+                                       ],
+                             "PUB-2":  [
+                                           "PUB-1"
+                                       ],
+                             "PUB-3":  [
+                                           "PUB-2"
+                                       ],
+                             "PUB-4":  [
+                                           "PUB-3"
+                                       ],
+                             "PUB-5":  [
+                                           "PUB-4"
+                                       ]
+                         }
 }
+

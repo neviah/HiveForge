@@ -1,55 +1,143 @@
-{
-  "template_id": "business",
-  "display_name": "Business",
-  "version": "1.0.0",
-  "goal_definition": "Launch and operate a small-to-mid-size digital business with coordinated product, marketing, finance, and support operations.",
-  "coordinator_agent": {
-    "required": true,
-    "role": "Coordinator Agent",
-    "system_prompt_profile": "hiveforge_coordinator_v1"
-  },
-  "subordinate_agents": [
-    {"role": "CEO", "required": true, "personality_prompt_path": null},
-    {"role": "PM", "alias": "Senior Project Manager", "required": true, "personality_prompt_path": null},
-    {"role": "Developer", "alias": "Backend Architect", "required": true, "personality_prompt_path": null},
-    {"role": "Designer", "alias": "UI Designer", "required": true, "personality_prompt_path": null},
-    {"role": "Marketing", "alias": "Growth Hacker + Content Creator", "required": true, "personality_prompt_path": null},
-    {"role": "Support", "alias": "Support Responder", "required": true, "personality_prompt_path": null},
-    {"role": "CFO", "alias": "Finance Tracker", "required": true, "personality_prompt_path": null}
-  ],
-  "optional_agents": [
-    "Security Engineer",
-    "Reality Checker",
-    "PPC Campaign Strategist",
-    "Brand Guardian",
-    "Legal Compliance Checker",
-    "SEO Specialist",
-    "Analytics Reporter"
-  ],
-  "workflow_definition": {
-    "phases": [
-      "strategy",
-      "product_build",
-      "launch",
-      "growth",
-      "optimization"
-    ],
-    "heartbeat_enabled": true
-  },
-  "task_breakdown": [
-    {"id": "BIZ-1", "title": "Define offer and revenue model", "phase": "strategy"},
-    {"id": "BIZ-2", "title": "Build core product and landing site", "phase": "product_build"},
-    {"id": "BIZ-3", "title": "Set up analytics and payment rails", "phase": "product_build"},
-    {"id": "BIZ-4", "title": "Execute launch campaign", "phase": "launch"},
-    {"id": "BIZ-5", "title": "Run retention and support loops", "phase": "growth"},
-    {"id": "BIZ-6", "title": "Optimize CAC/LTV and budget", "phase": "optimization"}
-  ],
-  "dependency_graph": {
-    "BIZ-1": [],
-    "BIZ-2": ["BIZ-1"],
-    "BIZ-3": ["BIZ-2"],
-    "BIZ-4": ["BIZ-2", "BIZ-3"],
-    "BIZ-5": ["BIZ-4"],
-    "BIZ-6": ["BIZ-5"]
-  }
+﻿{
+    "template_id":  "business",
+    "display_name":  "Business",
+    "version":  "1.0.0",
+    "goal_definition":  "Launch and operate a small-to-mid-size digital business with coordinated product, marketing, finance, and support operations.",
+    "coordinator_agent":  {
+                              "required":  true,
+                              "role":  "Coordinator Agent",
+                              "system_prompt_profile":  "hiveforge_coordinator_v1",
+                              "system_prompt_path":  "agents/prompts/coordinator_system_prompt.md"
+                          },
+    "subordinate_agents":  [
+                               {
+                                   "role":  "CEO",
+                                   "required":  true,
+                                   "personality_prompt_paths":  [
+                                                                    "../agency-agents/specialized/agents-orchestrator.md"
+                                                                ]
+                               },
+                               {
+                                   "role":  "PM",
+                                   "alias":  "Senior Project Manager",
+                                   "required":  true,
+                                   "personality_prompt_paths":  [
+                                                                    "../agency-agents/project-management/project-manager-senior.md"
+                                                                ]
+                               },
+                               {
+                                   "role":  "Developer",
+                                   "alias":  "Backend Architect",
+                                   "required":  true,
+                                   "personality_prompt_paths":  [
+                                                                    "../agency-agents/engineering/engineering-backend-architect.md"
+                                                                ]
+                               },
+                               {
+                                   "role":  "Designer",
+                                   "alias":  "UI Designer",
+                                   "required":  true,
+                                   "personality_prompt_paths":  [
+                                                                    "../agency-agents/design/design-ui-designer.md"
+                                                                ]
+                               },
+                               {
+                                   "role":  "Marketing",
+                                   "alias":  "Growth Hacker + Content Creator",
+                                   "required":  true,
+                                   "personality_prompt_paths":  [
+                                                                    "../agency-agents/marketing/marketing-growth-hacker.md",
+                                                                    "../agency-agents/marketing/marketing-content-creator.md"
+                                                                ]
+                               },
+                               {
+                                   "role":  "Support",
+                                   "alias":  "Support Responder",
+                                   "required":  true,
+                                   "personality_prompt_paths":  [
+                                                                    "../agency-agents/support/support-support-responder.md"
+                                                                ]
+                               },
+                               {
+                                   "role":  "CFO",
+                                   "alias":  "Finance Tracker",
+                                   "required":  true,
+                                   "personality_prompt_paths":  [
+                                                                    "../agency-agents/support/support-finance-tracker.md"
+                                                                ]
+                               }
+                           ],
+    "optional_agents":  [
+                            "Security Engineer",
+                            "Reality Checker",
+                            "PPC Campaign Strategist",
+                            "Brand Guardian",
+                            "Legal Compliance Checker",
+                            "SEO Specialist",
+                            "Analytics Reporter"
+                        ],
+    "workflow_definition":  {
+                                "phases":  [
+                                               "strategy",
+                                               "product_build",
+                                               "launch",
+                                               "growth",
+                                               "optimization"
+                                           ],
+                                "heartbeat_enabled":  true
+                            },
+    "task_breakdown":  [
+                           {
+                               "id":  "BIZ-1",
+                               "title":  "Define offer and revenue model",
+                               "phase":  "strategy"
+                           },
+                           {
+                               "id":  "BIZ-2",
+                               "title":  "Build core product and landing site",
+                               "phase":  "product_build"
+                           },
+                           {
+                               "id":  "BIZ-3",
+                               "title":  "Set up analytics and payment rails",
+                               "phase":  "product_build"
+                           },
+                           {
+                               "id":  "BIZ-4",
+                               "title":  "Execute launch campaign",
+                               "phase":  "launch"
+                           },
+                           {
+                               "id":  "BIZ-5",
+                               "title":  "Run retention and support loops",
+                               "phase":  "growth"
+                           },
+                           {
+                               "id":  "BIZ-6",
+                               "title":  "Optimize CAC/LTV and budget",
+                               "phase":  "optimization"
+                           }
+                       ],
+    "dependency_graph":  {
+                             "BIZ-1":  [
+
+                                       ],
+                             "BIZ-2":  [
+                                           "BIZ-1"
+                                       ],
+                             "BIZ-3":  [
+                                           "BIZ-2"
+                                       ],
+                             "BIZ-4":  [
+                                           "BIZ-2",
+                                           "BIZ-3"
+                                       ],
+                             "BIZ-5":  [
+                                           "BIZ-4"
+                                       ],
+                             "BIZ-6":  [
+                                           "BIZ-5"
+                                       ]
+                         }
 }
+

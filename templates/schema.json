@@ -21,23 +21,28 @@
     "goal_definition": {"type": "string"},
     "coordinator_agent": {
       "type": "object",
-      "required": ["required", "role", "system_prompt_profile"],
+      "required": ["required", "role", "system_prompt_profile", "system_prompt_path"],
       "properties": {
         "required": {"type": "boolean"},
         "role": {"type": "string"},
-        "system_prompt_profile": {"type": "string"}
+        "system_prompt_profile": {"type": "string"},
+        "system_prompt_path": {"type": "string"}
       }
     },
     "subordinate_agents": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["role", "required", "personality_prompt_path"],
+        "required": ["role", "required", "personality_prompt_paths"],
         "properties": {
           "role": {"type": "string"},
           "alias": {"type": "string"},
           "required": {"type": "boolean"},
-          "personality_prompt_path": {"type": ["string", "null"]}
+          "personality_prompt_paths": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string"}
+          }
         }
       }
     },
