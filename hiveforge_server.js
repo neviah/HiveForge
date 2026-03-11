@@ -1,6 +1,7 @@
 ﻿const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 
 const SANDBOX_ROOT = path.join(__dirname, 'sandbox');
@@ -8,10 +9,15 @@ const WEBUI_ROOT = path.join(__dirname, 'webui');
 const OPENCLAW_SRC_ROOT = path.join(__dirname, 'openclaw');
 const CONFIG_PATH = path.join(SANDBOX_ROOT, 'config.json');
 const LOG_PATH = path.join(SANDBOX_ROOT, 'hiveforge.log');
+const PROJECTS_ROOT = path.join(SANDBOX_ROOT, 'projects');
+const TEMPLATES_ROOT = path.join(__dirname, 'templates');
+const CREDENTIALS_ROOT = path.join(SANDBOX_ROOT, 'credentials');
 const MAX_TASK_HISTORY = 100;
 const MAX_EVENTS_PER_TASK = 500;
 const sseClients = new Set();
+const projectSseClients = new Map();
 const activeTasks = new Map();
+const projectRuntimes = new Map();
 let pythonRuntimeReady = false;
 
 let nextTaskId = 1;
@@ -24,6 +30,476 @@ const appState = {
     lastCheckedAt: null
   }
 };
+
+const SUPPORTED_CREDENTIAL_SERVICES = ['netlify', 'stripe', 'google_ads', 'analytics', 'email_provider'];
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function ensureDir(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function safeJsonRead(filePath, fallback = null) {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch (err) {
+    return fallback;
+  }
+}
+
+function projectDir(projectId) {
+  return path.join(PROJECTS_ROOT, projectId);
+}
+
+function projectStatePath(projectId) {
+  return path.join(projectDir(projectId), 'state.json');
+}
+
+function projectTemplateSnapshotPath(projectId) {
+  return path.join(projectDir(projectId), 'template_snapshot.json');
+}
+
+function emitProjectEvent(projectId, eventName, payload) {
+  const clients = projectSseClients.get(projectId);
+  if (!clients || !clients.size) return;
+  const data = JSON.stringify({ ...payload, ts: payload.ts || nowIso() });
+  clients.forEach((res) => {
+    try {
+      res.write(`event: ${eventName}\n`);
+      res.write(`data: ${data}\n\n`);
+    } catch (err) {
+      clients.delete(res);
+    }
+  });
+}
+
+function appendProjectLog(projectState, type, data) {
+  const entry = { ts: nowIso(), type, data };
+  projectState.logs.unshift(entry);
+  if (projectState.logs.length > 1000) {
+    projectState.logs.length = 1000;
+  }
+  projectState.lastActivity = entry.ts;
+  return entry;
+}
+
+function loadTemplateById(templateId) {
+  const templatePath = path.join(TEMPLATES_ROOT, `${templateId}.json`);
+  if (!templatePath.startsWith(TEMPLATES_ROOT) || !fs.existsSync(templatePath)) {
+    return null;
+  }
+  const parsed = safeJsonRead(templatePath, null);
+  return parsed;
+}
+
+function roleToAgentId(role, index) {
+  const normalized = String(role || 'agent').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return `${normalized || 'agent'}_${index + 1}`;
+}
+
+function createInitialAgents(projectId, template) {
+  const agents = [];
+  agents.push({
+    id: `coordinator_${projectId}`,
+    name: 'Coordinator Agent',
+    role: 'Coordinator Agent',
+    status: 'running',
+    currentTask: null,
+    tasksDone: 0,
+    tokens: 0,
+    recentLog: ['Coordinator online'],
+    isCoordinator: true
+  });
+
+  const subordinates = Array.isArray(template.subordinate_agents) ? template.subordinate_agents : [];
+  subordinates.forEach((agentSpec, idx) => {
+    const role = agentSpec.alias || agentSpec.role || `Agent ${idx + 1}`;
+    agents.push({
+      id: roleToAgentId(role, idx),
+      name: role,
+      role: role,
+      status: 'idle',
+      currentTask: null,
+      tasksDone: 0,
+      tokens: 0,
+      recentLog: ['Idle'],
+      isCoordinator: false
+    });
+  });
+
+  return agents;
+}
+
+function createInitialTasks(template) {
+  const breakdown = Array.isArray(template.task_breakdown) ? template.task_breakdown : [];
+  const dependencyGraph = template.dependency_graph || {};
+  const createdAt = nowIso();
+  return breakdown.map((task, idx) => ({
+    id: task.id || `TASK-${idx + 1}`,
+    title: task.title || `Task ${idx + 1}`,
+    phase: task.phase || 'general',
+    status: 'backlog',
+    assignee: null,
+    blockedBy: (dependencyGraph[task.id] || [])[0] || null,
+    dependencies: dependencyGraph[task.id] || [],
+    createdAt,
+    completedAt: null,
+    startedAt: null,
+    description: ''
+  }));
+}
+
+function summarizeProject(projectState) {
+  const inProgress = projectState.tasks.find((task) => task.status === 'inprogress');
+  return {
+    id: projectState.id,
+    name: projectState.name,
+    template: projectState.template,
+    status: projectState.status,
+    heartbeat: projectState.heartbeat?.status || 'unknown',
+    lastActivity: projectState.lastActivity,
+    agentCount: projectState.agents.length,
+    currentTask: inProgress ? inProgress.title : null
+  };
+}
+
+function persistProjectState(projectState) {
+  const dir = projectDir(projectState.id);
+  ensureDir(dir);
+  fs.writeFileSync(projectStatePath(projectState.id), `${JSON.stringify(projectState, null, 2)}\n`, 'utf-8');
+}
+
+function projectDoneTaskIds(projectState) {
+  const done = new Set();
+  projectState.tasks.forEach((task) => {
+    if (task.status === 'done') done.add(task.id);
+  });
+  return done;
+}
+
+function nextRunnableTask(projectState) {
+  const done = projectDoneTaskIds(projectState);
+  return projectState.tasks.find((task) => {
+    if (task.status !== 'backlog') return false;
+    const deps = Array.isArray(task.dependencies) ? task.dependencies : [];
+    return deps.every((depId) => done.has(depId));
+  }) || null;
+}
+
+function pickWorkerAgent(projectState) {
+  const candidates = projectState.agents.filter((agent) => !agent.isCoordinator);
+  if (!candidates.length) return null;
+  const index = projectState.heartbeat?.cycleCount ? projectState.heartbeat.cycleCount % candidates.length : 0;
+  return candidates[index];
+}
+
+function markAgentLog(agent, message) {
+  const line = `${new Date().toISOString().slice(11, 19)} ${message}`;
+  agent.recentLog = Array.isArray(agent.recentLog) ? agent.recentLog : [];
+  agent.recentLog.unshift(line);
+  if (agent.recentLog.length > 10) {
+    agent.recentLog.length = 10;
+  }
+}
+
+function runProjectHeartbeat(projectState, source = 'interval') {
+  if (projectState.status !== 'running') {
+    return;
+  }
+
+  const beatTs = nowIso();
+  projectState.heartbeat.lastBeat = beatTs;
+  projectState.heartbeat.status = 'alive';
+  projectState.heartbeat.cycleCount = (projectState.heartbeat.cycleCount || 0) + 1;
+
+  const activeTask = projectState.tasks.find((task) => task.status === 'inprogress');
+  if (activeTask) {
+    activeTask.status = 'done';
+    activeTask.completedAt = beatTs;
+    const worker = projectState.agents.find((agent) => agent.id === activeTask.assignee);
+    if (worker) {
+      worker.status = 'idle';
+      worker.currentTask = null;
+      worker.tasksDone = Number(worker.tasksDone || 0) + 1;
+      markAgentLog(worker, `Completed ${activeTask.id}`);
+      emitProjectEvent(projectState.id, 'agent_message', {
+        agentId: worker.id,
+        name: worker.name,
+        role: worker.role,
+        status: worker.status,
+        currentTask: null,
+        tasksDone: worker.tasksDone,
+        recentLog: worker.recentLog
+      });
+    }
+
+    appendProjectLog(projectState, 'task', {
+      kind: 'task_completed',
+      taskId: activeTask.id,
+      title: activeTask.title,
+      assignee: activeTask.assignee,
+      source
+    });
+    emitProjectEvent(projectState.id, 'task_update', activeTask);
+  } else {
+    const nextTask = nextRunnableTask(projectState);
+    if (nextTask) {
+      const assignee = pickWorkerAgent(projectState);
+      if (assignee) {
+        nextTask.status = 'inprogress';
+        nextTask.assignee = assignee.id;
+        nextTask.startedAt = beatTs;
+        nextTask.blockedBy = null;
+        assignee.status = 'running';
+        assignee.currentTask = nextTask.title;
+        markAgentLog(assignee, `Started ${nextTask.id}`);
+
+        appendProjectLog(projectState, 'task', {
+          kind: 'task_started',
+          taskId: nextTask.id,
+          title: nextTask.title,
+          assignee: assignee.id,
+          source
+        });
+        emitProjectEvent(projectState.id, 'task_update', nextTask);
+        emitProjectEvent(projectState.id, 'agent_message', {
+          agentId: assignee.id,
+          name: assignee.name,
+          role: assignee.role,
+          status: assignee.status,
+          currentTask: assignee.currentTask,
+          tasksDone: assignee.tasksDone,
+          recentLog: assignee.recentLog
+        });
+      }
+    }
+  }
+
+  const heartbeatLine = {
+    ts: beatTs,
+    message: `Heartbeat cycle ${projectState.heartbeat.cycleCount} (${source})`
+  };
+  projectState.heartbeat.log.unshift(heartbeatLine);
+  if (projectState.heartbeat.log.length > 200) {
+    projectState.heartbeat.log.length = 200;
+  }
+
+  appendProjectLog(projectState, 'heartbeat', {
+    kind: 'heartbeat',
+    source,
+    cycle: projectState.heartbeat.cycleCount
+  });
+  emitProjectEvent(projectState.id, 'heartbeat', {
+    status: projectState.heartbeat.status,
+    uptime: projectUptime(projectState),
+    lastBeat: projectState.heartbeat.lastBeat,
+    autoFixCount: projectState.heartbeat.autoFixCount,
+    log: projectState.heartbeat.log.slice(0, 25)
+  });
+  persistProjectState(projectState);
+}
+
+function projectUptime(projectState) {
+  const startedAt = Date.parse(projectState.startedAt || '');
+  if (!startedAt || Number.isNaN(startedAt)) {
+    return '0m';
+  }
+  const elapsedMs = Math.max(0, Date.now() - startedAt);
+  const minutes = Math.floor(elapsedMs / 60000);
+  const hours = Math.floor(minutes / 60);
+  const remMinutes = minutes % 60;
+  if (hours > 0) return `${hours}h ${remMinutes}m`;
+  return `${remMinutes}m`;
+}
+
+function startProjectLoop(projectId) {
+  const runtime = projectRuntimes.get(projectId);
+  if (!runtime || runtime.timer) return;
+  runtime.state.status = 'running';
+  runtime.timer = setInterval(() => runProjectHeartbeat(runtime.state, 'interval'), 30000);
+  appendProjectLog(runtime.state, 'message', { kind: 'project_loop_started' });
+  persistProjectState(runtime.state);
+}
+
+function stopProjectLoop(projectId) {
+  const runtime = projectRuntimes.get(projectId);
+  if (!runtime || !runtime.timer) return;
+  clearInterval(runtime.timer);
+  runtime.timer = null;
+}
+
+function loadProjectsFromDisk() {
+  ensureDir(PROJECTS_ROOT);
+  const children = fs.readdirSync(PROJECTS_ROOT, { withFileTypes: true });
+  children.forEach((entry) => {
+    if (!entry.isDirectory()) return;
+    const state = safeJsonRead(path.join(PROJECTS_ROOT, entry.name, 'state.json'), null);
+    if (!state || !state.id) return;
+    if (!Array.isArray(state.logs)) state.logs = [];
+    if (!Array.isArray(state.tasks)) state.tasks = [];
+    if (!Array.isArray(state.agents)) state.agents = [];
+    if (!state.heartbeat) {
+      state.heartbeat = { status: 'unknown', lastBeat: null, autoFixCount: 0, cycleCount: 0, log: [] };
+    }
+    const runtime = { state, timer: null };
+    projectRuntimes.set(state.id, runtime);
+    if (state.status === 'running') {
+      startProjectLoop(state.id);
+    }
+  });
+}
+
+function createProjectFromTemplate({ name, template, goal }) {
+  const tpl = loadTemplateById(template);
+  if (!tpl) {
+    throw new Error(`Unknown template: ${template}`);
+  }
+
+  const id = crypto.randomUUID();
+  const createdAt = nowIso();
+  const state = {
+    id,
+    name,
+    template,
+    goal: goal || tpl.goal_definition || '',
+    status: 'running',
+    startedAt: createdAt,
+    createdAt,
+    updatedAt: createdAt,
+    lastActivity: createdAt,
+    agents: createInitialAgents(id, tpl),
+    tasks: createInitialTasks(tpl),
+    logs: [],
+    heartbeat: {
+      status: 'alive',
+      lastBeat: null,
+      autoFixCount: 0,
+      cycleCount: 0,
+      log: []
+    }
+  };
+
+  appendProjectLog(state, 'message', {
+    kind: 'project_created',
+    template,
+    goal: state.goal
+  });
+
+  const runtime = { state, timer: null };
+  projectRuntimes.set(id, runtime);
+
+  ensureDir(projectDir(id));
+  fs.writeFileSync(projectTemplateSnapshotPath(id), `${JSON.stringify(tpl, null, 2)}\n`, 'utf-8');
+  persistProjectState(state);
+  startProjectLoop(id);
+  runProjectHeartbeat(state, 'startup');
+  return summarizeProject(state);
+}
+
+function removeProject(projectId) {
+  stopProjectLoop(projectId);
+  projectRuntimes.delete(projectId);
+  const clients = projectSseClients.get(projectId);
+  if (clients) {
+    clients.forEach((res) => {
+      try {
+        res.end();
+      } catch (err) {
+      }
+    });
+    projectSseClients.delete(projectId);
+  }
+
+  const target = projectDir(projectId);
+  if (fs.existsSync(target)) {
+    fs.rmSync(target, { recursive: true, force: true });
+  }
+}
+
+function parseJsonBodySafe(rawBody) {
+  if (!rawBody) return {};
+  return JSON.parse(rawBody);
+}
+
+function credentialMetaPath(service) {
+  return path.join(CREDENTIALS_ROOT, `${service}.json`);
+}
+
+function credentialTokenPath(service) {
+  return path.join(CREDENTIALS_ROOT, `${service}.enc`);
+}
+
+function readCredentialMetadata() {
+  ensureDir(CREDENTIALS_ROOT);
+  return SUPPORTED_CREDENTIAL_SERVICES.map((service) => {
+    const metadata = safeJsonRead(credentialMetaPath(service), {});
+    const connected = Boolean(metadata.connected) || fs.existsSync(credentialTokenPath(service));
+    const monthlyBudget = metadata.budget && typeof metadata.budget.monthly !== 'undefined'
+      ? metadata.budget.monthly
+      : (typeof metadata.budget === 'number' ? metadata.budget : null);
+
+    return {
+      service,
+      connected,
+      budget: monthlyBudget,
+      lastUsed: metadata.last_used || metadata.lastUsed || metadata.updated_at || null
+    };
+  });
+}
+
+function saveCredentialMetadata(service, token, budget) {
+  ensureDir(CREDENTIALS_ROOT);
+  const meta = safeJsonRead(credentialMetaPath(service), {});
+  meta.service = service;
+  meta.connected = true;
+  meta.updated_at = nowIso();
+  meta.last_used = meta.last_used || null;
+  meta.budget = {
+    daily: meta.budget && typeof meta.budget.daily !== 'undefined' ? meta.budget.daily : null,
+    monthly: typeof budget === 'number' && Number.isFinite(budget) ? budget : (meta.budget && typeof meta.budget.monthly !== 'undefined' ? meta.budget.monthly : null)
+  };
+
+  fs.writeFileSync(credentialMetaPath(service), `${JSON.stringify(meta, null, 2)}\n`, 'utf-8');
+  const encoded = Buffer.from(String(token), 'utf-8').toString('base64');
+  fs.writeFileSync(credentialTokenPath(service), `${encoded}\n`, 'utf-8');
+}
+
+function deleteCredentialMetadata(service) {
+  const meta = safeJsonRead(credentialMetaPath(service), { service });
+  meta.connected = false;
+  meta.updated_at = nowIso();
+  fs.writeFileSync(credentialMetaPath(service), `${JSON.stringify(meta, null, 2)}\n`, 'utf-8');
+  const tokenPath = credentialTokenPath(service);
+  if (fs.existsSync(tokenPath)) {
+    fs.rmSync(tokenPath, { force: true });
+  }
+}
+
+function makeAnalyticsSnapshot(projectState) {
+  const doneCount = projectState.tasks.filter((task) => task.status === 'done').length;
+  const inProgress = projectState.tasks.filter((task) => task.status === 'inprogress').length;
+  const visitors = 1200 + (doneCount * 85);
+  const conversions = 40 + (doneCount * 4);
+  const revenue = 1800 + (doneCount * 260);
+  const adSpend = 600 + (inProgress * 25) + (doneCount * 15);
+  const roas = adSpend > 0 ? (revenue / adSpend).toFixed(2) : '0.00';
+  const openRate = `${Math.min(95, 28 + doneCount * 2)}%`;
+
+  return {
+    kpi: [
+      String(visitors),
+      String(conversions),
+      `$${revenue.toFixed(2)}`,
+      `$${adSpend.toFixed(2)}`,
+      `${roas}x`,
+      openRate
+    ],
+    lastUpdated: nowIso()
+  };
+}
 
 const logStream = fs.createWriteStream(LOG_PATH, { flags: 'a' });
 
@@ -828,7 +1304,406 @@ async function main() {
     log(`Warning: LM Studio is not reachable at ${endpoint}. UI will still start; tasks may fail until LM Studio API is enabled.`);
   }
 
+  loadProjectsFromDisk();
+
   const server = http.createServer((req, res) => {
+    const urlObj = new URL(req.url || '/', 'http://localhost');
+    const pathname = urlObj.pathname;
+
+    if (pathname === '/events' && req.method === 'GET') {
+      const projectId = urlObj.searchParams.get('projectId');
+      if (!projectId || !projectRuntimes.has(projectId)) {
+        writeJson(res, { error: 'Unknown projectId for event stream' }, 404);
+        return;
+      }
+
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive'
+      });
+      res.write(': connected\n\n');
+      const set = projectSseClients.get(projectId) || new Set();
+      set.add(res);
+      projectSseClients.set(projectId, set);
+      req.on('close', () => {
+        const activeSet = projectSseClients.get(projectId);
+        if (activeSet) {
+          activeSet.delete(res);
+        }
+      });
+      return;
+    }
+
+    if (pathname === '/api/projects' && req.method === 'GET') {
+      const projects = Array.from(projectRuntimes.values()).map((runtime) => summarizeProject(runtime.state));
+      writeJson(res, projects);
+      return;
+    }
+
+    if (pathname === '/api/projects' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = parseJsonBodySafe(body);
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+
+        const name = String(payload.name || '').trim();
+        const template = String(payload.template || '').trim();
+        if (!name || !template) {
+          writeJson(res, { error: 'name and template are required' }, 400);
+          return;
+        }
+
+        try {
+          const project = createProjectFromTemplate({
+            name,
+            template,
+            goal: String(payload.goal || '').trim()
+          });
+          writeJson(res, project, 201);
+        } catch (err) {
+          writeJson(res, { error: err.message }, 400);
+        }
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
+    if (pathname.startsWith('/api/projects/') && req.method === 'DELETE') {
+      const projectId = pathname.replace('/api/projects/', '').trim();
+      if (!projectId || !projectRuntimes.has(projectId)) {
+        writeJson(res, { error: 'Project not found' }, 404);
+        return;
+      }
+      removeProject(projectId);
+      writeJson(res, { ok: true });
+      return;
+    }
+
+    if (pathname === '/api/agents' && req.method === 'GET') {
+      const projectId = urlObj.searchParams.get('projectId');
+      const runtime = projectId ? projectRuntimes.get(projectId) : null;
+      if (!runtime) {
+        writeJson(res, []);
+        return;
+      }
+      writeJson(res, runtime.state.agents);
+      return;
+    }
+
+    if (pathname === '/api/agents' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = parseJsonBodySafe(body);
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+
+        const projectId = String(payload.projectId || '').trim();
+        const agentId = String(payload.agentId || '').trim();
+        const runtime = projectRuntimes.get(projectId);
+        if (!runtime) {
+          writeJson(res, { error: 'Project not found' }, 404);
+          return;
+        }
+        if (!agentId) {
+          writeJson(res, { error: 'agentId is required' }, 400);
+          return;
+        }
+
+        const newAgent = {
+          id: `${agentId}_${Date.now().toString(36)}`,
+          name: agentId.replace(/[_-]+/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase()),
+          role: agentId,
+          status: 'idle',
+          currentTask: null,
+          tasksDone: 0,
+          tokens: 0,
+          recentLog: ['Added from marketplace'],
+          isCoordinator: false
+        };
+        runtime.state.agents.push(newAgent);
+        appendProjectLog(runtime.state, 'message', {
+          kind: 'agent_added',
+          agentId: newAgent.id,
+          role: newAgent.role
+        });
+        persistProjectState(runtime.state);
+        writeJson(res, newAgent, 201);
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
+    if (pathname.startsWith('/api/agents/') && req.method === 'DELETE') {
+      const agentId = pathname.replace('/api/agents/', '').trim();
+      const projectId = urlObj.searchParams.get('projectId') || '';
+      const runtime = projectRuntimes.get(projectId);
+      if (!runtime) {
+        writeJson(res, { error: 'Project not found' }, 404);
+        return;
+      }
+      const before = runtime.state.agents.length;
+      runtime.state.agents = runtime.state.agents.filter((agent) => agent.id !== agentId || agent.isCoordinator);
+      if (runtime.state.agents.length === before) {
+        writeJson(res, { error: 'Agent not found or cannot remove coordinator' }, 404);
+        return;
+      }
+      appendProjectLog(runtime.state, 'message', { kind: 'agent_removed', agentId });
+      persistProjectState(runtime.state);
+      writeJson(res, { ok: true });
+      return;
+    }
+
+    if (pathname === '/api/tasks' && req.method === 'GET') {
+      const projectId = urlObj.searchParams.get('projectId');
+      const runtime = projectId ? projectRuntimes.get(projectId) : null;
+      writeJson(res, runtime ? runtime.state.tasks : []);
+      return;
+    }
+
+    if (pathname === '/api/tasks' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = parseJsonBodySafe(body);
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+
+        const projectId = String(payload.projectId || '').trim();
+        const title = String(payload.title || '').trim();
+        const runtime = projectRuntimes.get(projectId);
+        if (!runtime) {
+          writeJson(res, { error: 'Project not found' }, 404);
+          return;
+        }
+        if (!title) {
+          writeJson(res, { error: 'title is required' }, 400);
+          return;
+        }
+
+        const task = {
+          id: `MANUAL-${Date.now().toString(36)}`,
+          title,
+          phase: 'manual',
+          status: 'backlog',
+          assignee: payload.assignee ? String(payload.assignee) : null,
+          blockedBy: null,
+          dependencies: [],
+          createdAt: nowIso(),
+          completedAt: null,
+          startedAt: null,
+          description: String(payload.description || '')
+        };
+        runtime.state.tasks.push(task);
+        appendProjectLog(runtime.state, 'task', { kind: 'task_created', taskId: task.id, title: task.title });
+        persistProjectState(runtime.state);
+        writeJson(res, task, 201);
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
+    if (pathname === '/api/heartbeat' && req.method === 'GET') {
+      const projectId = urlObj.searchParams.get('projectId');
+      const runtime = projectId ? projectRuntimes.get(projectId) : null;
+      if (!runtime) {
+        writeJson(res, {
+          status: 'unknown',
+          uptime: '0m',
+          lastBeat: null,
+          autoFixCount: 0,
+          log: []
+        });
+        return;
+      }
+      writeJson(res, {
+        status: runtime.state.heartbeat.status,
+        uptime: projectUptime(runtime.state),
+        lastBeat: runtime.state.heartbeat.lastBeat,
+        autoFixCount: runtime.state.heartbeat.autoFixCount,
+        log: runtime.state.heartbeat.log.slice(0, 50)
+      });
+      return;
+    }
+
+    if (pathname === '/api/heartbeat' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = parseJsonBodySafe(body);
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+        const projectId = String(payload.projectId || '').trim();
+        const runtime = projectRuntimes.get(projectId);
+        if (!runtime) {
+          writeJson(res, { error: 'Project not found' }, 404);
+          return;
+        }
+        runProjectHeartbeat(runtime.state, 'manual');
+        writeJson(res, { triggered: true, ts: nowIso() });
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
+    if (pathname === '/api/credentials' && req.method === 'GET') {
+      writeJson(res, readCredentialMetadata());
+      return;
+    }
+
+    if (pathname === '/api/credentials' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = parseJsonBodySafe(body);
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+
+        const service = String(payload.service || '').trim();
+        const token = String(payload.token || '').trim();
+        if (!SUPPORTED_CREDENTIAL_SERVICES.includes(service)) {
+          writeJson(res, { error: 'Unsupported credential service' }, 400);
+          return;
+        }
+        if (!token) {
+          writeJson(res, { error: 'token is required' }, 400);
+          return;
+        }
+        const budget = typeof payload.budget === 'number' ? payload.budget : null;
+        saveCredentialMetadata(service, token, budget);
+        writeJson(res, { service, connected: true });
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
+    if (pathname.startsWith('/api/credentials/') && req.method === 'DELETE') {
+      const service = pathname.replace('/api/credentials/', '').trim();
+      if (!SUPPORTED_CREDENTIAL_SERVICES.includes(service)) {
+        writeJson(res, { error: 'Unsupported credential service' }, 400);
+        return;
+      }
+      deleteCredentialMetadata(service);
+      writeJson(res, { ok: true });
+      return;
+    }
+
+    if (pathname === '/api/analytics' && req.method === 'GET') {
+      const projectId = urlObj.searchParams.get('projectId');
+      const runtime = projectId ? projectRuntimes.get(projectId) : null;
+      writeJson(res, runtime ? makeAnalyticsSnapshot(runtime.state) : { kpi: ['-', '-', '-', '-', '-', '-'], lastUpdated: nowIso() });
+      return;
+    }
+
+    if (pathname === '/api/logs' && req.method === 'GET') {
+      const projectId = urlObj.searchParams.get('projectId');
+      const filter = String(urlObj.searchParams.get('filter') || 'all');
+      const runtime = projectId ? projectRuntimes.get(projectId) : null;
+      if (!runtime) {
+        writeJson(res, []);
+        return;
+      }
+      const allLogs = runtime.state.logs || [];
+      const out = filter === 'all' ? allLogs : allLogs.filter((entry) => entry.type === filter);
+      writeJson(res, out.slice(0, 500));
+      return;
+    }
+
+    if (pathname === '/api/control' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = parseJsonBodySafe(body);
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+
+        const projectId = String(payload.projectId || '').trim();
+        const action = String(payload.action || '').trim();
+        const runtime = projectRuntimes.get(projectId);
+        if (!runtime) {
+          writeJson(res, { error: 'Project not found' }, 404);
+          return;
+        }
+
+        if (action === 'pause') {
+          runtime.state.status = 'paused';
+          stopProjectLoop(projectId);
+          appendProjectLog(runtime.state, 'message', { kind: 'project_paused' });
+        } else if (action === 'resume') {
+          runtime.state.status = 'running';
+          appendProjectLog(runtime.state, 'message', { kind: 'project_resumed' });
+          startProjectLoop(projectId);
+        } else if (action === 'restart_agents') {
+          runtime.state.agents.forEach((agent) => {
+            if (agent.isCoordinator) {
+              agent.status = 'running';
+            } else {
+              agent.status = 'idle';
+              agent.currentTask = null;
+            }
+            markAgentLog(agent, 'Restarted by coordinator control');
+          });
+          appendProjectLog(runtime.state, 'fix', { kind: 'agents_restarted' });
+        } else if (action === 'heartbeat') {
+          runProjectHeartbeat(runtime.state, 'manual_control');
+        } else if (action === 'export') {
+          const exportPath = path.join(projectDir(projectId), `export_${Date.now()}.json`);
+          fs.writeFileSync(exportPath, `${JSON.stringify(runtime.state, null, 2)}\n`, 'utf-8');
+          appendProjectLog(runtime.state, 'message', { kind: 'project_exported', exportPath: path.basename(exportPath) });
+        } else if (action === 'delete') {
+          removeProject(projectId);
+          writeJson(res, { ok: true, action, projectId });
+          return;
+        } else {
+          writeJson(res, { error: `Unsupported action: ${action}` }, 400);
+          return;
+        }
+
+        persistProjectState(runtime.state);
+        writeJson(res, { ok: true, action, projectId });
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
+    if (pathname === '/api/llm_health' && req.method === 'GET') {
+      const model = (appConfig && appConfig.llm && appConfig.llm.model) || 'lm-studio-local';
+      writeJson(res, appState.llm.reachable
+        ? { status: 'ok', model, endpoint: appState.llm.endpoint }
+        : { status: 'error', message: 'LM Studio not reachable', endpoint: appState.llm.endpoint });
+      return;
+    }
+
+    if (pathname === '/api/integrations' && req.method === 'GET') {
+      const status = integrationStatus();
+      writeJson(res, {
+        github: Boolean(status.github.configured || status.github.publicKeyPresent),
+        clawhub: fs.existsSync(path.join(__dirname, '.clawhub'))
+      });
+      return;
+    }
+
     if (req.url === '/api/task' && req.method === 'POST') {
       readRequestBody(req).then((body) => handleTask(req, res, body)).catch((err) => {
         writeJson(res, { error: err.message }, 400);
