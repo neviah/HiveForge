@@ -311,7 +311,15 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .hf-cred-body  { flex: 1; min-width: 0; }
 .hf-cred-name  { font-weight: 600; }
 .hf-cred-desc  { font-size: 0.8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hf-cred-budget-note { font-size: 0.76rem; color: var(--muted); margin-top: 0.2rem; }
 .hf-cred-status{ flex-shrink: 0; }
+.hf-cred-management { display: grid; grid-template-columns: minmax(320px, 480px) minmax(320px, 1fr); gap: 1rem; align-items: start; }
+.hf-cred-summary-card { min-height: 100%; }
+.hf-cred-summary-list { display: flex; flex-direction: column; gap: 0.55rem; }
+.hf-cred-summary-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; border: 1px solid var(--border); border-radius: 10px; padding: 0.7rem 0.85rem; background: var(--panel-bg); }
+.hf-cred-summary-name { font-weight: 700; }
+.hf-cred-summary-meta { color: var(--muted); font-size: 0.8rem; margin-top: 0.15rem; }
+.hf-cred-summary-value { font-weight: 700; white-space: nowrap; }
 
 /* ── Platform connections ───────────────────────────────── */
 .hf-platform-grid { display: grid; grid-template-columns: 1fr; gap: 0.65rem; }
@@ -327,6 +335,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
   .hf-kanban { grid-template-columns: repeat(2, 1fr); }
   .hf-grid-4, .hf-grid-5 { grid-template-columns: repeat(2, 1fr); }
   .hf-brand-logo { width: 145px; }
+  .hf-cred-management { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 768px) {

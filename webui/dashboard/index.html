@@ -334,30 +334,51 @@
         <div id="credGrid" class="hf-cred-grid">
           <!-- populated by JS -->
         </div>
-        <div class="hf-card" style="max-width:480px;margin-top:0.5rem;">
-          <h3 style="margin-top:0;">Add / Update Credential</h3>
-          <div style="display:flex;flex-direction:column;gap:0.65rem;">
-            <select id="credService" style="width:100%;">
-              <option value="">— Select service —</option>
-              <option value="netlify">Netlify</option>
-              <option value="stripe">Stripe</option>
-              <option value="google_ads">Google Ads</option>
-              <option value="analytics">Google Analytics</option>
-              <option value="email_provider">Email Provider</option>
-            </select>
-            <input id="credToken" type="password" placeholder="API key / token" style="width:100%;" />
-            <input id="credBudget" type="number" placeholder="Spending limit (optional, USD/month)" style="width:100%;" />
-            <div class="hf-btn-row" style="margin-bottom:0;">
-              <button class="hf-btn" onclick="Dashboard.saveCred()">Save</button>
-              <span id="credStatus" class="hf-status" style="display:none;"></span>
+        <div class="hf-cred-management">
+          <div class="hf-card" style="margin-top:0.5rem;">
+            <h3 style="margin-top:0;">Add / Update Credential</h3>
+            <div style="display:flex;flex-direction:column;gap:0.65rem;">
+              <select id="credService" style="width:100%;">
+                <option value="">— Select service —</option>
+                <option value="netlify">Netlify</option>
+                <option value="stripe">Stripe</option>
+                <option value="google_ads">Google Ads</option>
+                <option value="analytics">Google Analytics</option>
+                <option value="email_provider">Email Provider</option>
+              </select>
+              <input id="credToken" type="password" placeholder="API key / token" style="width:100%;" />
+              <input id="credBudget" type="number" placeholder="Spending limit (optional, USD/month)" style="width:100%;" />
+              <div class="hf-btn-row" style="margin-bottom:0;">
+                <button class="hf-btn" onclick="Dashboard.saveCred()">Save</button>
+                <span id="credStatus" class="hf-status" style="display:none;"></span>
+              </div>
             </div>
+          </div>
+
+          <div class="hf-card hf-cred-summary-card" style="margin-top:0.5rem;">
+            <h3 style="margin-top:0;">Monthly Budget Summary</h3>
+            <p style="color:var(--muted);margin-top:0;">Quick view of credential budgets and how much monthly spend is allocated.</p>
+            <div class="hf-grid-2" style="margin-bottom:0.8rem;">
+              <div>
+                <div class="hf-card-label">Total Monthly Budget</div>
+                <div class="hf-card-value" id="credBudgetTotal">$0</div>
+              </div>
+              <div>
+                <div class="hf-card-label">Connected Services</div>
+                <div class="hf-card-value" id="credConnectedCount">0/5</div>
+              </div>
+            </div>
+            <div id="credBudgetSummaryList" class="hf-cred-summary-list"></div>
           </div>
         </div>
 
         <div class="hf-card" style="max-width:720px;margin-top:1rem;">
           <h3 style="margin-top:0;">Platform Connections</h3>
-          <p style="color:var(--muted);margin-top:0;">Connect local CLI sessions for GitHub and ClawHub. Tokens remain on each user's machine and are never bundled in the project repo.</p>
+          <p style="color:var(--muted);margin-top:0;">Detected from this machine's local CLI/session state. Opening a login page does not mark these connected by itself.</p>
           <div id="platformConnections" class="hf-platform-grid"></div>
+          <div class="hf-btn-row" style="margin-top:0.8rem;margin-bottom:0;">
+            <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.refreshPlatformConnections()">Refresh Status</button>
+          </div>
         </div>
       </section>
 

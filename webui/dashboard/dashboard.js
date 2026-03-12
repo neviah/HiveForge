@@ -171,8 +171,8 @@ async function fetchIntegrations() {
     return await apiFetch(API.integrations);
   } catch {
     return {
-      github: localStorage.getItem('hf-github-connected') === '1',
-      clawhub: localStorage.getItem('hf-clawhub-connected') === '1',
+      github: false,
+      clawhub: false,
     };
   }
 }
@@ -441,20 +441,57 @@ function renderAnalytics(data) {
 // Credential cards
 function renderCredentials(creds) {
   const grid = document.getElementById('credGrid');
+  renderCredentialBudgetSummary(creds);
   grid.innerHTML = CREDENTIAL_SERVICES.map(svc => {
     const saved = (creds ?? []).find(c => c.service === svc.id);
+    const isConnected = Boolean(saved?.connected);
+    const budget = typeof saved?.budget === 'number' && Number.isFinite(saved.budget)
+      ? `$${saved.budget.toLocaleString()}/mo`
+      : 'No monthly budget set';
     return `
     <div class="hf-cred-card">
       <div class="hf-cred-icon">${svc.icon}</div>
       <div class="hf-cred-body">
         <div class="hf-cred-name">${svc.label}</div>
         <div class="hf-cred-desc">${svc.desc}</div>
+        <div class="hf-cred-budget-note">${budget}</div>
       </div>
       <div class="hf-cred-status">
-        ${saved ? `<span class="hf-status-badge ok">Connected</span>` : `<span class="hf-status-badge idle">Not set</span>`}
+        ${isConnected ? `<span class="hf-status-badge ok">Connected</span>` : `<span class="hf-status-badge idle">Not set</span>`}
       </div>
     </div>`;
   }).join('');
+}
+
+function renderCredentialBudgetSummary(creds = []) {
+  const totalEl = document.getElementById('credBudgetTotal');
+  const connectedEl = document.getElementById('credConnectedCount');
+  const listEl = document.getElementById('credBudgetSummaryList');
+  if (!totalEl || !connectedEl || !listEl) return;
+
+  const normalized = CREDENTIAL_SERVICES.map((svc) => {
+    const saved = (creds ?? []).find((entry) => entry.service === svc.id) || null;
+    return {
+      ...svc,
+      connected: Boolean(saved?.connected),
+      budget: typeof saved?.budget === 'number' && Number.isFinite(saved.budget) ? saved.budget : null,
+    };
+  });
+
+  const totalBudget = normalized.reduce((sum, svc) => sum + (svc.budget || 0), 0);
+  const connectedCount = normalized.filter((svc) => svc.connected).length;
+
+  totalEl.textContent = totalBudget ? `$${totalBudget.toLocaleString()}` : '$0';
+  connectedEl.textContent = `${connectedCount}/${normalized.length}`;
+  listEl.innerHTML = normalized.map((svc) => `
+    <div class="hf-cred-summary-row">
+      <div>
+        <div class="hf-cred-summary-name">${svc.icon} ${svc.label}</div>
+        <div class="hf-cred-summary-meta">${svc.connected ? 'Connected' : 'Not set'}</div>
+      </div>
+      <div class="hf-cred-summary-value">${svc.budget !== null ? `$${svc.budget.toLocaleString()}/mo` : '—'}</div>
+    </div>
+  `).join('');
 }
 
 function renderPlatformConnections(connections = {}) {
@@ -470,8 +507,8 @@ function renderPlatformConnections(connections = {}) {
       </div>
       <div class="hf-platform-actions">
         <span class="hf-status-badge ${isConnected ? 'ok' : 'idle'}">${isConnected ? 'Connected' : 'Not connected'}</span>
-        <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.openPlatformLogin('${it.id}')">Connect</button>
-        <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.markPlatformDisconnected('${it.id}')">Disconnect</button>
+        <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.openPlatformLogin('${it.id}')">Open Login</button>
+        <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.markPlatformDisconnected('${it.id}')">How to Clear</button>
       </div>
     </div>`;
   }).join('');
@@ -778,19 +815,20 @@ const Dashboard = {
     const item = PLATFORM_CONNECTIONS.find(p => p.id === platformId);
     if (!item) return;
     window.open(item.loginUrl, '_blank', 'noopener,noreferrer');
-    localStorage.setItem(`hf-${platformId}-connected`, '1');
-    renderPlatformConnections({
-      github: localStorage.getItem('hf-github-connected') === '1',
-      clawhub: localStorage.getItem('hf-clawhub-connected') === '1',
-    });
+    showToast(`Opened ${item.label} login page. Use Refresh Status after authenticating locally.`, 'info');
   },
 
   markPlatformDisconnected(platformId) {
-    localStorage.setItem(`hf-${platformId}-connected`, '0');
-    renderPlatformConnections({
-      github: localStorage.getItem('hf-github-connected') === '1',
-      clawhub: localStorage.getItem('hf-clawhub-connected') === '1',
-    });
+    showToast(`Platform status is machine-detected. Remove the local CLI session or key, then refresh.`, 'info');
+  },
+
+  async refreshPlatformConnections() {
+    try {
+      renderPlatformConnections(await fetchIntegrations());
+      showToast('Platform connection status refreshed.', 'ok');
+    } catch (err) {
+      showToast(`Could not refresh platform status: ${err.message}`, 'error');
+    }
   },
 
   async projectControl(action) {
