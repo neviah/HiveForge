@@ -314,6 +314,7 @@
             <option value="execution_cancelled">execution_cancelled</option>
             <option value="recurring_task_enqueued">recurring_task_enqueued</option>
             <option value="policy_decision">policy_decision</option>
+            <option value="connector_policy_decision">connector_policy_decision</option>
           </select>
           <input id="messageBusActor" type="text" placeholder="Actor filter (from/to)…" style="width:220px;" oninput="Dashboard.filterMessageBus()" />
           <input id="messageBusSearch" type="text" placeholder="Search payload…" style="width:220px;" oninput="Dashboard.filterMessageBus()" />
@@ -464,6 +465,37 @@
               <span id="projectAutomationStatus" class="hf-status" style="display:none;"></span>
             </div>
           </div>
+        </div>
+
+        <div class="hf-card" style="max-width:760px;margin-top:1rem;">
+          <h3 style="margin-top:0;">Connector Policy Check</h3>
+          <p style="color:var(--muted);margin-top:0;">Run a connector readiness check using integration and credential policy rules.</p>
+          <div class="hf-grid-2" style="margin-bottom:0.7rem;">
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Connector</label>
+              <select id="connectorCheckType" style="width:100%;">
+                <option value="github">GitHub</option>
+                <option value="telegram">Telegram</option>
+                <option value="whatsapp">WhatsApp</option>
+                <option value="netlify">Netlify</option>
+                <option value="stripe">Stripe</option>
+                <option value="google_ads">Google Ads</option>
+                <option value="analytics">Analytics</option>
+                <option value="email_provider">Email Provider</option>
+              </select>
+            </div>
+            <div style="display:flex;align-items:flex-end;">
+              <label style="display:flex;align-items:center;gap:0.5rem;">
+                <input id="connectorCheckDryRun" type="checkbox" checked />
+                <span>Dry run only</span>
+              </label>
+            </div>
+          </div>
+          <div class="hf-btn-row" style="margin-bottom:0.7rem;">
+            <button class="hf-btn" onclick="Dashboard.runConnectorCheck()">Run Connector Check</button>
+            <span id="connectorCheckStatus" class="hf-status" style="display:none;"></span>
+          </div>
+          <pre id="connectorCheckOutput" class="hf-log-stream" style="max-height:200px;white-space:pre-wrap;color:var(--muted);">No connector check has been run yet.</pre>
         </div>
       </section>
 

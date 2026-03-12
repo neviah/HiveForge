@@ -24,6 +24,7 @@ const API = {
   settings:    '/api/settings',
   settingsReset: '/api/settings/reset',
   projectSettings: '/api/project_settings',
+  connectorsExecute: '/api/connectors/execute',
 };
 
 const SECTION_TITLES = {
@@ -210,6 +211,13 @@ async function fetchSettings() {
 
 async function fetchProjectSettings(projectId) {
   return apiFetch(`${API.projectSettings}?projectId=${encodeURIComponent(projectId)}`);
+}
+
+async function runConnectorCheck(connector, projectId, dryRun = true) {
+  return apiFetch(API.connectorsExecute, {
+    method: 'POST',
+    body: JSON.stringify({ connector, projectId, dryRun }),
+  });
 }
 
 function renderSettings(data) {
@@ -644,6 +652,7 @@ async function onSectionActivate(id) {
     case 'settings': {
       renderSettings(await fetchSettings());
       renderProjectAutomation(pid ? await fetchProjectSettings(pid) : null);
+      setText('connectorCheckOutput', 'No connector check has been run yet.');
       break;
     }
   }
@@ -902,6 +911,37 @@ const Dashboard = {
     } catch (err) {
       showStatus(status, `Failed: ${err.message}`, 'error');
       showToast(`Could not save project automation: ${err.message}`, 'error');
+    }
+  },
+
+  async runConnectorCheck() {
+    const status = document.getElementById('connectorCheckStatus');
+    const output = document.getElementById('connectorCheckOutput');
+    const connector = document.getElementById('connectorCheckType').value;
+    const dryRun = document.getElementById('connectorCheckDryRun').checked;
+
+    showStatus(status, 'Running…', 'running');
+    if (output) output.textContent = 'Running connector policy check...';
+
+    try {
+      const result = await runConnectorCheck(connector, state.activeProject?.id || null, dryRun);
+      const decision = String(result?.decision || '').toLowerCase();
+      showStatus(status, result.ok ? 'Allowed' : 'Denied', result.ok ? 'ok' : 'error');
+      if (output) {
+        output.textContent = JSON.stringify({
+          connector: result.connector,
+          decision,
+          reason: result.reason,
+          dryRun: result.dryRun,
+          checkedAt: result.checkedAt,
+          checks: result.checks,
+        }, null, 2);
+      }
+      showToast(`Connector ${result.connector}: ${decision || (result.ok ? 'allow' : 'deny')}.`, result.ok ? 'ok' : 'info');
+    } catch (err) {
+      showStatus(status, `Failed: ${err.message}`, 'error');
+      if (output) output.textContent = `Connector check failed:\n${err.message}`;
+      showToast(`Connector check failed: ${err.message}`, 'error');
     }
   },
 };

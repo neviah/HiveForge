@@ -60,24 +60,44 @@
 }
 
 [data-theme='forge'] {
-  --bg: #cfd4db;
-  --panel-bg: #e2e6eb;
-  --sidebar-bg: #bfc6cf;
-  --card-bg: #eceff3;
-  --text: #2a323c;
-  --muted: #5d6877;
-  --border: #8e98a8;
-  --accent: #d88a1f;
-  --accent-text: #1f2630;
-  --input-bg: #f4f6f8;
-  --link: #a76309;
-  --success: #3a9f5a;
-  --warning: #d88a1f;
-  --danger: #b64d3d;
-  --kanban-backlog: #e7ebf0;
-  --kanban-inprogress: #f6e2c7;
-  --kanban-review: #f2d6a8;
-  --kanban-done: #dcefdc;
+  --bg: #16181b;
+  --panel-bg: #1f2328;
+  --sidebar-bg: #171a1e;
+  --card-bg: #242930;
+  --text: #f2cc82;
+  --muted: #cca866;
+  --border: #39414b;
+  --accent: #f2993a;
+  --accent-text: #221507;
+  --input-bg: #1c2026;
+  --link: #ffbe66;
+  --success: #7dcf82;
+  --warning: #f2aa47;
+  --danger: #dd7b66;
+  --kanban-backlog: #21262d;
+  --kanban-inprogress: #2a2417;
+  --kanban-review: #332610;
+  --kanban-done: #18261d;
+}
+
+body[data-theme='forge'] {
+  background:
+    radial-gradient(circle at 15% -5%, rgba(242, 153, 58, 0.22), transparent 45%),
+    radial-gradient(circle at 90% 0%, rgba(83, 108, 135, 0.28), transparent 36%),
+    linear-gradient(180deg, #131518 0%, #181b1f 100%);
+}
+
+body[data-theme='forge'] .hf-sidebar,
+body[data-theme='forge'] .hf-topbar {
+  background: linear-gradient(180deg, rgba(30, 34, 40, 0.96), rgba(21, 24, 28, 0.96));
+}
+
+body[data-theme='forge'] .hf-card,
+body[data-theme='forge'] .hf-table-wrap,
+body[data-theme='forge'] .hf-kanban-col,
+body[data-theme='forge'] .hf-agent-card,
+body[data-theme='forge'] .hf-mp-card {
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
 }
 
 /* ── Reset & base ─────────────────────────────────────────── */
@@ -172,6 +192,11 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 [data-theme='dark'] .hf-status.error { background: #450a0a; color: #fca5a5; }
 [data-theme='dark'] .hf-status.ok { background: #052e16; color: #86efac; }
 [data-theme='dark'] .hf-status.paused { background: #1c1a00; color: #fde68a; }
+[data-theme='forge'] .hf-status.running { background: #3a2d18; color: #ffd39a; }
+[data-theme='forge'] .hf-status.idle { background: #252b33; color: #c9b089; }
+[data-theme='forge'] .hf-status.error { background: #44221d; color: #ffbaa7; }
+[data-theme='forge'] .hf-status.ok { background: #1e3324; color: #98e6a1; }
+[data-theme='forge'] .hf-status.paused { background: #4a391c; color: #ffd28a; }
 
 /* ── Tables ───────────────────────────────────────────────── */
 .hf-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }

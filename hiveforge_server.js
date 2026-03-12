@@ -76,6 +76,16 @@ const appState = {
 };
 
 const SUPPORTED_CREDENTIAL_SERVICES = ['netlify', 'stripe', 'google_ads', 'analytics', 'email_provider'];
+const CONNECTOR_REGISTRY = {
+  github: { id: 'github', label: 'GitHub', provider: 'github' },
+  telegram: { id: 'telegram', label: 'Telegram', provider: 'telegram' },
+  whatsapp: { id: 'whatsapp', label: 'WhatsApp', provider: 'whatsapp' },
+  netlify: { id: 'netlify', label: 'Netlify', credentialService: 'netlify' },
+  stripe: { id: 'stripe', label: 'Stripe', credentialService: 'stripe' },
+  google_ads: { id: 'google_ads', label: 'Google Ads', credentialService: 'google_ads' },
+  analytics: { id: 'analytics', label: 'Analytics', credentialService: 'analytics' },
+  email_provider: { id: 'email_provider', label: 'Email Provider', credentialService: 'email_provider' },
+};
 
 function nowIso() {
   return new Date().toISOString();
@@ -1638,6 +1648,65 @@ async function testIntegration(provider) {
   };
 }
 
+async function executeConnectorPolicy(connectorId, options = {}) {
+  const connectorKey = String(connectorId || '').trim().toLowerCase();
+  const connector = CONNECTOR_REGISTRY[connectorKey];
+  if (!connector) {
+    return {
+      connector: connectorKey,
+      ok: false,
+      decision: 'deny',
+      reason: 'Unsupported connector.',
+      errorCode: 'unknown_connector',
+      dryRun: Boolean(options.dryRun),
+      checkedAt: nowIso(),
+      checks: []
+    };
+  }
+
+  const checks = [];
+
+  if (connector.provider) {
+    const result = await testIntegration(connector.provider);
+    checks.push({
+      type: 'integration',
+      target: connector.provider,
+      ok: Boolean(result.ok),
+      message: String(result.message || ''),
+    });
+  }
+
+  if (connector.credentialService) {
+    const metadata = readCredentialMetadata();
+    const found = metadata.find((entry) => entry.service === connector.credentialService);
+    const connected = Boolean(found && found.connected);
+    checks.push({
+      type: 'credential',
+      target: connector.credentialService,
+      ok: connected,
+      message: connected
+        ? `Credential ${connector.credentialService} is connected.`
+        : `Credential ${connector.credentialService} is not connected.`
+    });
+  }
+
+  const ok = checks.length > 0 && checks.every((entry) => Boolean(entry.ok));
+  const failedChecks = checks.filter((entry) => !entry.ok).map((entry) => entry.message).filter(Boolean);
+
+  return {
+    connector: connector.id,
+    label: connector.label,
+    ok,
+    decision: ok ? 'allow' : 'deny',
+    reason: ok
+      ? `${connector.label} connector passed policy checks.`
+      : (failedChecks.join(' ') || `${connector.label} connector did not pass policy checks.`),
+    dryRun: Boolean(options.dryRun),
+    checkedAt: nowIso(),
+    checks,
+  };
+}
+
 function venvPython() {
   const venv = path.join(SANDBOX_ROOT, 'venv');
   const bin = process.platform === 'win32' ? 'Scripts' : 'bin';
@@ -2545,6 +2614,73 @@ async function main() {
 
         persistProjectState(runtime.state);
         writeJson(res, summarizeProjectAutomation(runtime.state));
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
+    if (pathname === '/api/connectors/execute' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = parseJsonBodySafe(body);
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+
+        const connector = String(payload.connector || '').trim();
+        const projectId = String(payload.projectId || '').trim();
+        const dryRun = Boolean(payload.dryRun);
+
+        if (!connector) {
+          writeJson(res, { error: 'connector is required' }, 400);
+          return;
+        }
+
+        executeConnectorPolicy(connector, { dryRun }).then((result) => {
+          if (projectId) {
+            const runtime = projectRuntimes.get(projectId);
+            if (runtime) {
+              appendProjectLog(runtime.state, result.ok ? 'policy_allow' : 'policy_deny', {
+                kind: 'connector_policy_decision',
+                connector: result.connector,
+                decision: result.decision,
+                approved: result.ok,
+                dryRun: result.dryRun,
+                reason: result.reason,
+                checks: result.checks,
+              });
+              appendMessageBusEntry({
+                projectId,
+                from: 'coordinator',
+                to: 'policy_engine',
+                kind: 'connector_policy_decision',
+                payload: {
+                  connector: result.connector,
+                  decision: result.decision,
+                  approved: result.ok,
+                  dryRun: result.dryRun,
+                  reason: result.reason,
+                },
+              });
+              persistProjectState(runtime.state);
+            }
+          }
+
+          writeJson(res, result, result.errorCode ? 400 : 200);
+        }).catch((err) => {
+          writeJson(res, {
+            connector,
+            ok: false,
+            decision: 'deny',
+            reason: `Connector execution failed: ${redactSensitive(err.message)}`,
+            dryRun,
+            checkedAt: nowIso(),
+            checks: []
+          }, 500);
+        });
       }).catch((err) => {
         writeJson(res, { error: err.message }, 400);
       });
