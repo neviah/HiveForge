@@ -27,6 +27,7 @@ const projectSseClients = new Map();
 const activeTasks = new Map();
 const projectRuntimes = new Map();
 let pythonRuntimeReady = false;
+let sqliteMessageBus = null;
 
 let nextTaskId = 1;
 const taskHistory = [];
@@ -141,6 +142,21 @@ function appendProjectLog(projectState, type, data) {
     projectState.logs.length = 1000;
   }
   projectState.lastActivity = entry.ts;
+
+  const payload = data || {};
+  const kind = String(payload.kind || payload.event || '').toLowerCase();
+  const hasDecision = typeof payload.approved === 'boolean' || typeof payload.decision === 'string' || typeof payload.error_code === 'string';
+  const isPolicyKind = kind === 'skill_response' || kind === 'browser_response' || kind === 'credential_response';
+  if (hasDecision || isPolicyKind) {
+    appendMessageBusEntry({
+      projectId: projectState.id,
+      from: 'coordinator',
+      to: 'policy_engine',
+      kind: 'policy_decision',
+      payload,
+    });
+  }
+
   return entry;
 }
 
@@ -210,6 +226,10 @@ function createInitialTasks(template) {
     assignee: null,
     blockedBy: (dependencyGraph[task.id] || [])[0] || null,
     dependencies: dependencyGraph[task.id] || [],
+    executionState: 'queued',
+    retryCount: 0,
+    lastProgressAt: null,
+    executionTaskRunId: null,
     inprogressCycles: 0,
     createdAt,
     completedAt: null,
@@ -275,6 +295,30 @@ function markAgentLog(agent, message) {
 
 function ensureMessageBus() {
   ensureDir(AGENTS_RUNTIME_ROOT);
+  if (sqliteMessageBus) return;
+
+  try {
+    const { DatabaseSync } = require('node:sqlite');
+    const db = new DatabaseSync(MESSAGE_BUS_PATH);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS message_bus (
+        id TEXT PRIMARY KEY,
+        ts TEXT NOT NULL,
+        project_id TEXT,
+        from_actor TEXT,
+        to_actor TEXT,
+        kind TEXT,
+        payload_json TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_message_bus_project_ts ON message_bus(project_id, ts DESC);
+      CREATE INDEX IF NOT EXISTS idx_message_bus_ts ON message_bus(ts DESC);
+    `);
+    sqliteMessageBus = db;
+    return;
+  } catch (err) {
+    sqliteMessageBus = null;
+  }
+
   if (!fs.existsSync(MESSAGE_BUS_PATH)) {
     fs.writeFileSync(MESSAGE_BUS_PATH, '', 'utf-8');
   }
@@ -291,6 +335,23 @@ function appendMessageBusEntry({ projectId, from, to, kind, payload = {} }) {
     kind: String(kind || 'message'),
     payload,
   };
+  if (sqliteMessageBus) {
+    const stmt = sqliteMessageBus.prepare(`
+      INSERT INTO message_bus (id, ts, project_id, from_actor, to_actor, kind, payload_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      entry.id,
+      entry.ts,
+      entry.projectId,
+      entry.from,
+      entry.to,
+      entry.kind,
+      JSON.stringify(entry.payload || {})
+    );
+    return entry;
+  }
+
   fs.appendFileSync(MESSAGE_BUS_PATH, `${JSON.stringify(entry)}\n`, 'utf-8');
   return entry;
 }
@@ -298,6 +359,44 @@ function appendMessageBusEntry({ projectId, from, to, kind, payload = {} }) {
 function readMessageBusEntries(projectId, limit = 200) {
   ensureMessageBus();
   const max = clampInt(limit, 200, 1, 2000);
+
+  if (sqliteMessageBus) {
+    if (projectId) {
+      const stmt = sqliteMessageBus.prepare(`
+        SELECT id, ts, project_id, from_actor, to_actor, kind, payload_json
+        FROM message_bus
+        WHERE project_id = ?
+        ORDER BY ts DESC
+        LIMIT ?
+      `);
+      return stmt.all(String(projectId), max).map((row) => ({
+        id: row.id,
+        ts: row.ts,
+        projectId: row.project_id,
+        from: row.from_actor,
+        to: row.to_actor,
+        kind: row.kind,
+        payload: safeJsonReadFromText(row.payload_json, {}),
+      }));
+    }
+
+    const stmt = sqliteMessageBus.prepare(`
+      SELECT id, ts, project_id, from_actor, to_actor, kind, payload_json
+      FROM message_bus
+      ORDER BY ts DESC
+      LIMIT ?
+    `);
+    return stmt.all(max).map((row) => ({
+      id: row.id,
+      ts: row.ts,
+      projectId: row.project_id,
+      from: row.from_actor,
+      to: row.to_actor,
+      kind: row.kind,
+      payload: safeJsonReadFromText(row.payload_json, {}),
+    }));
+  }
+
   const raw = fs.readFileSync(MESSAGE_BUS_PATH, 'utf-8');
   const lines = raw.split(/\r?\n/).filter(Boolean);
   const out = [];
@@ -312,6 +411,15 @@ function readMessageBusEntries(projectId, limit = 200) {
     }
   }
   return out;
+}
+
+function safeJsonReadFromText(raw, fallback = {}) {
+  try {
+    if (typeof raw !== 'string') return fallback;
+    return JSON.parse(raw);
+  } catch (err) {
+    return fallback;
+  }
 }
 
 function cancelProjectExecution(projectId, reason = 'cancelled', requeueTask = true) {
@@ -334,8 +442,10 @@ function cancelProjectExecution(projectId, reason = 'cancelled', requeueTask = t
       task.status = 'backlog';
       task.assignee = null;
       task.startedAt = null;
+      task.executionState = 'queued';
       task.inprogressCycles = 0;
       task.executionTaskRunId = null;
+      task.lastProgressAt = null;
     }
     emitProjectEvent(projectId, 'task_update', task);
   }
@@ -389,6 +499,7 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
   if (exitCode === 0) {
     task.status = 'done';
     task.completedAt = nowIso();
+    task.executionState = 'done';
     task.inprogressCycles = 0;
     task.executionTaskRunId = null;
 
@@ -433,6 +544,8 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
     task.status = 'backlog';
     task.assignee = null;
     task.startedAt = null;
+    task.executionState = 'queued';
+    task.retryCount = Number(task.retryCount || 0) + 1;
     task.inprogressCycles = 0;
     task.executionTaskRunId = null;
     runtime.state.heartbeat.autoFixCount = (runtime.state.heartbeat.autoFixCount || 0) + 1;
@@ -514,17 +627,29 @@ function startProjectTaskExecution(projectState, task, assignee) {
     lastProgressAt: nowIso(),
   };
   task.executionTaskRunId = taskRun.id;
+  task.executionState = 'running';
+  task.lastProgressAt = runtime.execution.lastProgressAt;
 
   child.stdout.on('data', () => {
     const rt = projectRuntimes.get(projectState.id);
     if (rt && rt.execution && rt.execution.taskRunId === taskRun.id) {
       rt.execution.lastProgressAt = nowIso();
+      const active = rt.state.tasks.find((t) => t.id === task.id);
+      if (active) {
+        active.lastProgressAt = rt.execution.lastProgressAt;
+        emitProjectEvent(projectState.id, 'task_update', active);
+      }
     }
   });
   child.stderr.on('data', () => {
     const rt = projectRuntimes.get(projectState.id);
     if (rt && rt.execution && rt.execution.taskRunId === taskRun.id) {
       rt.execution.lastProgressAt = nowIso();
+      const active = rt.state.tasks.find((t) => t.id === task.id);
+      if (active) {
+        active.lastProgressAt = rt.execution.lastProgressAt;
+        emitProjectEvent(projectState.id, 'task_update', active);
+      }
     }
   });
   child.on('close', (code) => {
@@ -600,8 +725,10 @@ function runProjectHeartbeat(projectState, source = 'interval') {
         activeTask.status = 'backlog';
         activeTask.assignee = null;
         activeTask.startedAt = null;
+        activeTask.executionState = 'queued';
         activeTask.inprogressCycles = 0;
         activeTask.executionTaskRunId = null;
+        activeTask.lastProgressAt = null;
       }
       projectState.heartbeat.autoFixCount = (projectState.heartbeat.autoFixCount || 0) + 1;
       appendProjectLog(projectState, 'fix', {
@@ -626,6 +753,8 @@ function runProjectHeartbeat(projectState, source = 'interval') {
         nextTask.status = 'inprogress';
         nextTask.assignee = assignee.id;
         nextTask.startedAt = beatTs;
+        nextTask.executionState = 'running';
+        nextTask.lastProgressAt = beatTs;
         nextTask.blockedBy = null;
         nextTask.inprogressCycles = 0;
         assignee.status = 'running';
@@ -656,7 +785,11 @@ function runProjectHeartbeat(projectState, source = 'interval') {
           nextTask.status = 'backlog';
           nextTask.assignee = null;
           nextTask.startedAt = null;
+          nextTask.executionState = 'queued';
+          nextTask.retryCount = Number(nextTask.retryCount || 0) + 1;
           nextTask.inprogressCycles = 0;
+          nextTask.executionTaskRunId = null;
+          nextTask.lastProgressAt = null;
           assignee.status = 'idle';
           assignee.currentTask = null;
           projectState.heartbeat.autoFixCount = (projectState.heartbeat.autoFixCount || 0) + 1;
@@ -758,14 +891,22 @@ function loadProjectsFromDisk() {
     projectRuntimes.set(state.id, runtime);
     // Normalize tasks that were saved before inprogressCycles was added
     state.tasks.forEach((t) => { if (typeof t.inprogressCycles !== 'number') t.inprogressCycles = 0; });
+    state.tasks.forEach((t) => {
+      if (!t.executionState) t.executionState = t.status === 'done' ? 'done' : (t.status === 'inprogress' ? 'running' : 'queued');
+      if (typeof t.retryCount !== 'number') t.retryCount = 0;
+      if (typeof t.lastProgressAt === 'undefined') t.lastProgressAt = null;
+      if (typeof t.executionTaskRunId === 'undefined') t.executionTaskRunId = null;
+    });
     // Recovery: process restart cannot resume child process mid-run, so requeue active tasks.
     state.tasks.forEach((t) => {
       if (t.status === 'inprogress') {
         t.status = 'backlog';
         t.assignee = null;
         t.startedAt = null;
+        t.executionState = 'queued';
         t.inprogressCycles = 0;
         t.executionTaskRunId = null;
+        t.lastProgressAt = null;
       }
     });
     state.agents.forEach((agent) => {
@@ -2003,6 +2144,10 @@ async function main() {
           assignee: payload.assignee ? String(payload.assignee) : null,
           blockedBy: null,
           dependencies: [],
+          executionState: 'queued',
+          retryCount: 0,
+          lastProgressAt: null,
+          executionTaskRunId: null,
           createdAt: nowIso(),
           completedAt: null,
           startedAt: null,

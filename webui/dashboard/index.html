@@ -14,7 +14,6 @@
   <aside class="hf-sidebar">
     <div class="hf-sidebar-brand">
       <img class="hf-brand-logo" src="/assets/icon_hiveforge.png" alt="HiveForge" />
-      <span class="hf-badge">v2</span>
     </div>
 
     <nav class="hf-nav">
@@ -48,6 +47,9 @@
       </button>
       <button class="hf-nav-btn" data-section="logs">
         <span class="hf-nav-icon">📜</span> Logs
+      </button>
+      <button class="hf-nav-btn" data-section="message-bus">
+        <span class="hf-nav-icon">🚌</span> Message Bus
       </button>
 
       <div class="hf-nav-section">System</div>
@@ -294,6 +296,19 @@
         </div>
         <div id="logsStream" class="hf-log-stream" style="max-height:480px;">
           <div style="color:var(--muted);">No log entries yet.</div>
+        </div>
+      </section>
+
+      <section id="message-bus" class="hf-section">
+        <div class="hf-section-header">
+          <h2>Message Bus</h2>
+          <p>Coordinator-routed traffic for assignments, progress, completions, failures, and policy decisions.</p>
+        </div>
+        <div class="hf-btn-row">
+          <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.refreshMessageBus()">↻ Refresh</button>
+        </div>
+        <div id="messageBusStream" class="hf-log-stream" style="max-height:520px;">
+          <div style="color:var(--muted);">No message-bus entries yet.</div>
         </div>
       </section>
 

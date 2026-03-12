@@ -18,6 +18,7 @@ const API = {
   integrations:'/api/integrations',
   analytics:   '/api/analytics',
   logs:        '/api/logs',
+  messageBus:  '/api/message_bus',
   marketplace: '/api/marketplace',
   control:     '/api/control',
   settings:    '/api/settings',
@@ -32,6 +33,7 @@ const SECTION_TITLES = {
   workspace:   'Workspace Explorer',
   heartbeat:   'Heartbeat Monitor',
   logs:        'Logs & Timeline',
+  'message-bus': 'Message Bus',
   credentials: 'Credential Manager',
   analytics:   'Analytics',
   marketplace: 'Agent Marketplace',
@@ -109,6 +111,8 @@ const state = {
   agents:         [],
   tasks:          [],
   logs:           [],
+  messageBus:     [],
+  messageBusPoller: null,
   marketplaceFilter: { division: 'All', query: '' },
   sseSource:      null,
   _pendingAddAgentId: null,
@@ -177,6 +181,14 @@ async function fetchAnalytics(projectId) {
 
 async function fetchLogs(projectId, filter='all') {
   try { return await apiFetch(`${API.logs}?projectId=${projectId}&filter=${filter}`); }
+  catch { return []; }
+}
+
+async function fetchMessageBus(projectId, limit = 300) {
+  const qp = new URLSearchParams();
+  if (projectId) qp.set('projectId', projectId);
+  qp.set('limit', String(limit));
+  try { return await apiFetch(`${API.messageBus}?${qp.toString()}`); }
   catch { return []; }
 }
 
@@ -345,9 +357,31 @@ function renderKanban(tasks) {
       <div class="hf-kanban-card">
         <div style="font-weight:600;font-size:0.88rem;">${esc(t.title)}</div>
         <div style="font-size:0.78rem;color:var(--muted);margin-top:0.2rem;">${esc(t.assignee ?? 'Unassigned')}</div>
+        <div style="font-size:0.75rem;color:var(--muted);margin-top:0.2rem;">Execution: ${esc(t.executionState ?? (t.status === 'done' ? 'done' : 'queued'))}</div>
+        ${t.startedAt ? `<div style="font-size:0.74rem;color:var(--muted);margin-top:0.2rem;">Started: ${esc(new Date(t.startedAt).toLocaleTimeString())}</div>` : ''}
+        ${t.lastProgressAt ? `<div style="font-size:0.74rem;color:var(--muted);margin-top:0.2rem;">Last progress: ${esc(new Date(t.lastProgressAt).toLocaleTimeString())}</div>` : ''}
+        ${Number(t.retryCount || 0) > 0 ? `<div style="font-size:0.74rem;color:#b45309;margin-top:0.2rem;">Retries: ${Number(t.retryCount || 0)}</div>` : ''}
         ${t.blockedBy ? `<div style="font-size:0.75rem;color:#e87;margin-top:0.2rem;">⛔ Blocked by: ${esc(t.blockedBy)}</div>` : ''}
       </div>`).join('') || `<div style="color:var(--muted);font-size:0.82rem;padding:0.5rem;">Empty</div>`;
   }
+}
+
+function renderMessageBus(entries) {
+  const stream = document.getElementById('messageBusStream');
+  if (!stream) return;
+  if (!entries || !entries.length) {
+    stream.innerHTML = '<div style="color:var(--muted);">No message-bus entries yet.</div>';
+    return;
+  }
+  stream.innerHTML = entries.map((e) => {
+    const payload = esc(JSON.stringify(e.payload || {}));
+    return `<div style="padding:0.25rem 0;border-bottom:1px solid var(--border);">
+      <span style="color:var(--muted)">[${esc((e.ts || '').slice(11,19))}]</span>
+      <strong>${esc(e.kind || 'message')}</strong>
+      <span style="color:var(--muted)">${esc(e.from || 'unknown')} → ${esc(e.to || 'unknown')}</span>
+      <div style="font-size:0.78rem;color:var(--muted);margin-top:0.1rem;">${payload}</div>
+    </div>`;
+  }).join('');
 }
 
 // Heartbeat card
@@ -541,6 +575,10 @@ function activateSection(id) {
 }
 
 async function onSectionActivate(id) {
+  if (state.messageBusPoller) {
+    clearInterval(state.messageBusPoller);
+    state.messageBusPoller = null;
+  }
   state.projects = await fetchProjects();
   renderSidebarProjectList(state.projects);
   if (state.activeProject?.id) {
@@ -564,6 +602,16 @@ async function onSectionActivate(id) {
     }
     case 'analytics':   renderAnalytics(pid ? await fetchAnalytics(pid) : null); break;
     case 'logs':        if (pid) renderLogs(state.logs = await fetchLogs(pid)); break;
+    case 'message-bus': {
+      state.messageBus = await fetchMessageBus(pid);
+      renderMessageBus(state.messageBus);
+      state.messageBusPoller = setInterval(async () => {
+        if (state.activeSection !== 'message-bus') return;
+        state.messageBus = await fetchMessageBus(state.activeProject?.id);
+        renderMessageBus(state.messageBus);
+      }, 5000);
+      break;
+    }
     case 'marketplace': renderMarketplace(state.marketplaceFilter); break;
     case 'settings':    renderSettings(await fetchSettings()); break;
   }
@@ -627,6 +675,7 @@ const Dashboard = {
   refreshAgents()   { onSectionActivate('agents');   },
   refreshHeartbeat(){ onSectionActivate('heartbeat');},
   refreshLogs()     { onSectionActivate('logs');     },
+  refreshMessageBus(){ onSectionActivate('message-bus'); },
   filterLogs()      {
     const f = document.getElementById('logsFilter').value;
     renderLogs(state.logs, f);
