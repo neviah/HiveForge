@@ -922,8 +922,24 @@ async function pingLMStudio(endpoint) {
 
 function serveStatic(req, res) {
   const rawPath = (req.url || '/').split('?')[0] || '/';
-  const normalizedPath = rawPath === '/' ? 'index.html' : rawPath.replace(/^\/+/, '');
-  const target = path.join(WEBUI_ROOT, normalizedPath);
+  // Root → redirect to the HiveForge dashboard
+  if (rawPath === '/' || rawPath === '/index.html') {
+    res.writeHead(302, { Location: '/dashboard/' });
+    res.end();
+    return;
+  }
+  // /dashboard/ → serve the dashboard index
+  const dashboardRoot = path.join(WEBUI_ROOT, 'dashboard');
+  let resolvedBase = WEBUI_ROOT;
+  let normalizedPath = rawPath.replace(/^\/+/, '');
+  if (normalizedPath === 'dashboard' || normalizedPath === 'dashboard/') {
+    resolvedBase = dashboardRoot;
+    normalizedPath = 'index.html';
+  } else if (normalizedPath.startsWith('dashboard/')) {
+    resolvedBase = dashboardRoot;
+    normalizedPath = normalizedPath.slice('dashboard/'.length) || 'index.html';
+  }
+  const target = path.join(resolvedBase, normalizedPath);
   if (!target.startsWith(WEBUI_ROOT)) {
     res.writeHead(403);
     res.end('Forbidden');

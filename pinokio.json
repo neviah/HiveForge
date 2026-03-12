@@ -2,7 +2,41 @@
   "version": "5.0",
   "name": "HiveForge",
   "title": "HiveForge",
-  "description": "Sandboxed LM Studio-only OpenClaw fork packaged for Pinokio.",
+  "description": "Sandboxed LM Studio-only multi-agent business automation platform.",
   "icon": "icon.png",
-  "platform": "*"
+  "platform": "*",
+  "menu": [
+    {
+      "text": "Start",
+      "href": "start.js"
+    },
+    {
+      "text": "Install / Reinstall",
+      "href": "install.js"
+    },
+    {
+      "text": "Update Only",
+      "href": "update.js"
+    },
+    {
+      "text": "View Logs",
+      "href": "logs"
+    },
+    {
+      "text": "Open Workspace",
+      "href": "sandbox/workspace"
+    },
+    {
+      "text": "Integration Config",
+      "href": "sandbox/config.example.json"
+    },
+    {
+      "text": "Show GitHub Public Key",
+      "href": "http://127.0.0.1:3000/api/public-key"
+    },
+    {
+      "text": "Settings",
+      "href": "sandbox/config.json"
+    }
+  ]
 }
