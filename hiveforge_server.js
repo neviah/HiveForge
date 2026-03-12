@@ -44,7 +44,9 @@ function ensureDir(dirPath) {
 function safeJsonRead(filePath, fallback = null) {
   try {
     if (!fs.existsSync(filePath)) return fallback;
-    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const normalized = raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw;
+    return JSON.parse(normalized);
   } catch (err) {
     return fallback;
   }
@@ -1329,18 +1331,18 @@ async function main() {
 
   loadProjectsFromDisk();
 
-  const server = http.createServer((req, res) => {
-    // Log which templates were discovered so startup issues are immediately visible
-    try {
-      ensureDir(TEMPLATES_ROOT);
-      const foundTemplates = fs.readdirSync(TEMPLATES_ROOT)
-        .filter((f) => f.endsWith('.json') && f !== 'schema.json')
-        .map((f) => f.replace('.json', ''));
-      log(`Templates available (${foundTemplates.length}): ${foundTemplates.join(', ') || 'NONE — check templates/ directory'}`);
-    } catch (err) {
-      log(`Warning: could not read templates directory: ${err.message}`);
-    }
+  // Log template discovery once at startup (not per request)
+  try {
+    ensureDir(TEMPLATES_ROOT);
+    const foundTemplates = fs.readdirSync(TEMPLATES_ROOT)
+      .filter((f) => f.endsWith('.json') && f !== 'schema.json')
+      .map((f) => f.replace('.json', ''));
+    log(`Templates available (${foundTemplates.length}): ${foundTemplates.join(', ') || 'NONE — check templates/ directory'}`);
+  } catch (err) {
+    log(`Warning: could not read templates directory: ${err.message}`);
+  }
 
+  const server = http.createServer((req, res) => {
     const urlObj = new URL(req.url || '/', 'http://localhost');
     const pathname = urlObj.pathname;
 
