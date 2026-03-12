@@ -571,6 +571,13 @@
             <button class="hf-btn" onclick="Dashboard.runConnectorCheck()">Run Connector Check</button>
             <span id="connectorCheckStatus" class="hf-status" style="display:none;"></span>
           </div>
+          <div id="connectorCheckHint" class="hf-card" style="display:none;margin-bottom:0.7rem;padding:0.7rem 0.8rem;background:var(--panel-bg);">
+            <div id="connectorCheckHintText" style="font-size:0.84rem;color:var(--text);margin-bottom:0.5rem;"></div>
+            <div class="hf-btn-row" style="margin-bottom:0;">
+              <button id="connectorHintOpenSite" class="hf-btn secondary hf-btn sm" onclick="Dashboard.openConnectorWebsiteFromHint()">Open Provider Site</button>
+              <button id="connectorHintGoCredentials" class="hf-btn secondary hf-btn sm" onclick="Dashboard.goToCredentialFromHint()">Open Credentials</button>
+            </div>
+          </div>
           <pre id="connectorCheckOutput" class="hf-log-stream" style="max-height:200px;white-space:pre-wrap;color:var(--muted);">No connector check has been run yet.</pre>
         </div>
       </section>

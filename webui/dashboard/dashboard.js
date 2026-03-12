@@ -107,6 +107,17 @@ const PLATFORM_CONNECTIONS = [
   },
 ];
 
+const CONNECTOR_WEBSITES = {
+  github: 'https://github.com/settings/tokens',
+  telegram: 'https://core.telegram.org/bots',
+  whatsapp: 'https://developers.facebook.com/docs/whatsapp',
+  netlify: 'https://app.netlify.com/user/applications#personal-access-tokens',
+  stripe: 'https://dashboard.stripe.com/apikeys',
+  google_ads: 'https://ads.google.com/home/tools/manager-accounts/',
+  analytics: 'https://analytics.google.com/',
+  email_provider: 'https://www.mailgun.com/',
+};
+
 // ─── State ───────────────────────────────────────────────────────────────────
 
 const state = {
@@ -591,6 +602,45 @@ function syncProjectCredentialPolicyForm() {
   if (capInput) capInput.value = typeof policy.monthlyCap === 'number' ? String(policy.monthlyCap) : '';
 }
 
+function renderConnectorGuidance(result = null, fallbackConnector = '') {
+  const panel = document.getElementById('connectorCheckHint');
+  const text = document.getElementById('connectorCheckHintText');
+  const openBtn = document.getElementById('connectorHintOpenSite');
+  const credBtn = document.getElementById('connectorHintGoCredentials');
+  if (!panel || !text || !openBtn || !credBtn) return;
+
+  if (!result || result.ok) {
+    panel.style.display = 'none';
+    panel.dataset.connector = '';
+    panel.dataset.service = '';
+    return;
+  }
+
+  const connector = String(result.connector || fallbackConnector || '').trim().toLowerCase();
+  const checks = Array.isArray(result.checks) ? result.checks : [];
+  const missingCredential = checks.find((entry) => entry && entry.type === 'credential' && !entry.ok);
+  const disabledByPolicy = checks.find((entry) => entry && entry.type === 'project_policy' && !entry.ok);
+  const service = String((missingCredential && missingCredential.target) || connector || '').trim().toLowerCase();
+  const website = CONNECTOR_WEBSITES[service] || CONNECTOR_WEBSITES[connector] || '';
+
+  panel.style.display = 'block';
+  panel.dataset.connector = connector;
+  panel.dataset.service = service;
+
+  if (missingCredential) {
+    text.textContent = `This connector is blocked because ${service || connector} is not connected yet. Open the provider site to create/get a token, then paste it in Credentials.`;
+    credBtn.textContent = 'Open Credentials';
+  } else if (disabledByPolicy) {
+    text.textContent = `This connector is blocked by project policy. Open Credentials to enable the service in Project Credential Policy.`;
+    credBtn.textContent = 'Open Credential Policy';
+  } else {
+    text.textContent = result.reason || 'Connector was denied by policy checks.';
+    credBtn.textContent = 'Open Credentials';
+  }
+
+  openBtn.style.display = website ? 'inline-flex' : 'none';
+}
+
 function renderPlatformConnections(connections = {}) {
   const container = document.getElementById('platformConnections');
   if (!container) return;
@@ -954,6 +1004,33 @@ const Dashboard = {
     }
   },
 
+  openConnectorWebsiteFromHint() {
+    const panel = document.getElementById('connectorCheckHint');
+    const service = panel?.dataset?.service || panel?.dataset?.connector || '';
+    const url = CONNECTOR_WEBSITES[String(service).trim().toLowerCase()] || '';
+    if (!url) {
+      showToast('No provider website is configured for this connector.', 'info');
+      return;
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+    showToast('Opened provider site in a new tab.', 'ok');
+  },
+
+  goToCredentialFromHint() {
+    const panel = document.getElementById('connectorCheckHint');
+    const service = String(panel?.dataset?.service || panel?.dataset?.connector || '').trim();
+    activateSection('credentials');
+    setTimeout(() => {
+      const select = document.getElementById('credService');
+      if (select && service) {
+        const has = Array.from(select.options).some((opt) => opt.value === service);
+        if (has) select.value = service;
+      }
+      const token = document.getElementById('credToken');
+      if (token) token.focus();
+    }, 120);
+  },
+
   async saveProjectCredentialPolicy() {
     if (!state.activeProject) {
       showToast('No active project selected.', 'error');
@@ -1124,6 +1201,7 @@ const Dashboard = {
 
     showStatus(status, 'Running…', 'running');
     if (output) output.textContent = 'Running connector policy check...';
+    renderConnectorGuidance(null, connector);
 
     try {
       const result = await runConnectorCheck(connector, state.activeProject?.id || null, dryRun, operation, estimatedCost);
@@ -1146,10 +1224,12 @@ const Dashboard = {
         renderCredentialAudit(await fetchCredentialAudit(state.activeProject.id));
         renderCredentials(await fetchCredentials(), await fetchCredentialBudget(state.activeProject.id));
       }
+      renderConnectorGuidance(result, connector);
       showToast(`Connector ${result.connector}: ${decision || (result.ok ? 'allow' : 'deny')}.`, result.ok ? 'ok' : 'info');
     } catch (err) {
       showStatus(status, `Failed: ${err.message}`, 'error');
       if (output) output.textContent = `Connector check failed:\n${err.message}`;
+      renderConnectorGuidance({ ok: false, connector, reason: err.message, checks: [] }, connector);
       showToast(`Connector check failed: ${err.message}`, 'error');
     }
   },
