@@ -12,6 +12,7 @@ const LOG_PATH = path.join(SANDBOX_ROOT, 'hiveforge.log');
 const PROJECTS_ROOT = path.join(SANDBOX_ROOT, 'projects');
 const TEMPLATES_ROOT = path.join(__dirname, 'templates');
 const CREDENTIALS_ROOT = path.join(SANDBOX_ROOT, 'credentials');
+const CREDENTIAL_POLICIES_ROOT = path.join(CREDENTIALS_ROOT, 'policies');
 const AGENTS_RUNTIME_ROOT = path.join(SANDBOX_ROOT, 'agents');
 const MESSAGE_BUS_PATH = path.join(AGENTS_RUNTIME_ROOT, 'messages.db');
 const MAX_TASK_HISTORY = 100;
@@ -1200,6 +1201,56 @@ function credentialTokenPath(service) {
   return path.join(CREDENTIALS_ROOT, `${service}.enc`);
 }
 
+function credentialPolicyPath(projectId, service) {
+  const safeProject = String(projectId || '').trim();
+  const safeService = String(service || '').trim();
+  return path.join(CREDENTIAL_POLICIES_ROOT, `${safeProject}__${safeService}.json`);
+}
+
+function defaultCredentialPolicy(projectId, service) {
+  return {
+    projectId: String(projectId || ''),
+    service: String(service || ''),
+    enabled: true,
+    monthlyCap: null,
+    updatedAt: null,
+  };
+}
+
+function getProjectCredentialPolicy(projectId, service) {
+  const fallback = defaultCredentialPolicy(projectId, service);
+  if (!projectId || !service) return fallback;
+  ensureDir(CREDENTIAL_POLICIES_ROOT);
+  const stored = safeJsonRead(credentialPolicyPath(projectId, service), null);
+  if (!stored || typeof stored !== 'object') return fallback;
+  return {
+    ...fallback,
+    ...stored,
+    projectId: String(projectId || ''),
+    service: String(service || ''),
+    enabled: typeof stored.enabled === 'boolean' ? stored.enabled : true,
+    monthlyCap: typeof stored.monthlyCap === 'number' && Number.isFinite(stored.monthlyCap) ? stored.monthlyCap : null,
+  };
+}
+
+function listProjectCredentialPolicies(projectId) {
+  return SUPPORTED_CREDENTIAL_SERVICES.map((service) => getProjectCredentialPolicy(projectId, service));
+}
+
+function upsertProjectCredentialPolicy(projectId, service, patch = {}) {
+  const next = {
+    ...getProjectCredentialPolicy(projectId, service),
+    enabled: typeof patch.enabled === 'boolean' ? patch.enabled : getProjectCredentialPolicy(projectId, service).enabled,
+    monthlyCap: typeof patch.monthlyCap === 'number' && Number.isFinite(patch.monthlyCap)
+      ? patch.monthlyCap
+      : (patch.monthlyCap === null ? null : getProjectCredentialPolicy(projectId, service).monthlyCap),
+    updatedAt: nowIso(),
+  };
+  ensureDir(CREDENTIAL_POLICIES_ROOT);
+  fs.writeFileSync(credentialPolicyPath(projectId, service), `${JSON.stringify(next, null, 2)}\n`, 'utf-8');
+  return next;
+}
+
 function readCredentialMetadata() {
   ensureDir(CREDENTIALS_ROOT);
   return SUPPORTED_CREDENTIAL_SERVICES.map((service) => {
@@ -1680,6 +1731,7 @@ async function executeConnectorPolicy(connectorId, options = {}) {
     const metadata = readCredentialMetadata();
     const found = metadata.find((entry) => entry.service === connector.credentialService);
     const connected = Boolean(found && found.connected);
+    const policy = options.projectId ? getProjectCredentialPolicy(options.projectId, connector.credentialService) : null;
     checks.push({
       type: 'credential',
       target: connector.credentialService,
@@ -1688,6 +1740,28 @@ async function executeConnectorPolicy(connectorId, options = {}) {
         ? `Credential ${connector.credentialService} is connected.`
         : `Credential ${connector.credentialService} is not connected.`
     });
+
+    if (policy) {
+      checks.push({
+        type: 'project_policy',
+        target: connector.credentialService,
+        ok: policy.enabled,
+        message: policy.enabled
+          ? `Project policy allows ${connector.credentialService}.`
+          : `Project policy disabled ${connector.credentialService}.`
+      });
+
+      if (typeof options.estimatedCost === 'number' && Number.isFinite(options.estimatedCost) && typeof policy.monthlyCap === 'number') {
+        checks.push({
+          type: 'budget_cap',
+          target: connector.credentialService,
+          ok: options.estimatedCost <= policy.monthlyCap,
+          message: options.estimatedCost <= policy.monthlyCap
+            ? `Estimated cost $${options.estimatedCost} is within monthly cap $${policy.monthlyCap}.`
+            : `Estimated cost $${options.estimatedCost} exceeds monthly cap $${policy.monthlyCap}.`
+        });
+      }
+    }
   }
 
   const ok = checks.length > 0 && checks.every((entry) => Boolean(entry.ok));
@@ -2620,6 +2694,84 @@ async function main() {
       return;
     }
 
+    if (pathname === '/api/credential_policy' && req.method === 'GET') {
+      const projectId = String(urlObj.searchParams.get('projectId') || '').trim();
+      if (!projectId) {
+        writeJson(res, { error: 'projectId is required' }, 400);
+        return;
+      }
+      writeJson(res, {
+        projectId,
+        services: listProjectCredentialPolicies(projectId),
+      });
+      return;
+    }
+
+    if (pathname === '/api/credential_policy' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = parseJsonBodySafe(body);
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+
+        const projectId = String(payload.projectId || '').trim();
+        const service = String(payload.service || '').trim();
+        if (!projectId) {
+          writeJson(res, { error: 'projectId is required' }, 400);
+          return;
+        }
+        if (!SUPPORTED_CREDENTIAL_SERVICES.includes(service)) {
+          writeJson(res, { error: 'Unsupported credential service' }, 400);
+          return;
+        }
+
+        const runtime = projectRuntimes.get(projectId);
+        if (!runtime) {
+          writeJson(res, { error: 'Project not found' }, 404);
+          return;
+        }
+
+        const policyPatch = payload.policy && typeof payload.policy === 'object' ? payload.policy : {};
+        const nextPolicy = upsertProjectCredentialPolicy(projectId, service, {
+          enabled: typeof policyPatch.enabled === 'boolean' ? policyPatch.enabled : undefined,
+          monthlyCap: typeof policyPatch.monthlyCap === 'number'
+            ? policyPatch.monthlyCap
+            : (policyPatch.monthlyCap === null ? null : undefined),
+        });
+
+        appendProjectLog(runtime.state, nextPolicy.enabled ? 'policy_allow' : 'policy_deny', {
+          kind: 'credential_policy_updated',
+          service,
+          approved: nextPolicy.enabled,
+          decision: nextPolicy.enabled ? 'allow' : 'deny',
+          monthlyCap: nextPolicy.monthlyCap,
+        });
+        appendMessageBusEntry({
+          projectId,
+          from: 'coordinator',
+          to: 'policy_engine',
+          kind: 'credential_policy_updated',
+          payload: {
+            service,
+            enabled: nextPolicy.enabled,
+            monthlyCap: nextPolicy.monthlyCap,
+          },
+        });
+        persistProjectState(runtime.state);
+
+        writeJson(res, {
+          projectId,
+          services: listProjectCredentialPolicies(projectId),
+        });
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
     if (pathname === '/api/connectors/execute' && req.method === 'POST') {
       readRequestBody(req).then((body) => {
         let payload = {};
@@ -2633,13 +2785,14 @@ async function main() {
         const connector = String(payload.connector || '').trim();
         const projectId = String(payload.projectId || '').trim();
         const dryRun = Boolean(payload.dryRun);
+        const estimatedCost = typeof payload.estimatedCost === 'number' ? payload.estimatedCost : null;
 
         if (!connector) {
           writeJson(res, { error: 'connector is required' }, 400);
           return;
         }
 
-        executeConnectorPolicy(connector, { dryRun }).then((result) => {
+        executeConnectorPolicy(connector, { dryRun, projectId, estimatedCost }).then((result) => {
           if (projectId) {
             const runtime = projectRuntimes.get(projectId);
             if (runtime) {

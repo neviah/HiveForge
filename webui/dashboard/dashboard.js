@@ -24,6 +24,7 @@ const API = {
   settings:    '/api/settings',
   settingsReset: '/api/settings/reset',
   projectSettings: '/api/project_settings',
+  credentialPolicy: '/api/credential_policy',
   connectorsExecute: '/api/connectors/execute',
 };
 
@@ -114,6 +115,7 @@ const state = {
   tasks:          [],
   logs:           [],
   messageBus:     [],
+  credentialPolicies: [],
   messageBusPoller: null,
   messageBusFilter: { kind: '', actor: '', q: '' },
   marketplaceFilter: { division: 'All', query: '' },
@@ -218,6 +220,10 @@ async function runConnectorCheck(connector, projectId, dryRun = true) {
     method: 'POST',
     body: JSON.stringify({ connector, projectId, dryRun }),
   });
+}
+
+async function fetchCredentialPolicy(projectId) {
+  return apiFetch(`${API.credentialPolicy}?projectId=${encodeURIComponent(projectId)}`);
 }
 
 function renderSettings(data) {
@@ -494,6 +500,48 @@ function renderCredentialBudgetSummary(creds = []) {
   `).join('');
 }
 
+function renderProjectCredentialPolicy(data) {
+  const empty = document.getElementById('credentialPolicyEmpty');
+  const panel = document.getElementById('credentialPolicyPanel');
+  const summary = document.getElementById('credentialPolicySummary');
+  state.credentialPolicies = Array.isArray(data?.services) ? data.services : [];
+
+  if (!state.activeProject) {
+    if (empty) empty.style.display = 'block';
+    if (panel) panel.style.display = 'none';
+    return;
+  }
+
+  if (empty) empty.style.display = 'none';
+  if (panel) panel.style.display = 'block';
+  if (summary) {
+    summary.innerHTML = state.credentialPolicies.map((policy) => {
+      const label = CREDENTIAL_SERVICES.find((svc) => svc.id === policy.service)?.label || policy.service;
+      const cap = typeof policy.monthlyCap === 'number' ? `$${policy.monthlyCap.toLocaleString()}/mo` : 'No cap';
+      return `
+        <div class="hf-cred-summary-row">
+          <div>
+            <div class="hf-cred-summary-name">${esc(label)}</div>
+            <div class="hf-cred-summary-meta">${policy.enabled ? 'Enabled' : 'Blocked'} for this project</div>
+          </div>
+          <div class="hf-cred-summary-value">${cap}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  syncProjectCredentialPolicyForm();
+}
+
+function syncProjectCredentialPolicyForm() {
+  const service = document.getElementById('credentialPolicyService')?.value || 'netlify';
+  const policy = state.credentialPolicies.find((entry) => entry.service === service) || { enabled: true, monthlyCap: null };
+  const enabledInput = document.getElementById('credentialPolicyEnabled');
+  const capInput = document.getElementById('credentialPolicyMonthlyCap');
+  if (enabledInput) enabledInput.checked = Boolean(policy.enabled);
+  if (capInput) capInput.value = typeof policy.monthlyCap === 'number' ? String(policy.monthlyCap) : '';
+}
+
 function renderPlatformConnections(connections = {}) {
   const container = document.getElementById('platformConnections');
   if (!container) return;
@@ -671,6 +719,7 @@ async function onSectionActivate(id) {
     case 'credentials': {
       renderCredentials(await fetchCredentials());
       renderPlatformConnections(await fetchIntegrations());
+      renderProjectCredentialPolicy(pid ? await fetchCredentialPolicy(pid) : null);
       break;
     }
     case 'analytics':   renderAnalytics(pid ? await fetchAnalytics(pid) : null); break;
@@ -828,6 +877,46 @@ const Dashboard = {
       showToast('Platform connection status refreshed.', 'ok');
     } catch (err) {
       showToast(`Could not refresh platform status: ${err.message}`, 'error');
+    }
+  },
+
+  refreshProjectCredentialPolicyForm() {
+    syncProjectCredentialPolicyForm();
+  },
+
+  async saveProjectCredentialPolicy() {
+    if (!state.activeProject) {
+      showToast('No active project selected.', 'error');
+      return;
+    }
+
+    const service = document.getElementById('credentialPolicyService').value;
+    const enabled = document.getElementById('credentialPolicyEnabled').checked;
+    const rawCap = document.getElementById('credentialPolicyMonthlyCap').value.trim();
+    const status = document.getElementById('credentialPolicyStatus');
+    const monthlyCap = rawCap === '' ? null : Number(rawCap);
+
+    showStatus(status, 'Saving…', 'running');
+    try {
+      const updated = await apiFetch(API.credentialPolicy, {
+        method: 'POST',
+        body: JSON.stringify({
+          projectId: state.activeProject.id,
+          service,
+          policy: {
+            enabled,
+            monthlyCap: monthlyCap === null ? null : monthlyCap,
+          },
+        }),
+      });
+      renderProjectCredentialPolicy(updated);
+      document.getElementById('credentialPolicyService').value = service;
+      syncProjectCredentialPolicyForm();
+      showStatus(status, 'Saved.', 'ok');
+      showToast(`Saved ${service} policy for ${state.activeProject.name}.`, 'ok');
+    } catch (err) {
+      showStatus(status, `Failed: ${err.message}`, 'error');
+      showToast(`Could not save credential policy: ${err.message}`, 'error');
     }
   },
 

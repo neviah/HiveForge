@@ -380,6 +380,39 @@
             <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.refreshPlatformConnections()">Refresh Status</button>
           </div>
         </div>
+
+        <div class="hf-card" style="max-width:720px;margin-top:1rem;">
+          <h3 style="margin-top:0;">Project Credential Policy</h3>
+          <p style="color:var(--muted);margin-top:0;">Per-project gate for credential-backed connector usage. This is the next step in enforcing connector policy at runtime.</p>
+          <div id="credentialPolicyEmpty" style="color:var(--muted);">Select an active project to manage credential policy.</div>
+          <div id="credentialPolicyPanel" style="display:none;">
+            <div class="hf-grid-2" style="margin-bottom:0.8rem;">
+              <div>
+                <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Service</label>
+                <select id="credentialPolicyService" style="width:100%;" onchange="Dashboard.refreshProjectCredentialPolicyForm()">
+                  <option value="netlify">Netlify</option>
+                  <option value="stripe">Stripe</option>
+                  <option value="google_ads">Google Ads</option>
+                  <option value="analytics">Google Analytics</option>
+                  <option value="email_provider">Email Provider</option>
+                </select>
+              </div>
+              <div>
+                <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Monthly Cap (USD)</label>
+                <input id="credentialPolicyMonthlyCap" type="number" min="0" step="1" style="width:100%;" placeholder="No cap" />
+              </div>
+            </div>
+            <label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.9rem;">
+              <input id="credentialPolicyEnabled" type="checkbox" />
+              <span>Allow this service for the active project</span>
+            </label>
+            <div class="hf-btn-row" style="margin-bottom:0.8rem;">
+              <button class="hf-btn" onclick="Dashboard.saveProjectCredentialPolicy()">Save Policy</button>
+              <span id="credentialPolicyStatus" class="hf-status" style="display:none;"></span>
+            </div>
+            <div id="credentialPolicySummary" class="hf-cred-summary-list"></div>
+          </div>
+        </div>
       </section>
 
       <!-- ── 4.7 Analytics Dashboard ───────────────────── -->
