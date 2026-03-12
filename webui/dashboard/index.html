@@ -305,6 +305,18 @@
           <p>Coordinator-routed traffic for assignments, progress, completions, failures, and policy decisions.</p>
         </div>
         <div class="hf-btn-row">
+          <select id="messageBusKind" style="width:220px;" onchange="Dashboard.filterMessageBus()">
+            <option value="">All kinds</option>
+            <option value="task_assigned">task_assigned</option>
+            <option value="task_start_requested">task_start_requested</option>
+            <option value="task_completed">task_completed</option>
+            <option value="task_failed">task_failed</option>
+            <option value="execution_cancelled">execution_cancelled</option>
+            <option value="recurring_task_enqueued">recurring_task_enqueued</option>
+            <option value="policy_decision">policy_decision</option>
+          </select>
+          <input id="messageBusActor" type="text" placeholder="Actor filter (from/to)…" style="width:220px;" oninput="Dashboard.filterMessageBus()" />
+          <input id="messageBusSearch" type="text" placeholder="Search payload…" style="width:220px;" oninput="Dashboard.filterMessageBus()" />
           <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.refreshMessageBus()">↻ Refresh</button>
         </div>
         <div id="messageBusStream" class="hf-log-stream" style="max-height:520px;">

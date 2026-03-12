@@ -113,6 +113,7 @@ const state = {
   logs:           [],
   messageBus:     [],
   messageBusPoller: null,
+  messageBusFilter: { kind: '', actor: '', q: '' },
   marketplaceFilter: { division: 'All', query: '' },
   sseSource:      null,
   _pendingAddAgentId: null,
@@ -184,10 +185,13 @@ async function fetchLogs(projectId, filter='all') {
   catch { return []; }
 }
 
-async function fetchMessageBus(projectId, limit = 300) {
+async function fetchMessageBus(projectId, limit = 300, filter = {}) {
   const qp = new URLSearchParams();
   if (projectId) qp.set('projectId', projectId);
   qp.set('limit', String(limit));
+  if (filter.kind) qp.set('kind', String(filter.kind));
+  if (filter.actor) qp.set('actor', String(filter.actor));
+  if (filter.q) qp.set('q', String(filter.q));
   try { return await apiFetch(`${API.messageBus}?${qp.toString()}`); }
   catch { return []; }
 }
@@ -603,11 +607,11 @@ async function onSectionActivate(id) {
     case 'analytics':   renderAnalytics(pid ? await fetchAnalytics(pid) : null); break;
     case 'logs':        if (pid) renderLogs(state.logs = await fetchLogs(pid)); break;
     case 'message-bus': {
-      state.messageBus = await fetchMessageBus(pid);
+      state.messageBus = await fetchMessageBus(pid, 300, state.messageBusFilter);
       renderMessageBus(state.messageBus);
       state.messageBusPoller = setInterval(async () => {
         if (state.activeSection !== 'message-bus') return;
-        state.messageBus = await fetchMessageBus(state.activeProject?.id);
+        state.messageBus = await fetchMessageBus(state.activeProject?.id, 300, state.messageBusFilter);
         renderMessageBus(state.messageBus);
       }, 5000);
       break;
@@ -676,6 +680,12 @@ const Dashboard = {
   refreshHeartbeat(){ onSectionActivate('heartbeat');},
   refreshLogs()     { onSectionActivate('logs');     },
   refreshMessageBus(){ onSectionActivate('message-bus'); },
+  filterMessageBus() {
+    state.messageBusFilter.kind = document.getElementById('messageBusKind')?.value || '';
+    state.messageBusFilter.actor = document.getElementById('messageBusActor')?.value?.trim() || '';
+    state.messageBusFilter.q = document.getElementById('messageBusSearch')?.value?.trim() || '';
+    onSectionActivate('message-bus');
+  },
   filterLogs()      {
     const f = document.getElementById('logsFilter').value;
     renderLogs(state.logs, f);

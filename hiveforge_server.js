@@ -22,6 +22,40 @@ const DEFAULT_RUNTIME_SETTINGS = {
   maxAutoFixes: 5,
   countManualHeartbeatForStall: false,
 };
+const DEFAULT_RECURRING_SCHEDULE = [
+  { key: 'maintenance_health', title: 'Run maintenance health check', phase: 'maintenance', everyMs: 60 * 60 * 1000 },
+  { key: 'growth_review', title: 'Review growth metrics and next actions', phase: 'growth', everyMs: 3 * 60 * 60 * 1000 },
+];
+const RECURRING_SCHEDULE_BY_TEMPLATE = {
+  business: [
+    { key: 'business_content_cycle', title: 'Create weekly marketing content batch', phase: 'marketing', everyMs: 6 * 60 * 60 * 1000 },
+    { key: 'business_pipeline_review', title: 'Review sales pipeline and optimize outreach', phase: 'sales', everyMs: 4 * 60 * 60 * 1000 },
+  ],
+  software_agency: [
+    { key: 'agency_deploy_audit', title: 'Run deployment readiness and rollback audit', phase: 'engineering', everyMs: 6 * 60 * 60 * 1000 },
+    { key: 'agency_client_update', title: 'Generate client progress report and roadmap updates', phase: 'operations', everyMs: 4 * 60 * 60 * 1000 },
+  ],
+  game_studio: [
+    { key: 'studio_build_validation', title: 'Run gameplay build validation pass', phase: 'development', everyMs: 6 * 60 * 60 * 1000 },
+    { key: 'studio_player_insights', title: 'Review player feedback and balancing priorities', phase: 'analysis', everyMs: 5 * 60 * 60 * 1000 },
+  ],
+  publishing_house: [
+    { key: 'publishing_editorial_cycle', title: 'Plan and assign next editorial content cycle', phase: 'editorial', everyMs: 6 * 60 * 60 * 1000 },
+    { key: 'publishing_distribution_check', title: 'Audit distribution channels and update release queue', phase: 'distribution', everyMs: 5 * 60 * 60 * 1000 },
+  ],
+  music_production: [
+    { key: 'music_release_ops', title: 'Prepare release operations and channel sync', phase: 'release', everyMs: 6 * 60 * 60 * 1000 },
+    { key: 'music_campaign_review', title: 'Review audience engagement and campaign adjustments', phase: 'marketing', everyMs: 5 * 60 * 60 * 1000 },
+  ],
+  research_lab: [
+    { key: 'research_literature_scan', title: 'Run recurring literature scan and update findings', phase: 'research', everyMs: 6 * 60 * 60 * 1000 },
+    { key: 'research_experiment_review', title: 'Review experiment backlog and reprioritize hypotheses', phase: 'analysis', everyMs: 5 * 60 * 60 * 1000 },
+  ],
+  content_creator: [
+    { key: 'creator_content_schedule', title: 'Plan and draft next content publishing batch', phase: 'content', everyMs: 4 * 60 * 60 * 1000 },
+    { key: 'creator_engagement_review', title: 'Review engagement metrics and optimize hooks', phase: 'analytics', everyMs: 3 * 60 * 60 * 1000 },
+  ],
+};
 const sseClients = new Set();
 const projectSseClients = new Map();
 const activeTasks = new Map();
@@ -238,6 +272,105 @@ function createInitialTasks(template) {
   }));
 }
 
+function recurringScheduleForTemplate(templateKey) {
+  const templateSchedule = RECURRING_SCHEDULE_BY_TEMPLATE[String(templateKey || '').toLowerCase()] || [];
+  return [...DEFAULT_RECURRING_SCHEDULE, ...templateSchedule].map((entry) => ({
+    key: entry.key,
+    title: entry.title,
+    phase: entry.phase || 'maintenance',
+    everyMs: clampInt(entry.everyMs, 60 * 60 * 1000, 60 * 1000, 7 * 24 * 60 * 60 * 1000),
+  }));
+}
+
+function ensureRecurringState(projectState) {
+  if (!projectState.recurring || typeof projectState.recurring !== 'object') {
+    projectState.recurring = { enabled: true, lastRunAt: {}, lastIdleNoticeAt: null };
+  }
+  if (typeof projectState.recurring.enabled !== 'boolean') {
+    projectState.recurring.enabled = true;
+  }
+  if (!projectState.recurring.lastRunAt || typeof projectState.recurring.lastRunAt !== 'object') {
+    projectState.recurring.lastRunAt = {};
+  }
+  if (typeof projectState.recurring.lastIdleNoticeAt === 'undefined') {
+    projectState.recurring.lastIdleNoticeAt = null;
+  }
+}
+
+function shouldKeepRunningForRecurring(projectState) {
+  ensureRecurringState(projectState);
+  return Boolean(projectState.recurring.enabled) && recurringScheduleForTemplate(projectState.template).length > 0;
+}
+
+function hasPendingRecurringTask(projectState, recurringKey) {
+  return projectState.tasks.some((task) =>
+    task.recurringKey === recurringKey && (task.status === 'backlog' || task.status === 'inprogress')
+  );
+}
+
+function enqueueRecurringTasks(projectState, ts, source = 'interval') {
+  ensureRecurringState(projectState);
+  if (!projectState.recurring.enabled) return 0;
+
+  const nowMs = Date.parse(ts || nowIso());
+  const schedule = recurringScheduleForTemplate(projectState.template);
+  let inserted = 0;
+
+  for (const spec of schedule) {
+    if (inserted >= 2) break;
+    const lastRun = Date.parse(projectState.recurring.lastRunAt[spec.key] || '');
+    const due = Number.isNaN(lastRun) || (nowMs - lastRun >= spec.everyMs);
+    if (!due) continue;
+    if (hasPendingRecurringTask(projectState, spec.key)) continue;
+
+    const task = {
+      id: `RECUR-${spec.key}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`,
+      title: spec.title,
+      phase: spec.phase,
+      status: 'backlog',
+      assignee: null,
+      blockedBy: null,
+      dependencies: [],
+      recurringKey: spec.key,
+      executionState: 'queued',
+      retryCount: 0,
+      lastProgressAt: null,
+      executionTaskRunId: null,
+      inprogressCycles: 0,
+      createdAt: ts,
+      completedAt: null,
+      startedAt: null,
+      description: `Recurring task scheduled by coordinator (${source}).`,
+    };
+
+    projectState.tasks.push(task);
+    projectState.recurring.lastRunAt[spec.key] = ts;
+    inserted += 1;
+
+    appendProjectLog(projectState, 'task', {
+      kind: 'recurring_task_scheduled',
+      taskId: task.id,
+      recurringKey: spec.key,
+      title: spec.title,
+      source,
+    });
+    appendMessageBusEntry({
+      projectId: projectState.id,
+      from: 'coordinator',
+      to: 'scheduler',
+      kind: 'recurring_task_enqueued',
+      payload: {
+        taskId: task.id,
+        recurringKey: spec.key,
+        title: spec.title,
+      },
+    });
+    emitProjectEvent(projectState.id, 'task_update', task);
+  }
+
+  return inserted;
+}
+
 function summarizeProject(projectState) {
   const inProgress = projectState.tasks.find((task) => task.status === 'inprogress');
   return {
@@ -356,37 +489,42 @@ function appendMessageBusEntry({ projectId, from, to, kind, payload = {} }) {
   return entry;
 }
 
-function readMessageBusEntries(projectId, limit = 200) {
+function readMessageBusEntries(projectId, limit = 200, filters = {}) {
   ensureMessageBus();
   const max = clampInt(limit, 200, 1, 2000);
+  const kind = String(filters.kind || '').trim().toLowerCase();
+  const actor = String(filters.actor || '').trim().toLowerCase();
+  const query = String(filters.query || '').trim().toLowerCase();
 
   if (sqliteMessageBus) {
+    const where = [];
+    const values = [];
     if (projectId) {
-      const stmt = sqliteMessageBus.prepare(`
-        SELECT id, ts, project_id, from_actor, to_actor, kind, payload_json
-        FROM message_bus
-        WHERE project_id = ?
-        ORDER BY ts DESC
-        LIMIT ?
-      `);
-      return stmt.all(String(projectId), max).map((row) => ({
-        id: row.id,
-        ts: row.ts,
-        projectId: row.project_id,
-        from: row.from_actor,
-        to: row.to_actor,
-        kind: row.kind,
-        payload: safeJsonReadFromText(row.payload_json, {}),
-      }));
+      where.push('project_id = ?');
+      values.push(String(projectId));
     }
-
-    const stmt = sqliteMessageBus.prepare(`
+    if (kind) {
+      where.push('kind = ?');
+      values.push(kind);
+    }
+    if (actor) {
+      where.push('(LOWER(from_actor) LIKE ? OR LOWER(to_actor) LIKE ?)');
+      values.push(`%${actor}%`, `%${actor}%`);
+    }
+    if (query) {
+      where.push('(LOWER(kind) LIKE ? OR LOWER(from_actor) LIKE ? OR LOWER(to_actor) LIKE ? OR LOWER(payload_json) LIKE ?)');
+      values.push(`%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`);
+    }
+    const sql = `
       SELECT id, ts, project_id, from_actor, to_actor, kind, payload_json
       FROM message_bus
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY ts DESC
       LIMIT ?
-    `);
-    return stmt.all(max).map((row) => ({
+    `;
+    values.push(max);
+    const stmt = sqliteMessageBus.prepare(sql);
+    return stmt.all(...values).map((row) => ({
       id: row.id,
       ts: row.ts,
       projectId: row.project_id,
@@ -404,9 +542,18 @@ function readMessageBusEntries(projectId, limit = 200) {
     if (out.length >= max) break;
     try {
       const entry = JSON.parse(lines[i]);
-      if (!projectId || entry.projectId === projectId) {
-        out.push(entry);
+      if (projectId && entry.projectId !== projectId) continue;
+      if (kind && String(entry.kind || '').toLowerCase() !== kind) continue;
+      if (actor) {
+        const fromMatch = String(entry.from || '').toLowerCase().includes(actor);
+        const toMatch = String(entry.to || '').toLowerCase().includes(actor);
+        if (!fromMatch && !toMatch) continue;
       }
+      if (query) {
+        const haystack = JSON.stringify(entry).toLowerCase();
+        if (!haystack.includes(query)) continue;
+      }
+      out.push(entry);
     } catch (err) {
     }
   }
@@ -536,7 +683,7 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
     emitProjectEvent(projectId, 'task_update', task);
 
     const allDone = runtime.state.tasks.length > 0 && runtime.state.tasks.every((t) => t.status === 'done');
-    if (allDone) {
+    if (allDone && !shouldKeepRunningForRecurring(runtime.state)) {
       markProjectCompleted(runtime.state);
       return;
     }
@@ -701,9 +848,11 @@ function runProjectHeartbeat(projectState, source = 'interval') {
   const settings = runtimeSettings();
 
   const beatTs = nowIso();
+  ensureRecurringState(projectState);
   projectState.heartbeat.lastBeat = beatTs;
   projectState.heartbeat.status = 'alive';
   projectState.heartbeat.cycleCount = (projectState.heartbeat.cycleCount || 0) + 1;
+  enqueueRecurringTasks(projectState, beatTs, source);
 
   // ── Stall detection + auto-fix ───────────────────────────────────────────
   const runtime = projectRuntimes.get(projectState.id);
@@ -813,7 +962,7 @@ function runProjectHeartbeat(projectState, source = 'interval') {
     } else {
       // No runnable backlog tasks and no inprogress — check if everything is done
       const allDone = projectState.tasks.length > 0 && projectState.tasks.every((t) => t.status === 'done');
-      if (allDone) {
+      if (allDone && !shouldKeepRunningForRecurring(projectState)) {
         markProjectCompleted(projectState);
         return;
       }
@@ -896,7 +1045,9 @@ function loadProjectsFromDisk() {
       if (typeof t.retryCount !== 'number') t.retryCount = 0;
       if (typeof t.lastProgressAt === 'undefined') t.lastProgressAt = null;
       if (typeof t.executionTaskRunId === 'undefined') t.executionTaskRunId = null;
+      if (typeof t.recurringKey === 'undefined') t.recurringKey = null;
     });
+    ensureRecurringState(state);
     // Recovery: process restart cannot resume child process mid-run, so requeue active tasks.
     state.tasks.forEach((t) => {
       if (t.status === 'inprogress') {
@@ -950,6 +1101,11 @@ function createProjectFromTemplate({ name, template, goal }) {
     lastActivity: createdAt,
     completedAt: null,
     failedAt: null,
+    recurring: {
+      enabled: true,
+      lastRunAt: {},
+      lastIdleNoticeAt: null,
+    },
     agents: createInitialAgents(id, tpl),
     tasks: createInitialTasks(tpl),
     logs: [],
@@ -2338,7 +2494,10 @@ async function main() {
     if (pathname === '/api/message_bus' && req.method === 'GET') {
       const projectId = String(urlObj.searchParams.get('projectId') || '').trim();
       const limit = Number(urlObj.searchParams.get('limit') || 200);
-      writeJson(res, readMessageBusEntries(projectId || null, limit));
+      const kind = String(urlObj.searchParams.get('kind') || '').trim();
+      const actor = String(urlObj.searchParams.get('actor') || '').trim();
+      const query = String(urlObj.searchParams.get('q') || '').trim();
+      writeJson(res, readMessageBusEntries(projectId || null, limit, { kind, actor, query }));
       return;
     }
 
