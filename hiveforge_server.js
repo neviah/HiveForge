@@ -14,6 +14,8 @@ const TEMPLATES_ROOT = path.join(__dirname, 'templates');
 const CREDENTIALS_ROOT = path.join(SANDBOX_ROOT, 'credentials');
 const MAX_TASK_HISTORY = 100;
 const MAX_EVENTS_PER_TASK = 500;
+const MAX_STALL_CYCLES = 3;
+const MAX_AUTO_FIXES = 5;
 const sseClients = new Set();
 const projectSseClients = new Map();
 const activeTasks = new Map();
@@ -155,6 +157,7 @@ function createInitialTasks(template) {
     assignee: null,
     blockedBy: (dependencyGraph[task.id] || [])[0] || null,
     dependencies: dependencyGraph[task.id] || [],
+    inprogressCycles: 0,
     createdAt,
     completedAt: null,
     startedAt: null,
@@ -172,7 +175,9 @@ function summarizeProject(projectState) {
     heartbeat: projectState.heartbeat?.status || 'unknown',
     lastActivity: projectState.lastActivity,
     agentCount: projectState.agents.length,
-    currentTask: inProgress ? inProgress.title : null
+    currentTask: inProgress ? inProgress.title : null,
+    completedAt: projectState.completedAt || null,
+    failedAt: projectState.failedAt || null
   };
 }
 
@@ -215,6 +220,41 @@ function markAgentLog(agent, message) {
   }
 }
 
+function markProjectCompleted(projectState) {
+  projectState.status = 'completed';
+  projectState.completedAt = nowIso();
+  projectState.heartbeat.status = 'completed';
+  projectState.agents.forEach((agent) => {
+    if (!agent.isCoordinator) {
+      agent.status = 'idle';
+      agent.currentTask = null;
+      markAgentLog(agent, 'Project completed');
+    } else {
+      markAgentLog(agent, 'All tasks complete — project finished');
+    }
+  });
+  appendProjectLog(projectState, 'message', { kind: 'project_completed', tasksTotal: projectState.tasks.length });
+  emitProjectEvent(projectState.id, 'project_status', { status: 'completed', projectId: projectState.id });
+  stopProjectLoop(projectState.id);
+  persistProjectState(projectState);
+}
+
+function markProjectFailed(projectState) {
+  projectState.status = 'failed';
+  projectState.failedAt = nowIso();
+  projectState.heartbeat.status = 'failed';
+  projectState.agents.forEach((agent) => {
+    if (!agent.isCoordinator) {
+      agent.status = 'error';
+      markAgentLog(agent, 'Project failed — max auto-fixes reached');
+    }
+  });
+  appendProjectLog(projectState, 'error', { kind: 'project_failed', autoFixCount: projectState.heartbeat.autoFixCount });
+  emitProjectEvent(projectState.id, 'project_status', { status: 'failed', projectId: projectState.id });
+  stopProjectLoop(projectState.id);
+  persistProjectState(projectState);
+}
+
 function runProjectHeartbeat(projectState, source = 'interval') {
   if (projectState.status !== 'running') {
     return;
@@ -225,36 +265,76 @@ function runProjectHeartbeat(projectState, source = 'interval') {
   projectState.heartbeat.status = 'alive';
   projectState.heartbeat.cycleCount = (projectState.heartbeat.cycleCount || 0) + 1;
 
+  // ── Stall detection + auto-fix ───────────────────────────────────────────
   const activeTask = projectState.tasks.find((task) => task.status === 'inprogress');
   if (activeTask) {
-    activeTask.status = 'done';
-    activeTask.completedAt = beatTs;
-    const worker = projectState.agents.find((agent) => agent.id === activeTask.assignee);
-    if (worker) {
-      worker.status = 'idle';
-      worker.currentTask = null;
-      worker.tasksDone = Number(worker.tasksDone || 0) + 1;
-      markAgentLog(worker, `Completed ${activeTask.id}`);
-      emitProjectEvent(projectState.id, 'agent_message', {
-        agentId: worker.id,
-        name: worker.name,
-        role: worker.role,
-        status: worker.status,
-        currentTask: null,
-        tasksDone: worker.tasksDone,
-        recentLog: worker.recentLog
-      });
-    }
+    activeTask.inprogressCycles = (activeTask.inprogressCycles || 0) + 1;
 
-    appendProjectLog(projectState, 'task', {
-      kind: 'task_completed',
-      taskId: activeTask.id,
-      title: activeTask.title,
-      assignee: activeTask.assignee,
-      source
-    });
-    emitProjectEvent(projectState.id, 'task_update', activeTask);
+    if (activeTask.inprogressCycles >= MAX_STALL_CYCLES) {
+      // Stall detected — auto-fix: reset task, idle agent
+      const stalledAgent = projectState.agents.find((a) => a.id === activeTask.assignee);
+      if (stalledAgent) {
+        stalledAgent.status = 'idle';
+        stalledAgent.currentTask = null;
+        markAgentLog(stalledAgent, `Auto-fix: released from stalled ${activeTask.id}`);
+        emitProjectEvent(projectState.id, 'agent_message', {
+          agentId: stalledAgent.id, name: stalledAgent.name, role: stalledAgent.role,
+          status: stalledAgent.status, currentTask: null,
+          tasksDone: stalledAgent.tasksDone, recentLog: stalledAgent.recentLog
+        });
+      }
+      activeTask.status = 'backlog';
+      activeTask.assignee = null;
+      activeTask.startedAt = null;
+      activeTask.inprogressCycles = 0;
+      projectState.heartbeat.autoFixCount = (projectState.heartbeat.autoFixCount || 0) + 1;
+      appendProjectLog(projectState, 'fix', {
+        kind: 'task_stall_recovered',
+        taskId: activeTask.id,
+        title: activeTask.title,
+        autoFixCount: projectState.heartbeat.autoFixCount
+      });
+      emitProjectEvent(projectState.id, 'task_update', activeTask);
+
+      if (projectState.heartbeat.autoFixCount >= MAX_AUTO_FIXES) {
+        markProjectFailed(projectState);
+        return;
+      }
+    } else {
+      // Normal completion: task finishes this heartbeat
+      activeTask.status = 'done';
+      activeTask.completedAt = beatTs;
+      activeTask.inprogressCycles = 0;
+      const worker = projectState.agents.find((agent) => agent.id === activeTask.assignee);
+      if (worker) {
+        worker.status = 'idle';
+        worker.currentTask = null;
+        worker.tasksDone = Number(worker.tasksDone || 0) + 1;
+        markAgentLog(worker, `Completed ${activeTask.id}`);
+        emitProjectEvent(projectState.id, 'agent_message', {
+          agentId: worker.id, name: worker.name, role: worker.role,
+          status: worker.status, currentTask: null,
+          tasksDone: worker.tasksDone, recentLog: worker.recentLog
+        });
+      }
+      appendProjectLog(projectState, 'task', {
+        kind: 'task_completed',
+        taskId: activeTask.id,
+        title: activeTask.title,
+        assignee: activeTask.assignee,
+        source
+      });
+      emitProjectEvent(projectState.id, 'task_update', activeTask);
+
+      // ── Check project completion ───────────────────────────────────────
+      const allDone = projectState.tasks.every((t) => t.status === 'done');
+      if (allDone) {
+        markProjectCompleted(projectState);
+        return;
+      }
+    }
   } else {
+    // ── Start next available task ────────────────────────────────────────
     const nextTask = nextRunnableTask(projectState);
     if (nextTask) {
       const assignee = pickWorkerAgent(projectState);
@@ -263,10 +343,10 @@ function runProjectHeartbeat(projectState, source = 'interval') {
         nextTask.assignee = assignee.id;
         nextTask.startedAt = beatTs;
         nextTask.blockedBy = null;
+        nextTask.inprogressCycles = 0;
         assignee.status = 'running';
         assignee.currentTask = nextTask.title;
         markAgentLog(assignee, `Started ${nextTask.id}`);
-
         appendProjectLog(projectState, 'task', {
           kind: 'task_started',
           taskId: nextTask.id,
@@ -276,14 +356,17 @@ function runProjectHeartbeat(projectState, source = 'interval') {
         });
         emitProjectEvent(projectState.id, 'task_update', nextTask);
         emitProjectEvent(projectState.id, 'agent_message', {
-          agentId: assignee.id,
-          name: assignee.name,
-          role: assignee.role,
-          status: assignee.status,
-          currentTask: assignee.currentTask,
-          tasksDone: assignee.tasksDone,
-          recentLog: assignee.recentLog
+          agentId: assignee.id, name: assignee.name, role: assignee.role,
+          status: assignee.status, currentTask: assignee.currentTask,
+          tasksDone: assignee.tasksDone, recentLog: assignee.recentLog
         });
+      }
+    } else {
+      // No runnable backlog tasks and no inprogress — check if everything is done
+      const allDone = projectState.tasks.length > 0 && projectState.tasks.every((t) => t.status === 'done');
+      if (allDone) {
+        markProjectCompleted(projectState);
+        return;
       }
     }
   }
@@ -356,8 +439,19 @@ function loadProjectsFromDisk() {
     }
     const runtime = { state, timer: null };
     projectRuntimes.set(state.id, runtime);
+    // Normalize tasks that were saved before inprogressCycles was added
+    state.tasks.forEach((t) => { if (typeof t.inprogressCycles !== 'number') t.inprogressCycles = 0; });
+    // Recovery: if all tasks are done but status says running, mark completed
     if (state.status === 'running') {
-      startProjectLoop(state.id);
+      const allDone = state.tasks.length > 0 && state.tasks.every((t) => t.status === 'done');
+      if (allDone) {
+        state.status = 'completed';
+        state.completedAt = state.completedAt || nowIso();
+        state.heartbeat.status = 'completed';
+        persistProjectState(state);
+      } else {
+        startProjectLoop(state.id);
+      }
     }
   });
 }
@@ -380,6 +474,8 @@ function createProjectFromTemplate({ name, template, goal }) {
     createdAt,
     updatedAt: createdAt,
     lastActivity: createdAt,
+    completedAt: null,
+    failedAt: null,
     agents: createInitialAgents(id, tpl),
     tasks: createInitialTasks(tpl),
     logs: [],
@@ -1733,6 +1829,40 @@ async function main() {
           emitProjectEvent(projectId, 'project_status', { status: 'running', projectId });
           startProjectLoop(projectId);
         } else if (action === 'restart_agents') {
+          const isFailed    = runtime.state.status === 'failed';
+          const isCompleted = runtime.state.status === 'completed';
+
+          if (isCompleted) {
+            // Full replay: reset all tasks to backlog
+            runtime.state.tasks.forEach((t) => {
+              t.status = 'backlog';
+              t.assignee = null;
+              t.startedAt = null;
+              t.completedAt = null;
+              t.inprogressCycles = 0;
+              t.blockedBy = t.dependencies?.[0] || null;
+            });
+            runtime.state.completedAt = null;
+          } else {
+            // Reset any stalled inprogress tasks back to backlog
+            runtime.state.tasks.forEach((t) => {
+              if (t.status === 'inprogress') {
+                t.status = 'backlog';
+                t.assignee = null;
+                t.startedAt = null;
+                t.inprogressCycles = 0;
+              }
+            });
+          }
+
+          if (isFailed || isCompleted) {
+            runtime.state.status = 'running';
+            runtime.state.failedAt = null;
+            runtime.state.heartbeat.autoFixCount = 0;
+            runtime.state.heartbeat.status = 'alive';
+            emitProjectEvent(projectId, 'project_status', { status: 'running', projectId });
+          }
+
           runtime.state.agents.forEach((agent) => {
             if (agent.isCoordinator) {
               agent.status = 'running';
@@ -1742,7 +1872,8 @@ async function main() {
             }
             markAgentLog(agent, 'Restarted by coordinator control');
           });
-          appendProjectLog(runtime.state, 'fix', { kind: 'agents_restarted' });
+          appendProjectLog(runtime.state, 'fix', { kind: 'agents_restarted', from: isFailed ? 'failed' : isCompleted ? 'completed' : 'running' });
+          if (isFailed || isCompleted) startProjectLoop(projectId);
         } else if (action === 'heartbeat') {
           runProjectHeartbeat(runtime.state, 'manual_control');
         } else if (action === 'export') {

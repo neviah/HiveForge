@@ -90,9 +90,11 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .hf-sidebar-project-item:hover { border-color: var(--accent); }
 .hf-sidebar-project-item.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .hf-sidebar-project-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
-.hf-sidebar-project-dot.running { background: var(--success); }
-.hf-sidebar-project-dot.paused { background: var(--warning); }
-.hf-sidebar-project-dot.error { background: var(--danger); }
+.hf-sidebar-project-dot.running   { background: var(--success); }
+.hf-sidebar-project-dot.paused    { background: var(--warning); }
+.hf-sidebar-project-dot.error     { background: var(--danger); }
+.hf-sidebar-project-dot.failed    { background: var(--danger); }
+.hf-sidebar-project-dot.completed { background: var(--success); }
 .hf-sidebar-project-dot.idle { background: var(--muted); }
 .hf-sidebar-project-main { display: flex; flex-direction: column; min-width: 0; }
 .hf-sidebar-project-name { font-size: 0.82rem; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -227,16 +229,20 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 
 /* ── Status badge (alias used in tables / agent cards) ───── */
 .hf-status-badge { display: inline-block; font-size: 0.75rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 999px; }
-.hf-status-badge.running  { background: #dbeafe; color: #1d4ed8; }
-.hf-status-badge.idle     { background: #f1f5f9; color: #64748b; }
-.hf-status-badge.error    { background: #fee2e2; color: #b91c1c; }
-.hf-status-badge.ok       { background: #dcfce7; color: #15803d; }
-.hf-status-badge.paused   { background: #fef9c3; color: #92400e; }
-[data-theme='dark'] .hf-status-badge.running  { background: #1e3a5f; color: #93c5fd; }
-[data-theme='dark'] .hf-status-badge.idle     { background: #1e293b; color: #94a3b8; }
-[data-theme='dark'] .hf-status-badge.error    { background: #450a0a; color: #fca5a5; }
-[data-theme='dark'] .hf-status-badge.ok       { background: #052e16; color: #86efac; }
-[data-theme='dark'] .hf-status-badge.paused   { background: #1c1a00; color: #fde68a; }
+.hf-status-badge.running   { background: #dbeafe; color: #1d4ed8; }
+.hf-status-badge.idle      { background: #f1f5f9; color: #64748b; }
+.hf-status-badge.error     { background: #fee2e2; color: #b91c1c; }
+.hf-status-badge.ok        { background: #dcfce7; color: #15803d; }
+.hf-status-badge.paused    { background: #fef9c3; color: #92400e; }
+.hf-status-badge.completed { background: #dcfce7; color: #15803d; }
+.hf-status-badge.failed    { background: #fee2e2; color: #b91c1c; }
+[data-theme='dark'] .hf-status-badge.running   { background: #1e3a5f; color: #93c5fd; }
+[data-theme='dark'] .hf-status-badge.idle      { background: #1e293b; color: #94a3b8; }
+[data-theme='dark'] .hf-status-badge.error     { background: #450a0a; color: #fca5a5; }
+[data-theme='dark'] .hf-status-badge.ok        { background: #052e16; color: #86efac; }
+[data-theme='dark'] .hf-status-badge.paused    { background: #1c1a00; color: #fde68a; }
+[data-theme='dark'] .hf-status-badge.completed { background: #052e16; color: #86efac; }
+[data-theme='dark'] .hf-status-badge.failed    { background: #450a0a; color: #fca5a5; }
 
 /* ── Agent card extras ────────────────────────────────────── */
 .hf-agent-stats { display: flex; gap: 1rem; font-size: 0.78rem; color: var(--muted); }

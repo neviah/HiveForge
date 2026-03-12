@@ -209,8 +209,12 @@ function handleSSEEvent(type, data) {
   if (type === 'project_status') {
     if (state.activeProject && data.projectId === state.activeProject.id) {
       state.activeProject.status = data.status;
-      renderSidebarProjectList(state.projects.map(p => p.id === data.projectId ? { ...p, status: data.status } : p));
+      const updatedProjects = state.projects.map(p => p.id === data.projectId ? { ...p, status: data.status } : p);
+      state.projects = updatedProjects;
+      renderSidebarProjectList(updatedProjects);
       if (state.activeSection === 'agents') onSectionActivate('agents');
+      if (data.status === 'completed') showToast('\u2705 Project completed — all tasks done!', 'ok');
+      if (data.status === 'failed')    showToast('\u274c Project failed — max auto-fixes reached. Use Restart Agents to retry.', 'error');
     }
   }
 }
@@ -696,7 +700,10 @@ const Dashboard = {
         if (state.activeSection === 'agents') onSectionActivate('agents');
       } else if (action === 'restart_agents') {
         showToast('Agents restarted.', 'ok');
+        state.activeProject.status = 'running';
+        renderSidebarProjectList(state.projects.map(p => p.id === state.activeProject.id ? state.activeProject : p));
         if (state.activeSection === 'agents') onSectionActivate('agents');
+        if (state.activeSection === 'kanban')  onSectionActivate('kanban');
       }
     } catch (err) {
       showToast(`Control action failed: ${err.message}`, 'error');
