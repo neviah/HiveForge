@@ -282,6 +282,27 @@ function recurringScheduleForTemplate(templateKey) {
   }));
 }
 
+function humanizeDurationMs(ms) {
+  const totalMinutes = Math.max(1, Math.round(Number(ms || 0) / 60000));
+  if (totalMinutes % (24 * 60) === 0) return `${totalMinutes / (24 * 60)}d`;
+  if (totalMinutes % 60 === 0) return `${totalMinutes / 60}h`;
+  return `${totalMinutes}m`;
+}
+
+function summarizeProjectAutomation(projectState) {
+  ensureRecurringState(projectState);
+  return {
+    recurring: {
+      enabled: Boolean(projectState.recurring.enabled),
+      lastRunAt: projectState.recurring.lastRunAt || {},
+    },
+    schedule: recurringScheduleForTemplate(projectState.template).map((entry) => ({
+      ...entry,
+      everyHuman: humanizeDurationMs(entry.everyMs),
+    })),
+  };
+}
+
 function ensureRecurringState(projectState) {
   if (!projectState.recurring || typeof projectState.recurring !== 'object') {
     projectState.recurring = { enabled: true, lastRunAt: {}, lastIdleNoticeAt: null };
@@ -2473,6 +2494,59 @@ async function main() {
         llm: {
           endpoint: appState.llm.endpoint,
         },
+      });
+      return;
+    }
+
+    if (pathname === '/api/project_settings' && req.method === 'GET') {
+      const projectId = String(urlObj.searchParams.get('projectId') || '').trim();
+      const runtime = projectId ? projectRuntimes.get(projectId) : null;
+      if (!runtime) {
+        writeJson(res, { error: 'Project not found' }, 404);
+        return;
+      }
+      writeJson(res, summarizeProjectAutomation(runtime.state));
+      return;
+    }
+
+    if (pathname === '/api/project_settings' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = parseJsonBodySafe(body);
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+
+        const projectId = String(payload.projectId || '').trim();
+        const runtime = projectId ? projectRuntimes.get(projectId) : null;
+        if (!runtime) {
+          writeJson(res, { error: 'Project not found' }, 404);
+          return;
+        }
+
+        ensureRecurringState(runtime.state);
+        const recurring = payload.recurring && typeof payload.recurring === 'object' ? payload.recurring : {};
+        if (typeof recurring.enabled === 'boolean') {
+          runtime.state.recurring.enabled = recurring.enabled;
+          appendProjectLog(runtime.state, 'message', {
+            kind: 'project_recurring_updated',
+            enabled: recurring.enabled,
+          });
+          appendMessageBusEntry({
+            projectId,
+            from: 'coordinator',
+            to: 'scheduler',
+            kind: 'project_recurring_updated',
+            payload: { enabled: recurring.enabled },
+          });
+        }
+
+        persistProjectState(runtime.state);
+        writeJson(res, summarizeProjectAutomation(runtime.state));
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
       });
       return;
     }

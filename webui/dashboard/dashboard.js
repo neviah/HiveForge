@@ -23,6 +23,7 @@ const API = {
   control:     '/api/control',
   settings:    '/api/settings',
   settingsReset: '/api/settings/reset',
+  projectSettings: '/api/project_settings',
 };
 
 const SECTION_TITLES = {
@@ -207,6 +208,10 @@ async function fetchSettings() {
   return apiFetch(API.settings);
 }
 
+async function fetchProjectSettings(projectId) {
+  return apiFetch(`${API.projectSettings}?projectId=${encodeURIComponent(projectId)}`);
+}
+
 function renderSettings(data) {
   const runtime = data?.runtime || {};
   const llm = data?.llm || {};
@@ -215,6 +220,25 @@ function renderSettings(data) {
   document.getElementById('settingsMaxAutoFixes').value = String(Number(runtime.maxAutoFixes) || 5);
   document.getElementById('settingsCountManualHeartbeat').checked = Boolean(runtime.countManualHeartbeatForStall);
   document.getElementById('settingsLlmEndpoint').value = llm.endpoint || '';
+}
+
+function renderProjectAutomation(data) {
+  const empty = document.getElementById('projectAutomationEmpty');
+  const panel = document.getElementById('projectAutomationPanel');
+  const enabledInput = document.getElementById('projectRecurringEnabled');
+  const schedule = document.getElementById('projectRecurringSchedule');
+  if (!data || !state.activeProject) {
+    if (empty) empty.style.display = 'block';
+    if (panel) panel.style.display = 'none';
+    return;
+  }
+  empty.style.display = 'none';
+  panel.style.display = 'block';
+  enabledInput.checked = Boolean(data.recurring?.enabled);
+  const entries = Array.isArray(data.schedule) ? data.schedule : [];
+  schedule.innerHTML = entries.length
+    ? entries.map((entry) => `<div style="padding:0.3rem 0;border-bottom:1px solid var(--border);"><strong>${esc(entry.title)}</strong><div style="font-size:0.78rem;color:var(--muted);">${esc(entry.phase)} · every ${esc(entry.everyHuman || 'n/a')}</div></div>`).join('')
+    : '<div style="color:var(--muted);">No recurring schedule defined for this template.</div>';
 }
 
 // ─── SSE ─────────────────────────────────────────────────────────────────────
@@ -617,7 +641,11 @@ async function onSectionActivate(id) {
       break;
     }
     case 'marketplace': renderMarketplace(state.marketplaceFilter); break;
-    case 'settings':    renderSettings(await fetchSettings()); break;
+    case 'settings': {
+      renderSettings(await fetchSettings());
+      renderProjectAutomation(pid ? await fetchProjectSettings(pid) : null);
+      break;
+    }
   }
 }
 
@@ -849,6 +877,31 @@ const Dashboard = {
     } catch (err) {
       showStatus(status, `Failed: ${err.message}`, 'error');
       showToast(`Could not reset settings: ${err.message}`, 'error');
+    }
+  },
+
+  async saveProjectAutomation() {
+    if (!state.activeProject) {
+      showToast('No active project selected.', 'error');
+      return;
+    }
+    const status = document.getElementById('projectAutomationStatus');
+    const recurringEnabled = document.getElementById('projectRecurringEnabled').checked;
+    showStatus(status, 'Saving…', 'running');
+    try {
+      const updated = await apiFetch(API.projectSettings, {
+        method: 'POST',
+        body: JSON.stringify({
+          projectId: state.activeProject.id,
+          recurring: { enabled: recurringEnabled },
+        }),
+      });
+      renderProjectAutomation(updated);
+      showStatus(status, 'Saved.', 'ok');
+      showToast(`Recurring automation ${recurringEnabled ? 'enabled' : 'disabled'} for this project.`, 'ok');
+    } catch (err) {
+      showStatus(status, `Failed: ${err.message}`, 'error');
+      showToast(`Could not save project automation: ${err.message}`, 'error');
     }
   },
 };
