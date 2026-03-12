@@ -25,6 +25,8 @@ const API = {
   settingsReset: '/api/settings/reset',
   projectSettings: '/api/project_settings',
   credentialPolicy: '/api/credential_policy',
+  credentialBudget: '/api/credential_budget',
+  credentialAudit: '/api/credential_audit',
   connectorsExecute: '/api/connectors/execute',
 };
 
@@ -116,6 +118,8 @@ const state = {
   logs:           [],
   messageBus:     [],
   credentialPolicies: [],
+  credentialBudget: [],
+  credentialAudit: [],
   messageBusPoller: null,
   messageBusFilter: { kind: '', actor: '', q: '' },
   marketplaceFilter: { division: 'All', query: '' },
@@ -215,15 +219,23 @@ async function fetchProjectSettings(projectId) {
   return apiFetch(`${API.projectSettings}?projectId=${encodeURIComponent(projectId)}`);
 }
 
-async function runConnectorCheck(connector, projectId, dryRun = true) {
+async function runConnectorCheck(connector, projectId, dryRun = true, operation = '', estimatedCost = null) {
   return apiFetch(API.connectorsExecute, {
     method: 'POST',
-    body: JSON.stringify({ connector, projectId, dryRun }),
+    body: JSON.stringify({ connector, projectId, dryRun, operation, estimatedCost }),
   });
 }
 
 async function fetchCredentialPolicy(projectId) {
   return apiFetch(`${API.credentialPolicy}?projectId=${encodeURIComponent(projectId)}`);
+}
+
+async function fetchCredentialBudget(projectId) {
+  return apiFetch(`${API.credentialBudget}?projectId=${encodeURIComponent(projectId)}`);
+}
+
+async function fetchCredentialAudit(projectId, limit = 80) {
+  return apiFetch(`${API.credentialAudit}?projectId=${encodeURIComponent(projectId)}&limit=${encodeURIComponent(limit)}`);
 }
 
 function renderSettings(data) {
@@ -445,9 +457,9 @@ function renderAnalytics(data) {
 }
 
 // Credential cards
-function renderCredentials(creds) {
+function renderCredentials(creds, budgetData = null) {
   const grid = document.getElementById('credGrid');
-  renderCredentialBudgetSummary(creds);
+  renderCredentialBudgetSummary(creds, budgetData);
   grid.innerHTML = CREDENTIAL_SERVICES.map(svc => {
     const saved = (creds ?? []).find(c => c.service === svc.id);
     const isConnected = Boolean(saved?.connected);
@@ -469,33 +481,42 @@ function renderCredentials(creds) {
   }).join('');
 }
 
-function renderCredentialBudgetSummary(creds = []) {
+function renderCredentialBudgetSummary(creds = [], budgetData = null) {
   const totalEl = document.getElementById('credBudgetTotal');
+  const projectSpendEl = document.getElementById('credProjectSpendTotal');
   const connectedEl = document.getElementById('credConnectedCount');
   const listEl = document.getElementById('credBudgetSummaryList');
-  if (!totalEl || !connectedEl || !listEl) return;
+  if (!totalEl || !projectSpendEl || !connectedEl || !listEl) return;
+
+  const budgetEntries = Array.isArray(budgetData?.services) ? budgetData.services : [];
 
   const normalized = CREDENTIAL_SERVICES.map((svc) => {
     const saved = (creds ?? []).find((entry) => entry.service === svc.id) || null;
+    const budget = budgetEntries.find((entry) => entry.service === svc.id) || null;
     return {
       ...svc,
       connected: Boolean(saved?.connected),
       budget: typeof saved?.budget === 'number' && Number.isFinite(saved.budget) ? saved.budget : null,
+      monthlySpent: typeof budget?.monthlySpent === 'number' ? budget.monthlySpent : 0,
+      monthlyCap: typeof budget?.monthlyCap === 'number' ? budget.monthlyCap : null,
+      enabled: typeof budget?.enabled === 'boolean' ? budget.enabled : true,
     };
   });
 
   const totalBudget = normalized.reduce((sum, svc) => sum + (svc.budget || 0), 0);
+  const totalSpend = normalized.reduce((sum, svc) => sum + (svc.monthlySpent || 0), 0);
   const connectedCount = normalized.filter((svc) => svc.connected).length;
 
   totalEl.textContent = totalBudget ? `$${totalBudget.toLocaleString()}` : '$0';
+  projectSpendEl.textContent = totalSpend ? `$${totalSpend.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '$0';
   connectedEl.textContent = `${connectedCount}/${normalized.length}`;
   listEl.innerHTML = normalized.map((svc) => `
     <div class="hf-cred-summary-row">
       <div>
         <div class="hf-cred-summary-name">${svc.icon} ${svc.label}</div>
-        <div class="hf-cred-summary-meta">${svc.connected ? 'Connected' : 'Not set'}</div>
+        <div class="hf-cred-summary-meta">${svc.connected ? 'Connected' : 'Not set'}${svc.enabled ? '' : ' · blocked for project'}</div>
       </div>
-      <div class="hf-cred-summary-value">${svc.budget !== null ? `$${svc.budget.toLocaleString()}/mo` : '—'}</div>
+      <div class="hf-cred-summary-value">${svc.monthlySpent ? `$${svc.monthlySpent.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '$0'}${svc.monthlyCap !== null ? ` / $${svc.monthlyCap.toLocaleString()}` : (svc.budget !== null ? ` / $${svc.budget.toLocaleString()}` : '')}</div>
     </div>
   `).join('');
 }
@@ -531,6 +552,34 @@ function renderProjectCredentialPolicy(data) {
   }
 
   syncProjectCredentialPolicyForm();
+}
+
+function renderCredentialAudit(entries = null) {
+  const empty = document.getElementById('credentialAuditEmpty');
+  const stream = document.getElementById('credentialAuditStream');
+  const items = Array.isArray(entries) ? entries : [];
+  if (!state.activeProject) {
+    if (empty) empty.style.display = 'block';
+    if (stream) stream.style.display = 'none';
+    return;
+  }
+  if (!stream || !empty) return;
+  empty.style.display = items.length ? 'none' : 'block';
+  stream.style.display = items.length ? 'block' : 'none';
+  stream.innerHTML = items.length ? items.map((entry) => {
+    const decisionClass = entry.decision === 'allow' ? 'ok' : entry.decision === 'deny' ? 'error' : 'idle';
+    const cost = typeof entry.cost === 'number' && entry.cost > 0 ? ` · cost $${entry.cost}` : '';
+    const service = entry.service || 'credential';
+    const operation = entry.operation ? `/${entry.operation}` : '';
+    return `
+      <div class="hf-log-line">
+        <span class="hf-log-ts">${esc((entry.ts || '').replace('T', ' ').slice(0, 19))}</span>
+        <span class="hf-status-badge ${decisionClass}">${esc(entry.decision || entry.action || 'event')}</span>
+        <strong>${esc(service)}${esc(operation)}</strong>
+        <div style="color:var(--muted);margin-top:0.2rem;">${esc(entry.reason || entry.action || 'Credential event')}${esc(cost)}</div>
+      </div>
+    `;
+  }).join('') : '';
 }
 
 function syncProjectCredentialPolicyForm() {
@@ -717,9 +766,16 @@ async function onSectionActivate(id) {
     case 'kanban':      if (pid) renderKanban(state.tasks = await fetchTasks(pid)); break;
     case 'heartbeat':   if (pid) renderHeartbeatCard(await fetchHeartbeat(pid)); break;
     case 'credentials': {
-      renderCredentials(await fetchCredentials());
-      renderPlatformConnections(await fetchIntegrations());
-      renderProjectCredentialPolicy(pid ? await fetchCredentialPolicy(pid) : null);
+      {
+        const creds = await fetchCredentials();
+        const budget = pid ? await fetchCredentialBudget(pid) : null;
+        const policy = pid ? await fetchCredentialPolicy(pid) : null;
+        const audit = pid ? await fetchCredentialAudit(pid) : [];
+        renderCredentials(creds, budget);
+        renderPlatformConnections(await fetchIntegrations());
+        renderProjectCredentialPolicy(policy);
+        renderCredentialAudit(audit);
+      }
       break;
     }
     case 'analytics':   renderAnalytics(pid ? await fetchAnalytics(pid) : null); break;
@@ -884,6 +940,20 @@ const Dashboard = {
     syncProjectCredentialPolicyForm();
   },
 
+  async refreshCredentialAudit() {
+    if (!state.activeProject) {
+      showToast('No active project selected.', 'error');
+      return;
+    }
+    try {
+      const audit = await fetchCredentialAudit(state.activeProject.id);
+      renderCredentialAudit(audit);
+      showToast('Credential audit refreshed.', 'ok');
+    } catch (err) {
+      showToast(`Could not refresh credential audit: ${err.message}`, 'error');
+    }
+  },
+
   async saveProjectCredentialPolicy() {
     if (!state.activeProject) {
       showToast('No active project selected.', 'error');
@@ -912,6 +982,8 @@ const Dashboard = {
       renderProjectCredentialPolicy(updated);
       document.getElementById('credentialPolicyService').value = service;
       syncProjectCredentialPolicyForm();
+      renderCredentialAudit(await fetchCredentialAudit(state.activeProject.id));
+      renderCredentials(await fetchCredentials(), await fetchCredentialBudget(state.activeProject.id));
       showStatus(status, 'Saved.', 'ok');
       showToast(`Saved ${service} policy for ${state.activeProject.name}.`, 'ok');
     } catch (err) {
@@ -1046,23 +1118,33 @@ const Dashboard = {
     const output = document.getElementById('connectorCheckOutput');
     const connector = document.getElementById('connectorCheckType').value;
     const dryRun = document.getElementById('connectorCheckDryRun').checked;
+    const operation = document.getElementById('connectorCheckOperation').value.trim();
+    const estimatedCostRaw = document.getElementById('connectorCheckEstimatedCost').value.trim();
+    const estimatedCost = estimatedCostRaw === '' ? null : Number(estimatedCostRaw);
 
     showStatus(status, 'Running…', 'running');
     if (output) output.textContent = 'Running connector policy check...';
 
     try {
-      const result = await runConnectorCheck(connector, state.activeProject?.id || null, dryRun);
+      const result = await runConnectorCheck(connector, state.activeProject?.id || null, dryRun, operation, estimatedCost);
       const decision = String(result?.decision || '').toLowerCase();
       showStatus(status, result.ok ? 'Allowed' : 'Denied', result.ok ? 'ok' : 'error');
       if (output) {
         output.textContent = JSON.stringify({
           connector: result.connector,
+          operation: result.operation,
           decision,
           reason: result.reason,
           dryRun: result.dryRun,
           checkedAt: result.checkedAt,
           checks: result.checks,
+          budget: result.budget,
+          execution: result.execution,
         }, null, 2);
+      }
+      if (state.activeProject?.id) {
+        renderCredentialAudit(await fetchCredentialAudit(state.activeProject.id));
+        renderCredentials(await fetchCredentials(), await fetchCredentialBudget(state.activeProject.id));
       }
       showToast(`Connector ${result.connector}: ${decision || (result.ok ? 'allow' : 'deny')}.`, result.ok ? 'ok' : 'info');
     } catch (err) {

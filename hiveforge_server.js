@@ -13,6 +13,8 @@ const PROJECTS_ROOT = path.join(SANDBOX_ROOT, 'projects');
 const TEMPLATES_ROOT = path.join(__dirname, 'templates');
 const CREDENTIALS_ROOT = path.join(SANDBOX_ROOT, 'credentials');
 const CREDENTIAL_POLICIES_ROOT = path.join(CREDENTIALS_ROOT, 'policies');
+const CREDENTIAL_AUDIT_LOG_PATH = path.join(CREDENTIALS_ROOT, 'audit.log.ndjson');
+const CREDENTIAL_BUDGET_COUNTERS_PATH = path.join(CREDENTIALS_ROOT, 'budget_counters.json');
 const AGENTS_RUNTIME_ROOT = path.join(SANDBOX_ROOT, 'agents');
 const MESSAGE_BUS_PATH = path.join(AGENTS_RUNTIME_ROOT, 'messages.db');
 const MAX_TASK_HISTORY = 100;
@@ -1201,6 +1203,23 @@ function credentialTokenPath(service) {
   return path.join(CREDENTIALS_ROOT, `${service}.enc`);
 }
 
+function ensureCredentialStorage() {
+  ensureDir(CREDENTIALS_ROOT);
+  ensureDir(CREDENTIAL_POLICIES_ROOT);
+}
+
+function readCredentialToken(service) {
+  const target = credentialTokenPath(service);
+  if (!fs.existsSync(target)) return null;
+  try {
+    const encoded = fs.readFileSync(target, 'utf-8').trim();
+    if (!encoded) return null;
+    return Buffer.from(encoded, 'base64').toString('utf-8');
+  } catch (err) {
+    return null;
+  }
+}
+
 function credentialPolicyPath(projectId, service) {
   const safeProject = String(projectId || '').trim();
   const safeService = String(service || '').trim();
@@ -1251,8 +1270,115 @@ function upsertProjectCredentialPolicy(projectId, service, patch = {}) {
   return next;
 }
 
+function currentBudgetPeriods(ts = nowIso()) {
+  const iso = String(ts || nowIso());
+  return {
+    day: iso.slice(0, 10),
+    month: iso.slice(0, 7),
+  };
+}
+
+function readCredentialBudgetCounters() {
+  ensureCredentialStorage();
+  return safeJsonRead(CREDENTIAL_BUDGET_COUNTERS_PATH, {});
+}
+
+function writeCredentialBudgetCounters(counters) {
+  ensureCredentialStorage();
+  fs.writeFileSync(CREDENTIAL_BUDGET_COUNTERS_PATH, `${JSON.stringify(counters, null, 2)}\n`, 'utf-8');
+}
+
+function normalizeBudgetCounterEntry(entry, ts = nowIso()) {
+  const periods = currentBudgetPeriods(ts);
+  const next = {
+    dailyPeriod: periods.day,
+    monthlyPeriod: periods.month,
+    dailySpent: 0,
+    monthlySpent: 0,
+    updatedAt: null,
+    ...(entry && typeof entry === 'object' ? entry : {}),
+  };
+
+  if (next.dailyPeriod !== periods.day) {
+    next.dailyPeriod = periods.day;
+    next.dailySpent = 0;
+  }
+  if (next.monthlyPeriod !== periods.month) {
+    next.monthlyPeriod = periods.month;
+    next.monthlySpent = 0;
+  }
+  return next;
+}
+
+function getCredentialBudgetSnapshot(projectId) {
+  const counters = readCredentialBudgetCounters();
+  const projectCounters = counters[String(projectId || '')] || {};
+  const snapshot = {};
+  SUPPORTED_CREDENTIAL_SERVICES.forEach((service) => {
+    snapshot[service] = normalizeBudgetCounterEntry(projectCounters[service], nowIso());
+  });
+  return snapshot;
+}
+
+function recordCredentialSpend(projectId, service, amount, ts = nowIso()) {
+  const safeProjectId = String(projectId || '').trim();
+  const safeService = String(service || '').trim();
+  const increment = Number(amount);
+  if (!safeProjectId || !safeService || !Number.isFinite(increment) || increment <= 0) {
+    return normalizeBudgetCounterEntry({}, ts);
+  }
+
+  const counters = readCredentialBudgetCounters();
+  counters[safeProjectId] = counters[safeProjectId] || {};
+  const current = normalizeBudgetCounterEntry(counters[safeProjectId][safeService], ts);
+  current.dailySpent = Number((current.dailySpent + increment).toFixed(2));
+  current.monthlySpent = Number((current.monthlySpent + increment).toFixed(2));
+  current.updatedAt = ts;
+  counters[safeProjectId][safeService] = current;
+  writeCredentialBudgetCounters(counters);
+  return current;
+}
+
+function appendCredentialAudit(record = {}) {
+  ensureCredentialStorage();
+  const entry = {
+    id: crypto.randomUUID(),
+    ts: nowIso(),
+    projectId: record.projectId ? String(record.projectId) : null,
+    service: record.service ? String(record.service) : null,
+    operation: record.operation ? String(record.operation) : null,
+    action: record.action ? String(record.action) : 'credential_event',
+    decision: record.decision ? String(record.decision) : null,
+    errorCode: record.errorCode ? String(record.errorCode) : null,
+    cost: typeof record.cost === 'number' && Number.isFinite(record.cost) ? record.cost : 0,
+    dryRun: Boolean(record.dryRun),
+    reason: record.reason ? redactSensitive(String(record.reason)) : null,
+    meta: record.meta && typeof record.meta === 'object' ? record.meta : {},
+  };
+  fs.appendFileSync(CREDENTIAL_AUDIT_LOG_PATH, `${JSON.stringify(entry)}\n`, 'utf-8');
+  return entry;
+}
+
+function readCredentialAudit(projectId, limit = 100) {
+  ensureCredentialStorage();
+  if (!fs.existsSync(CREDENTIAL_AUDIT_LOG_PATH)) return [];
+  const raw = fs.readFileSync(CREDENTIAL_AUDIT_LOG_PATH, 'utf-8');
+  const rows = raw.split(/\r?\n/).filter(Boolean).map((line) => {
+    try {
+      return JSON.parse(line);
+    } catch (err) {
+      return null;
+    }
+  }).filter(Boolean);
+
+  const filtered = projectId
+    ? rows.filter((entry) => String(entry.projectId || '') === String(projectId))
+    : rows;
+  return filtered.slice(-clampInt(limit, 100, 1, 500)).reverse();
+}
+
 function readCredentialMetadata() {
-  ensureDir(CREDENTIALS_ROOT);
+  ensureCredentialStorage();
   return SUPPORTED_CREDENTIAL_SERVICES.map((service) => {
     const metadata = safeJsonRead(credentialMetaPath(service), {});
     const connected = Boolean(metadata.connected) || fs.existsSync(credentialTokenPath(service));
@@ -1270,7 +1396,7 @@ function readCredentialMetadata() {
 }
 
 function saveCredentialMetadata(service, token, budget) {
-  ensureDir(CREDENTIALS_ROOT);
+  ensureCredentialStorage();
   const meta = safeJsonRead(credentialMetaPath(service), {});
   meta.service = service;
   meta.connected = true;
@@ -1284,6 +1410,15 @@ function saveCredentialMetadata(service, token, budget) {
   fs.writeFileSync(credentialMetaPath(service), `${JSON.stringify(meta, null, 2)}\n`, 'utf-8');
   const encoded = Buffer.from(String(token), 'utf-8').toString('base64');
   fs.writeFileSync(credentialTokenPath(service), `${encoded}\n`, 'utf-8');
+  appendCredentialAudit({
+    service,
+    action: 'credential_upsert',
+    decision: 'allow',
+    reason: 'Credential metadata updated.',
+    meta: {
+      monthlyBudget: meta.budget.monthly,
+    },
+  });
 }
 
 function deleteCredentialMetadata(service) {
@@ -1295,6 +1430,12 @@ function deleteCredentialMetadata(service) {
   if (fs.existsSync(tokenPath)) {
     fs.rmSync(tokenPath, { force: true });
   }
+  appendCredentialAudit({
+    service,
+    action: 'credential_delete',
+    decision: 'allow',
+    reason: 'Credential removed.',
+  });
 }
 
 function makeAnalyticsSnapshot(projectState) {
@@ -1732,6 +1873,8 @@ async function executeConnectorPolicy(connectorId, options = {}) {
     const found = metadata.find((entry) => entry.service === connector.credentialService);
     const connected = Boolean(found && found.connected);
     const policy = options.projectId ? getProjectCredentialPolicy(options.projectId, connector.credentialService) : null;
+    const budgetEntry = options.projectId ? getCredentialBudgetSnapshot(options.projectId)[connector.credentialService] : null;
+    const estimatedCost = typeof options.estimatedCost === 'number' && Number.isFinite(options.estimatedCost) ? options.estimatedCost : 0;
     checks.push({
       type: 'credential',
       target: connector.credentialService,
@@ -1752,13 +1895,23 @@ async function executeConnectorPolicy(connectorId, options = {}) {
       });
 
       if (typeof options.estimatedCost === 'number' && Number.isFinite(options.estimatedCost) && typeof policy.monthlyCap === 'number') {
+        const projectedMonthly = Number(((budgetEntry?.monthlySpent || 0) + estimatedCost).toFixed(2));
         checks.push({
           type: 'budget_cap',
           target: connector.credentialService,
-          ok: options.estimatedCost <= policy.monthlyCap,
-          message: options.estimatedCost <= policy.monthlyCap
-            ? `Estimated cost $${options.estimatedCost} is within monthly cap $${policy.monthlyCap}.`
-            : `Estimated cost $${options.estimatedCost} exceeds monthly cap $${policy.monthlyCap}.`
+          ok: projectedMonthly <= policy.monthlyCap,
+          message: projectedMonthly <= policy.monthlyCap
+            ? `Projected monthly spend $${projectedMonthly} is within cap $${policy.monthlyCap}.`
+            : `Projected monthly spend $${projectedMonthly} exceeds cap $${policy.monthlyCap}.`
+        });
+      }
+
+      if (budgetEntry) {
+        checks.push({
+          type: 'budget_snapshot',
+          target: connector.credentialService,
+          ok: true,
+          message: `Current spend: daily $${Number(budgetEntry.dailySpent || 0).toFixed(2)}, monthly $${Number(budgetEntry.monthlySpent || 0).toFixed(2)}.`
         });
       }
     }
@@ -1770,6 +1923,7 @@ async function executeConnectorPolicy(connectorId, options = {}) {
   return {
     connector: connector.id,
     label: connector.label,
+    credentialService: connector.credentialService || null,
     ok,
     decision: ok ? 'allow' : 'deny',
     reason: ok
@@ -1778,6 +1932,105 @@ async function executeConnectorPolicy(connectorId, options = {}) {
     dryRun: Boolean(options.dryRun),
     checkedAt: nowIso(),
     checks,
+  };
+}
+
+async function executeNetlifyConnector(options = {}) {
+  const operation = String(options.operation || 'list_sites').trim() || 'list_sites';
+  const token = readCredentialToken('netlify');
+  if (!token) {
+    return {
+      ok: false,
+      errorCode: 'SECRET_MISSING',
+      message: 'Netlify credential token is missing.',
+      operation,
+      actualCost: 0,
+      data: null,
+    };
+  }
+
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    'User-Agent': 'HiveForge',
+  };
+
+  if (operation === 'get_account') {
+    const resp = await fetchWithTimeout('https://api.netlify.com/api/v1/user', { headers }, 10000);
+    if (!resp.ok) {
+      return {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: `Netlify account request failed with HTTP ${resp.status}.`,
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    const body = await resp.json();
+    return {
+      ok: true,
+      message: 'Fetched Netlify account summary.',
+      operation,
+      actualCost: 0,
+      data: {
+        id: body?.id || null,
+        email: body?.email || null,
+        fullName: body?.full_name || null,
+      },
+    };
+  }
+
+  if (operation === 'list_sites') {
+    const resp = await fetchWithTimeout('https://api.netlify.com/api/v1/sites', { headers }, 10000);
+    if (!resp.ok) {
+      return {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: `Netlify sites request failed with HTTP ${resp.status}.`,
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    const body = await resp.json();
+    const sites = Array.isArray(body) ? body.slice(0, 20).map((site) => ({
+      id: site?.id || null,
+      name: site?.name || null,
+      url: site?.url || null,
+      state: site?.state || null,
+      sslUrl: site?.ssl_url || null,
+    })) : [];
+    return {
+      ok: true,
+      message: `Fetched ${sites.length} Netlify site${sites.length === 1 ? '' : 's'}.`,
+      operation,
+      actualCost: 0,
+      data: { sites },
+    };
+  }
+
+  return {
+    ok: false,
+    errorCode: 'VALIDATION_ERROR',
+    message: `Unsupported Netlify operation: ${operation}.`,
+    operation,
+    actualCost: 0,
+    data: null,
+  };
+}
+
+async function executeLiveConnector(connectorId, options = {}) {
+  const connectorKey = String(connectorId || '').trim().toLowerCase();
+  if (connectorKey === 'netlify') {
+    return executeNetlifyConnector(options);
+  }
+  return {
+    ok: false,
+    errorCode: 'CONNECTOR_NOT_IMPLEMENTED',
+    message: `No live adapter implemented yet for ${connectorKey}.`,
+    operation: String(options.operation || 'default'),
+    actualCost: 0,
+    data: null,
   };
 }
 
@@ -2534,6 +2787,41 @@ async function main() {
       return;
     }
 
+    if (pathname === '/api/credential_budget' && req.method === 'GET') {
+      const projectId = String(urlObj.searchParams.get('projectId') || '').trim();
+      if (!projectId) {
+        writeJson(res, { error: 'projectId is required' }, 400);
+        return;
+      }
+
+      const snapshot = getCredentialBudgetSnapshot(projectId);
+      const policies = listProjectCredentialPolicies(projectId);
+      writeJson(res, {
+        projectId,
+        services: SUPPORTED_CREDENTIAL_SERVICES.map((service) => {
+          const policy = policies.find((entry) => entry.service === service) || defaultCredentialPolicy(projectId, service);
+          const budget = snapshot[service] || normalizeBudgetCounterEntry({}, nowIso());
+          return {
+            service,
+            dailySpent: budget.dailySpent,
+            monthlySpent: budget.monthlySpent,
+            dailyPeriod: budget.dailyPeriod,
+            monthlyPeriod: budget.monthlyPeriod,
+            monthlyCap: policy.monthlyCap,
+            enabled: policy.enabled,
+          };
+        }),
+      });
+      return;
+    }
+
+    if (pathname === '/api/credential_audit' && req.method === 'GET') {
+      const projectId = String(urlObj.searchParams.get('projectId') || '').trim();
+      const limit = Number(urlObj.searchParams.get('limit') || 80);
+      writeJson(res, readCredentialAudit(projectId || null, limit));
+      return;
+    }
+
     if (pathname === '/api/credentials' && req.method === 'POST') {
       readRequestBody(req).then((body) => {
         let payload = {};
@@ -2760,6 +3048,16 @@ async function main() {
             monthlyCap: nextPolicy.monthlyCap,
           },
         });
+        appendCredentialAudit({
+          projectId,
+          service,
+          action: 'policy_update',
+          decision: nextPolicy.enabled ? 'allow' : 'deny',
+          reason: nextPolicy.enabled ? 'Credential policy enabled.' : 'Credential policy disabled.',
+          meta: {
+            monthlyCap: nextPolicy.monthlyCap,
+          },
+        });
         persistProjectState(runtime.state);
 
         writeJson(res, {
@@ -2786,24 +3084,77 @@ async function main() {
         const projectId = String(payload.projectId || '').trim();
         const dryRun = Boolean(payload.dryRun);
         const estimatedCost = typeof payload.estimatedCost === 'number' ? payload.estimatedCost : null;
+        const operation = String(payload.operation || '').trim();
+        const input = payload.input && typeof payload.input === 'object' ? payload.input : {};
 
         if (!connector) {
           writeJson(res, { error: 'connector is required' }, 400);
           return;
         }
 
-        executeConnectorPolicy(connector, { dryRun, projectId, estimatedCost }).then((result) => {
+        executeConnectorPolicy(connector, { dryRun, projectId, estimatedCost }).then(async (result) => {
+          let response = { ...result, operation, execution: null };
+          let auditDecision = result.decision;
+          let auditReason = result.reason;
+          let auditErrorCode = result.errorCode || null;
+          let actualCost = 0;
+
+          if (result.ok && !dryRun) {
+            const execution = await executeLiveConnector(connector, { operation, input, projectId, estimatedCost });
+            response.execution = execution;
+            if (!execution.ok) {
+              response.ok = false;
+              response.decision = 'deny';
+              response.reason = execution.message;
+              response.errorCode = execution.errorCode;
+              auditDecision = 'deny';
+              auditReason = execution.message;
+              auditErrorCode = execution.errorCode;
+            } else {
+              actualCost = typeof execution.actualCost === 'number' && Number.isFinite(execution.actualCost)
+                ? execution.actualCost
+                : (typeof estimatedCost === 'number' ? estimatedCost : 0);
+              response.reason = execution.message || response.reason;
+              auditDecision = 'allow';
+              auditReason = response.reason;
+            }
+          }
+
+          if (projectId && result.credentialService && response.ok && !dryRun && actualCost > 0) {
+            response.budget = recordCredentialSpend(projectId, result.credentialService, actualCost, nowIso());
+          } else if (projectId && result.credentialService) {
+            response.budget = getCredentialBudgetSnapshot(projectId)[result.credentialService] || null;
+          }
+
+          appendCredentialAudit({
+            projectId: projectId || null,
+            service: result.credentialService || connector,
+            operation,
+            action: 'connector_execute',
+            decision: auditDecision,
+            errorCode: auditErrorCode,
+            cost: actualCost,
+            dryRun,
+            reason: auditReason,
+            meta: {
+              connector: result.connector,
+              estimatedCost,
+            },
+          });
+
           if (projectId) {
             const runtime = projectRuntimes.get(projectId);
             if (runtime) {
-              appendProjectLog(runtime.state, result.ok ? 'policy_allow' : 'policy_deny', {
+              appendProjectLog(runtime.state, response.ok ? 'policy_allow' : 'policy_deny', {
                 kind: 'connector_policy_decision',
-                connector: result.connector,
-                decision: result.decision,
-                approved: result.ok,
-                dryRun: result.dryRun,
-                reason: result.reason,
-                checks: result.checks,
+                connector: response.connector,
+                operation,
+                decision: response.decision,
+                approved: response.ok,
+                dryRun: response.dryRun,
+                reason: response.reason,
+                checks: response.checks,
+                actualCost,
               });
               appendMessageBusEntry({
                 projectId,
@@ -2811,21 +3162,24 @@ async function main() {
                 to: 'policy_engine',
                 kind: 'connector_policy_decision',
                 payload: {
-                  connector: result.connector,
-                  decision: result.decision,
-                  approved: result.ok,
-                  dryRun: result.dryRun,
-                  reason: result.reason,
+                  connector: response.connector,
+                  operation,
+                  decision: response.decision,
+                  approved: response.ok,
+                  dryRun: response.dryRun,
+                  reason: response.reason,
+                  actualCost,
                 },
               });
               persistProjectState(runtime.state);
             }
           }
 
-          writeJson(res, result, result.errorCode ? 400 : 200);
+          writeJson(res, response, response.errorCode ? 400 : 200);
         }).catch((err) => {
           writeJson(res, {
             connector,
+            operation,
             ok: false,
             decision: 'deny',
             reason: `Connector execution failed: ${redactSensitive(err.message)}`,

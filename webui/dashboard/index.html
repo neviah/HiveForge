@@ -357,17 +357,18 @@
 
           <div class="hf-card hf-cred-summary-card" style="margin-top:0.5rem;">
             <h3 style="margin-top:0;">Monthly Budget Summary</h3>
-            <p style="color:var(--muted);margin-top:0;">Quick view of credential budgets and how much monthly spend is allocated.</p>
+            <p style="color:var(--muted);margin-top:0;">Quick view of configured budgets plus current spend for the active project.</p>
             <div class="hf-grid-2" style="margin-bottom:0.8rem;">
               <div>
                 <div class="hf-card-label">Total Monthly Budget</div>
                 <div class="hf-card-value" id="credBudgetTotal">$0</div>
               </div>
               <div>
-                <div class="hf-card-label">Connected Services</div>
-                <div class="hf-card-value" id="credConnectedCount">0/5</div>
+                <div class="hf-card-label">Current Project Spend</div>
+                <div class="hf-card-value" id="credProjectSpendTotal">$0</div>
               </div>
             </div>
+            <div style="font-size:0.82rem;color:var(--muted);margin-bottom:0.75rem;">Connected services: <span id="credConnectedCount">0/5</span></div>
             <div id="credBudgetSummaryList" class="hf-cred-summary-list"></div>
           </div>
         </div>
@@ -412,6 +413,16 @@
             </div>
             <div id="credentialPolicySummary" class="hf-cred-summary-list"></div>
           </div>
+        </div>
+
+        <div class="hf-card" style="max-width:920px;margin-top:1rem;">
+          <h3 style="margin-top:0;">Credential Audit</h3>
+          <p style="color:var(--muted);margin-top:0;">Coordinator policy decisions, connector runs, and credential changes for the active project.</p>
+          <div class="hf-btn-row" style="margin-bottom:0.8rem;">
+            <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.refreshCredentialAudit()">Refresh Audit</button>
+          </div>
+          <div id="credentialAuditEmpty" style="color:var(--muted);">Select an active project to inspect credential audit records.</div>
+          <div id="credentialAuditStream" class="hf-log-stream" style="display:none;max-height:320px;"></div>
         </div>
       </section>
 
@@ -545,6 +556,17 @@
               </label>
             </div>
           </div>
+          <div class="hf-grid-2" style="margin-bottom:0.7rem;">
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Operation</label>
+              <input id="connectorCheckOperation" type="text" style="width:100%;" placeholder="netlify: list_sites or get_account" />
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Estimated Cost (USD)</label>
+              <input id="connectorCheckEstimatedCost" type="number" min="0" step="0.01" style="width:100%;" placeholder="0.00" />
+            </div>
+          </div>
+          <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.7rem;">Live execution is currently implemented for Netlify. Uncheck dry run to call the live adapter.</div>
           <div class="hf-btn-row" style="margin-bottom:0.7rem;">
             <button class="hf-btn" onclick="Dashboard.runConnectorCheck()">Run Connector Check</button>
             <span id="connectorCheckStatus" class="hf-status" style="display:none;"></span>
