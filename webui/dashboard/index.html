@@ -338,7 +338,7 @@
           <div class="hf-card" style="margin-top:0.5rem;">
             <h3 style="margin-top:0;">Add / Update Credential</h3>
             <div style="display:flex;flex-direction:column;gap:0.65rem;">
-              <select id="credService" style="width:100%;">
+              <select id="credService" style="width:100%;" onchange="Dashboard.updateCredServiceGuide()">
                 <option value="">— Select service —</option>
                 <option value="netlify">Netlify</option>
                 <option value="stripe">Stripe</option>
@@ -346,6 +346,7 @@
                 <option value="analytics">Google Analytics</option>
                 <option value="email_provider">Email Provider</option>
               </select>
+              <div id="credServiceGuide" style="display:none;font-size:0.82rem;color:var(--muted);"></div>
               <input id="credToken" type="password" placeholder="API key / token" style="width:100%;" />
               <input id="credBudget" type="number" placeholder="Spending limit (optional, USD/month)" style="width:100%;" />
               <div class="hf-btn-row" style="margin-bottom:0;">

@@ -118,6 +118,17 @@ const CONNECTOR_WEBSITES = {
   email_provider: 'https://www.mailgun.com/',
 };
 
+const SERVICE_LABELS = {
+  netlify:        'Netlify',
+  stripe:         'Stripe',
+  google_ads:     'Google Ads',
+  analytics:      'Google Analytics',
+  email_provider: 'Email (Mailgun)',
+  github:         'GitHub',
+  telegram:       'Telegram',
+  whatsapp:       'WhatsApp',
+};
+
 // ─── State ───────────────────────────────────────────────────────────────────
 
 const state = {
@@ -944,6 +955,21 @@ const Dashboard = {
 
   closeAddAgentModal() { closeAddAgentModal(); },
 
+  updateCredServiceGuide() {
+    const service = document.getElementById('credService').value;
+    const guide   = document.getElementById('credServiceGuide');
+    if (!guide) return;
+    const url   = CONNECTOR_WEBSITES[service];
+    const label = SERVICE_LABELS[service];
+    if (url && label) {
+      guide.innerHTML = `Need a token? <a href="${url}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);">Get your ${label} API token →</a>`;
+      guide.style.display = '';
+    } else {
+      guide.style.display = 'none';
+      guide.innerHTML = '';
+    }
+  },
+
   async saveCred() {
     const service = document.getElementById('credService').value;
     const token   = document.getElementById('credToken').value.trim();
@@ -959,6 +985,7 @@ const Dashboard = {
       document.getElementById('credToken').value   = '';
       document.getElementById('credBudget').value  = '';
       document.getElementById('credService').value = '';
+      Dashboard.updateCredServiceGuide();
       showStatus(status, 'Saved!', 'ok');
       onSectionActivate('credentials');
     } catch (err) {
@@ -1026,6 +1053,7 @@ const Dashboard = {
         const has = Array.from(select.options).some((opt) => opt.value === service);
         if (has) select.value = service;
       }
+      Dashboard.updateCredServiceGuide();
       const token = document.getElementById('credToken');
       if (token) token.focus();
     }, 120);
