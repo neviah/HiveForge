@@ -954,14 +954,42 @@ function serveStatic(req, res) {
     res.end('Forbidden');
     return;
   }
+  const imageExts = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.svg']);
+  const ext = path.extname(target).toLowerCase();
+  const contentTypes = {
+      '.html': 'text/html; charset=utf-8',
+      '.js': 'text/javascript; charset=utf-8',
+      '.mjs': 'text/javascript; charset=utf-8',
+      '.css': 'text/css; charset=utf-8',
+      '.json': 'application/json; charset=utf-8',
+      '.svg': 'image/svg+xml',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.ico': 'image/x-icon'
+  };
+  const contentType = contentTypes[ext] || 'application/octet-stream';
+
   fs.readFile(target, (err, data) => {
+    if (err && imageExts.has(ext) && !normalizedPath.includes('/') && !normalizedPath.includes('\\')) {
+      // Fall back to project root for top-level image assets (e.g. /icon_hiveforge.png)
+      const rootAsset = path.join(__dirname, normalizedPath);
+      if (!rootAsset.startsWith(__dirname)) { res.writeHead(403); res.end('Forbidden'); return; }
+      fs.readFile(rootAsset, (err2, data2) => {
+        if (err2) { res.writeHead(404); res.end('Not found'); return; }
+        res.writeHead(200, { 'Content-Type': contentType });
+        res.end(data2);
+      });
+      return;
+    }
     if (err) {
       res.writeHead(404);
       res.end('Not found');
       return;
     }
-    const ext = path.extname(target).toLowerCase();
-    const contentTypes = {
+    const contentTypes2 = {
       '.html': 'text/html; charset=utf-8',
       '.js': 'text/javascript; charset=utf-8',
       '.mjs': 'text/javascript; charset=utf-8',
@@ -975,8 +1003,8 @@ function serveStatic(req, res) {
       '.webp': 'image/webp',
       '.ico': 'image/x-icon'
     };
-    const contentType = contentTypes[ext] || 'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': contentType });
+    const contentType2 = contentTypes2[ext] || 'application/octet-stream';
+    res.writeHead(200, { 'Content-Type': contentType2 });
     res.end(data);
   });
 }
