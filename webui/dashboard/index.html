@@ -13,8 +13,7 @@
   <!-- ── Sidebar ─────────────────────────────────────────── -->
   <aside class="hf-sidebar">
     <div class="hf-sidebar-brand">
-      <span style="font-size:1.4rem;">🐝</span>
-      <h1>HiveForge</h1>
+      <img class="hf-brand-logo" src="/icon.png" alt="HiveForge" />
       <span class="hf-badge">v2</span>
     </div>
 
@@ -26,6 +25,13 @@
       <button class="hf-nav-btn" data-section="new-project">
         <span class="hf-nav-icon">➕</span> New Project
       </button>
+
+      <div class="hf-nav-project-switcher">
+        <div class="hf-nav-project-switcher-title">Quick Switch</div>
+        <div id="sidebarProjectList" class="hf-sidebar-project-list">
+          <div class="hf-sidebar-project-empty">No projects running yet.</div>
+        </div>
+      </div>
 
       <div class="hf-nav-section">Active Project</div>
       <button class="hf-nav-btn" data-section="agents">

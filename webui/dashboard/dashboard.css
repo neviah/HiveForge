@@ -73,8 +73,8 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 
 /* ── Sidebar ──────────────────────────────────────────────── */
 .hf-sidebar { background: var(--sidebar-bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
-.hf-sidebar-brand { padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 0.6rem; }
-.hf-sidebar-brand h1 { font-size: 1.2rem; margin: 0; letter-spacing: 0.3px; }
+.hf-sidebar-brand { padding: 0.75rem 0.85rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+.hf-brand-logo { display: block; width: 175px; max-width: 100%; height: auto; object-fit: contain; }
 .hf-sidebar-brand .hf-badge { font-size: 0.7rem; background: var(--accent); color: var(--accent-text); border-radius: 4px; padding: 0.1rem 0.4rem; font-weight: 700; }
 .hf-nav { flex: 1; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.25rem; }
 .hf-nav-section { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); padding: 0.75rem 0.5rem 0.25rem; }
@@ -82,6 +82,21 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .hf-nav-btn:hover { background: var(--card-bg); }
 .hf-nav-btn.active { background: var(--accent); color: var(--accent-text); font-weight: 600; }
 .hf-nav-btn .hf-nav-icon { font-size: 1rem; width: 1.2rem; text-align: center; }
+.hf-nav-project-switcher { margin: 0.45rem 0.25rem 0.7rem; }
+.hf-nav-project-switcher-title { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 0.35rem 0.35rem; }
+.hf-sidebar-project-list { display: flex; flex-direction: column; gap: 0.35rem; max-height: 180px; overflow-y: auto; padding-right: 0.2rem; }
+.hf-sidebar-project-empty { font-size: 0.8rem; color: var(--muted); border: 1px dashed var(--border); border-radius: 8px; padding: 0.5rem 0.6rem; }
+.hf-sidebar-project-item { width: 100%; display: flex; align-items: center; gap: 0.5rem; padding: 0.45rem 0.5rem; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-bg); color: var(--text); text-align: left; }
+.hf-sidebar-project-item:hover { border-color: var(--accent); }
+.hf-sidebar-project-item.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.hf-sidebar-project-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+.hf-sidebar-project-dot.running { background: var(--success); }
+.hf-sidebar-project-dot.paused { background: var(--warning); }
+.hf-sidebar-project-dot.error { background: var(--danger); }
+.hf-sidebar-project-dot.idle { background: var(--muted); }
+.hf-sidebar-project-main { display: flex; flex-direction: column; min-width: 0; }
+.hf-sidebar-project-name { font-size: 0.82rem; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hf-sidebar-project-meta { font-size: 0.72rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hf-sidebar-footer { padding: 0.75rem; border-top: 1px solid var(--border); }
 .hf-theme-row { display: flex; gap: 0.4rem; }
 .hf-theme-btn { flex: 1; background: transparent; color: var(--muted); border: 1px solid var(--border); padding: 0.35rem; border-radius: 6px; font-size: 0.8rem; }
@@ -257,6 +272,13 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
   .hf-analytics-kpi { grid-template-columns: repeat(3, 1fr); }
   .hf-kanban { grid-template-columns: repeat(2, 1fr); }
   .hf-grid-4, .hf-grid-5 { grid-template-columns: repeat(2, 1fr); }
+  .hf-brand-logo { width: 145px; }
+}
+
+@media (max-width: 768px) {
+  .hf-shell { grid-template-columns: 1fr; }
+  .hf-sidebar { position: relative; height: auto; max-height: none; }
+  .hf-sidebar-project-list { max-height: 120px; }
 }
 @media (max-width: 768px) {
   .hf-shell { grid-template-columns: 1fr; }

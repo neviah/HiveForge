@@ -218,6 +218,7 @@ function patchTask(tasks, updated) {
 // Projects table
 function renderProjects(projects) {
   const tbody = document.getElementById('projectsTableBody');
+  renderSidebarProjectList(projects);
   if (!projects.length) {
     tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:2rem;">No projects yet. <a href="#" onclick="Dashboard.nav('new-project')">Create one →</a></td></tr>`;
     return;
@@ -235,6 +236,36 @@ function renderProjects(projects) {
         <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.selectProject('${p.id}')">Open</button>
       </td>
     </tr>`).join('');
+}
+
+function renderSidebarProjectList(projects) {
+  const list = document.getElementById('sidebarProjectList');
+  if (!list) return;
+
+  if (!projects.length) {
+    list.innerHTML = '<div class="hf-sidebar-project-empty">No projects running yet.</div>';
+    return;
+  }
+
+  const sorted = [...projects].sort((a, b) => {
+    const aTs = Date.parse(a.lastActivity || '') || 0;
+    const bTs = Date.parse(b.lastActivity || '') || 0;
+    return bTs - aTs;
+  });
+
+  list.innerHTML = sorted.map((p) => {
+    const isActive = state.activeProject?.id === p.id;
+    const templateLabel = TEMPLATES[p.template]?.label ?? p.template;
+    return `
+      <button class="hf-sidebar-project-item ${isActive ? 'active' : ''}" onclick="Dashboard.selectProject('${p.id}')" title="Open ${esc(p.name)}">
+        <span class="hf-sidebar-project-dot ${esc(p.status)}"></span>
+        <span class="hf-sidebar-project-main">
+          <span class="hf-sidebar-project-name">${esc(p.name)}</span>
+          <span class="hf-sidebar-project-meta">${esc(templateLabel)}</span>
+        </span>
+      </button>
+    `;
+  }).join('');
 }
 
 // Agent cards
@@ -480,9 +511,19 @@ function activateSection(id) {
 }
 
 async function onSectionActivate(id) {
+  state.projects = await fetchProjects();
+  renderSidebarProjectList(state.projects);
+  if (state.activeProject?.id) {
+    const refreshed = state.projects.find((p) => p.id === state.activeProject.id);
+    if (refreshed) {
+      state.activeProject = refreshed;
+      setText('activeProjectName', refreshed.name);
+    }
+  }
+
   const pid = state.activeProject?.id;
   switch (id) {
-    case 'projects':    renderProjects(state.projects = await fetchProjects()); break;
+    case 'projects':    renderProjects(state.projects); break;
     case 'agents':      if (pid) renderAgents(state.agents = await fetchAgents(pid)); break;
     case 'kanban':      if (pid) renderKanban(state.tasks = await fetchTasks(pid)); break;
     case 'heartbeat':   if (pid) renderHeartbeatCard(await fetchHeartbeat(pid)); break;
@@ -522,6 +563,7 @@ const Dashboard = {
     state.activeProject = state.projects.find(p => p.id === id) ?? { id };
     document.getElementById('activeProjectPill').style.display = 'flex';
     setText('activeProjectName', state.activeProject.name ?? id);
+    renderSidebarProjectList(state.projects);
     startSSE(id);
     activateSection('agents');
   },
@@ -540,11 +582,13 @@ const Dashboard = {
         method: 'POST',
         body: JSON.stringify({ name, template, goal }),
       });
-      state.projects.push(project);
+      const projects = await fetchProjects();
+      state.projects = projects;
+      renderSidebarProjectList(state.projects);
       showStatus(status, 'Created!', 'ok');
       setTimeout(() => Dashboard.selectProject(project.id), 800);
     } catch (err) {
-      showStatus(status, `Failed: ${err.message} (backend not yet wired — see Task 4)`, 'error');
+      showStatus(status, `Failed: ${err.message}`, 'error');
     }
   },
 
