@@ -1,6 +1,6 @@
 ﻿# HiveForge
 
-HiveForge is a fully sandboxed, LM Studio-only fork of OpenClaw packaged as a Pinokio app. It bundles the modified OpenClaw source under `openclaw/`, enforces LM Studio as the only LLM provider, and restricts filesystem access to the sandbox workspace.
+HiveForge is a Business-only Openclaw-fork on Steroids, fully sandboxed, LM Studio-only packaged as a Pinokio app. It bundles the modified OpenClaw source under `openclaw/`, enforces LM Studio as the only LLM provider, and restricts filesystem access to the sandbox workspace.
 
 ## Install (Pinokio)
 1. Add this repo to Pinokio.
