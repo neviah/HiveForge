@@ -63,6 +63,9 @@
     </nav>
 
     <div class="hf-sidebar-footer">
+      <button class="hf-nav-btn hf-nav-btn-settings" data-section="settings" style="margin-bottom:0.6rem;">
+        <span class="hf-nav-icon">⚙️</span> Settings
+      </button>
       <div style="font-size:0.78rem; color:var(--muted); margin-bottom:0.4rem;">Theme</div>
       <div class="hf-theme-row">
         <button class="hf-theme-btn active" data-theme="light">Light</button>
@@ -375,6 +378,46 @@
         </div>
         <div id="marketplaceGrid" class="hf-marketplace-grid">
           <!-- populated by JS -->
+        </div>
+      </section>
+
+      <section id="settings" class="hf-section">
+        <div class="hf-section-header">
+          <h2>Settings</h2>
+          <p>Tune runtime behavior for local hardware speed. Changes persist to sandbox config.</p>
+        </div>
+
+        <div class="hf-card" style="max-width:760px;">
+          <h3 style="margin-top:0;">Runtime</h3>
+          <div class="hf-grid-2" style="margin-bottom:0.8rem;">
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Heartbeat Interval (seconds)</label>
+              <input id="settingsHeartbeatSeconds" type="number" min="5" max="600" step="1" style="width:100%;" />
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Stall Timeout (minutes)</label>
+              <input id="settingsStallMinutes" type="number" min="1" max="1440" step="1" style="width:100%;" />
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Max Auto-fix Attempts</label>
+              <input id="settingsMaxAutoFixes" type="number" min="1" max="1000" step="1" style="width:100%;" />
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">LM Studio Endpoint</label>
+              <input id="settingsLlmEndpoint" type="text" style="width:100%;" placeholder="http://127.0.0.1:1234/v1" />
+            </div>
+          </div>
+
+          <label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;">
+            <input id="settingsCountManualHeartbeat" type="checkbox" />
+            <span>Count manual heartbeat presses toward stall timeout</span>
+          </label>
+
+          <div class="hf-btn-row" style="margin-bottom:0;">
+            <button class="hf-btn" onclick="Dashboard.saveSettings()">Save Settings</button>
+            <button class="hf-btn secondary" onclick="Dashboard.resetSettings()">Reset to Defaults</button>
+            <span id="settingsStatus" class="hf-status" style="display:none;"></span>
+          </div>
         </div>
       </section>
 

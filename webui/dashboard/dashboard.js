@@ -20,6 +20,8 @@ const API = {
   logs:        '/api/logs',
   marketplace: '/api/marketplace',
   control:     '/api/control',
+  settings:    '/api/settings',
+  settingsReset: '/api/settings/reset',
 };
 
 const SECTION_TITLES = {
@@ -33,6 +35,7 @@ const SECTION_TITLES = {
   credentials: 'Credential Manager',
   analytics:   'Analytics',
   marketplace: 'Agent Marketplace',
+  settings:    'Settings',
 };
 
 const TEMPLATES = {
@@ -182,6 +185,20 @@ async function postControl(projectId, action, payload = {}) {
     method: 'POST',
     body: JSON.stringify({ projectId, action, ...payload }),
   });
+}
+
+async function fetchSettings() {
+  return apiFetch(API.settings);
+}
+
+function renderSettings(data) {
+  const runtime = data?.runtime || {};
+  const llm = data?.llm || {};
+  document.getElementById('settingsHeartbeatSeconds').value = String(Math.round((Number(runtime.heartbeatIntervalMs) || 30000) / 1000));
+  document.getElementById('settingsStallMinutes').value = String(Math.round((Number(runtime.stallTimeoutMs) || 600000) / 60000));
+  document.getElementById('settingsMaxAutoFixes').value = String(Number(runtime.maxAutoFixes) || 5);
+  document.getElementById('settingsCountManualHeartbeat').checked = Boolean(runtime.countManualHeartbeatForStall);
+  document.getElementById('settingsLlmEndpoint').value = llm.endpoint || '';
 }
 
 // ─── SSE ─────────────────────────────────────────────────────────────────────
@@ -548,6 +565,7 @@ async function onSectionActivate(id) {
     case 'analytics':   renderAnalytics(pid ? await fetchAnalytics(pid) : null); break;
     case 'logs':        if (pid) renderLogs(state.logs = await fetchLogs(pid)); break;
     case 'marketplace': renderMarketplace(state.marketplaceFilter); break;
+    case 'settings':    renderSettings(await fetchSettings()); break;
   }
 }
 
@@ -725,6 +743,54 @@ const Dashboard = {
     const a    = Object.assign(document.createElement('a'), { href: url, download: 'hiveforge-logs.json' });
     a.click();
     URL.revokeObjectURL(url);
+  },
+
+  async saveSettings() {
+    const status = document.getElementById('settingsStatus');
+    const heartbeatSeconds = Number(document.getElementById('settingsHeartbeatSeconds').value);
+    const stallMinutes = Number(document.getElementById('settingsStallMinutes').value);
+    const maxAutoFixes = Number(document.getElementById('settingsMaxAutoFixes').value);
+    const countManualHeartbeatForStall = document.getElementById('settingsCountManualHeartbeat').checked;
+    const llmEndpoint = document.getElementById('settingsLlmEndpoint').value.trim();
+
+    showStatus(status, 'Saving…', 'running');
+    try {
+      const payload = {
+        runtime: {
+          heartbeatIntervalMs: Math.round(heartbeatSeconds * 1000),
+          stallTimeoutMs: Math.round(stallMinutes * 60 * 1000),
+          maxAutoFixes: Math.round(maxAutoFixes),
+          countManualHeartbeatForStall,
+        },
+        llm: {
+          endpoint: llmEndpoint,
+        },
+      };
+      const updated = await apiFetch(API.settings, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      renderSettings(updated);
+      showStatus(status, 'Saved. Applied to running projects.', 'ok');
+      showToast('Settings updated.', 'ok');
+    } catch (err) {
+      showStatus(status, `Failed: ${err.message}`, 'error');
+      showToast(`Could not save settings: ${err.message}`, 'error');
+    }
+  },
+
+  async resetSettings() {
+    const status = document.getElementById('settingsStatus');
+    showStatus(status, 'Resetting…', 'running');
+    try {
+      const updated = await apiFetch(API.settingsReset, { method: 'POST' });
+      renderSettings(updated);
+      showStatus(status, 'Reset to defaults.', 'ok');
+      showToast('Settings reset to defaults.', 'info');
+    } catch (err) {
+      showStatus(status, `Failed: ${err.message}`, 'error');
+      showToast(`Could not reset settings: ${err.message}`, 'error');
+    }
   },
 };
 

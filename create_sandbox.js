@@ -41,6 +41,12 @@ function writeConfig() {
         email: 'HiveForge@sandbox.local'
       },
       sshKeyPath: '/sandbox/.ssh/id_rsa'
+    },
+    runtime: {
+      heartbeatIntervalMs: 30000,
+      stallTimeoutMs: 600000,
+      maxAutoFixes: 5,
+      countManualHeartbeatForStall: false
     }
   };
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));

@@ -14,8 +14,12 @@ const TEMPLATES_ROOT = path.join(__dirname, 'templates');
 const CREDENTIALS_ROOT = path.join(SANDBOX_ROOT, 'credentials');
 const MAX_TASK_HISTORY = 100;
 const MAX_EVENTS_PER_TASK = 500;
-const MAX_STALL_CYCLES = 3;
-const MAX_AUTO_FIXES = 5;
+const DEFAULT_RUNTIME_SETTINGS = {
+  heartbeatIntervalMs: 30000,
+  stallTimeoutMs: 10 * 60 * 1000,
+  maxAutoFixes: 5,
+  countManualHeartbeatForStall: false,
+};
 const sseClients = new Set();
 const projectSseClients = new Map();
 const activeTasks = new Map();
@@ -38,6 +42,53 @@ const SUPPORTED_CREDENTIAL_SERVICES = ['netlify', 'stripe', 'google_ads', 'analy
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function clampInt(value, fallback, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(n)));
+}
+
+function runtimeSettings() {
+  const raw = (appConfig && appConfig.runtime) || {};
+  return {
+    heartbeatIntervalMs: clampInt(raw.heartbeatIntervalMs, DEFAULT_RUNTIME_SETTINGS.heartbeatIntervalMs, 5000, 10 * 60 * 1000),
+    stallTimeoutMs: clampInt(raw.stallTimeoutMs, DEFAULT_RUNTIME_SETTINGS.stallTimeoutMs, 15 * 1000, 24 * 60 * 60 * 1000),
+    maxAutoFixes: clampInt(raw.maxAutoFixes, DEFAULT_RUNTIME_SETTINGS.maxAutoFixes, 1, 1000),
+    countManualHeartbeatForStall: typeof raw.countManualHeartbeatForStall === 'boolean'
+      ? raw.countManualHeartbeatForStall
+      : DEFAULT_RUNTIME_SETTINGS.countManualHeartbeatForStall,
+  };
+}
+
+function persistAppConfig() {
+  ensureDir(path.dirname(CONFIG_PATH));
+  fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(appConfig, null, 2)}\n`, 'utf-8');
+}
+
+function applyRuntimeSettingsUpdate(partial = {}) {
+  const merged = {
+    ...runtimeSettings(),
+    ...partial,
+  };
+  appConfig.runtime = {
+    heartbeatIntervalMs: clampInt(merged.heartbeatIntervalMs, DEFAULT_RUNTIME_SETTINGS.heartbeatIntervalMs, 5000, 10 * 60 * 1000),
+    stallTimeoutMs: clampInt(merged.stallTimeoutMs, DEFAULT_RUNTIME_SETTINGS.stallTimeoutMs, 15 * 1000, 24 * 60 * 60 * 1000),
+    maxAutoFixes: clampInt(merged.maxAutoFixes, DEFAULT_RUNTIME_SETTINGS.maxAutoFixes, 1, 1000),
+    countManualHeartbeatForStall: typeof merged.countManualHeartbeatForStall === 'boolean'
+      ? merged.countManualHeartbeatForStall
+      : DEFAULT_RUNTIME_SETTINGS.countManualHeartbeatForStall,
+  };
+  persistAppConfig();
+
+  // Restart active loops so interval changes apply immediately.
+  projectRuntimes.forEach((runtime, projectId) => {
+    if (runtime && runtime.state && runtime.state.status === 'running') {
+      stopProjectLoop(projectId);
+      startProjectLoop(projectId);
+    }
+  });
 }
 
 function ensureDir(dirPath) {
@@ -259,6 +310,7 @@ function runProjectHeartbeat(projectState, source = 'interval') {
   if (projectState.status !== 'running') {
     return;
   }
+  const settings = runtimeSettings();
 
   const beatTs = nowIso();
   projectState.heartbeat.lastBeat = beatTs;
@@ -270,7 +322,11 @@ function runProjectHeartbeat(projectState, source = 'interval') {
   if (activeTask) {
     activeTask.inprogressCycles = (activeTask.inprogressCycles || 0) + 1;
 
-    if (activeTask.inprogressCycles >= MAX_STALL_CYCLES) {
+    const startedAtMs = Date.parse(activeTask.startedAt || '');
+    const elapsedMs = Number.isNaN(startedAtMs) ? 0 : Math.max(0, Date.now() - startedAtMs);
+    const canCountForStall = settings.countManualHeartbeatForStall || source === 'interval' || source === 'startup';
+
+    if (canCountForStall && elapsedMs >= settings.stallTimeoutMs) {
       // Stall detected — auto-fix: reset task, idle agent
       const stalledAgent = projectState.agents.find((a) => a.id === activeTask.assignee);
       if (stalledAgent) {
@@ -296,7 +352,7 @@ function runProjectHeartbeat(projectState, source = 'interval') {
       });
       emitProjectEvent(projectState.id, 'task_update', activeTask);
 
-      if (projectState.heartbeat.autoFixCount >= MAX_AUTO_FIXES) {
+      if (projectState.heartbeat.autoFixCount >= settings.maxAutoFixes) {
         markProjectFailed(projectState);
         return;
       }
@@ -412,7 +468,8 @@ function startProjectLoop(projectId) {
   const runtime = projectRuntimes.get(projectId);
   if (!runtime || runtime.timer) return;
   runtime.state.status = 'running';
-  runtime.timer = setInterval(() => runProjectHeartbeat(runtime.state, 'interval'), 30000);
+  const intervalMs = runtimeSettings().heartbeatIntervalMs;
+  runtime.timer = setInterval(() => runProjectHeartbeat(runtime.state, 'interval'), intervalMs);
   appendProjectLog(runtime.state, 'message', { kind: 'project_loop_started' });
   persistProjectState(runtime.state);
 }
@@ -1449,6 +1506,8 @@ async function main() {
   }
 
   appConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+  appConfig.runtime = runtimeSettings();
+  persistAppConfig();
   const endpoint = appConfig.llm?.endpoint || 'http://127.0.0.1:1234/v1';
   appState.llm.endpoint = endpoint;
   const lmResult = await pingLMStudio(endpoint);
@@ -1776,6 +1835,66 @@ async function main() {
       const projectId = urlObj.searchParams.get('projectId');
       const runtime = projectId ? projectRuntimes.get(projectId) : null;
       writeJson(res, runtime ? makeAnalyticsSnapshot(runtime.state) : { kpi: ['-', '-', '-', '-', '-', '-'], lastUpdated: nowIso() });
+      return;
+    }
+
+    if (pathname === '/api/settings' && req.method === 'GET') {
+      writeJson(res, {
+        runtime: runtimeSettings(),
+        defaults: DEFAULT_RUNTIME_SETTINGS,
+        llm: {
+          endpoint: appState.llm.endpoint,
+        },
+      });
+      return;
+    }
+
+    if (pathname === '/api/settings' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = parseJsonBodySafe(body);
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+
+        const runtimePatch = payload.runtime && typeof payload.runtime === 'object' ? payload.runtime : {};
+        const nextEndpoint = payload.llm && typeof payload.llm === 'object' ? String(payload.llm.endpoint || '').trim() : '';
+
+        applyRuntimeSettingsUpdate(runtimePatch);
+
+        if (nextEndpoint) {
+          appConfig.llm = appConfig.llm || {};
+          appConfig.llm.endpoint = nextEndpoint;
+          appState.llm.endpoint = nextEndpoint;
+          persistAppConfig();
+        }
+
+        writeJson(res, {
+          ok: true,
+          runtime: runtimeSettings(),
+          defaults: DEFAULT_RUNTIME_SETTINGS,
+          llm: {
+            endpoint: appState.llm.endpoint,
+          },
+        });
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
+    if (pathname === '/api/settings/reset' && req.method === 'POST') {
+      applyRuntimeSettingsUpdate(DEFAULT_RUNTIME_SETTINGS);
+      writeJson(res, {
+        ok: true,
+        runtime: runtimeSettings(),
+        defaults: DEFAULT_RUNTIME_SETTINGS,
+        llm: {
+          endpoint: appState.llm.endpoint,
+        },
+      });
       return;
     }
 
