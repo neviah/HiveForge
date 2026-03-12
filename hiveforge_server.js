@@ -87,12 +87,19 @@ function appendProjectLog(projectState, type, data) {
 }
 
 function loadTemplateById(templateId) {
-  const templatePath = path.join(TEMPLATES_ROOT, `${templateId}.json`);
-  if (!templatePath.startsWith(TEMPLATES_ROOT) || !fs.existsSync(templatePath)) {
+  // Normalize: lowercase, spaces → underscores, strip unsafe chars
+  const normalized = String(templateId || '')
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_]/g, '');
+  if (!normalized) return null;
+  const templatePath = path.resolve(TEMPLATES_ROOT, `${normalized}.json`);
+  // Security: must remain inside TEMPLATES_ROOT
+  if (!templatePath.startsWith(path.resolve(TEMPLATES_ROOT))) {
     return null;
   }
-  const parsed = safeJsonRead(templatePath, null);
-  return parsed;
+  if (!fs.existsSync(templatePath)) return null;
+  return safeJsonRead(templatePath, null);
 }
 
 function roleToAgentId(role, index) {
