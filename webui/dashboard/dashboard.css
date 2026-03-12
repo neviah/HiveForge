@@ -59,6 +59,27 @@
   --kanban-done: #152415;
 }
 
+[data-theme='forge'] {
+  --bg: #cfd4db;
+  --panel-bg: #e2e6eb;
+  --sidebar-bg: #bfc6cf;
+  --card-bg: #eceff3;
+  --text: #2a323c;
+  --muted: #5d6877;
+  --border: #8e98a8;
+  --accent: #d88a1f;
+  --accent-text: #1f2630;
+  --input-bg: #f4f6f8;
+  --link: #a76309;
+  --success: #3a9f5a;
+  --warning: #d88a1f;
+  --danger: #b64d3d;
+  --kanban-backlog: #e7ebf0;
+  --kanban-inprogress: #f6e2c7;
+  --kanban-review: #f2d6a8;
+  --kanban-done: #dcefdc;
+}
+
 /* ── Reset & base ─────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
 body { font-family: system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); font-size: 0.95rem; }

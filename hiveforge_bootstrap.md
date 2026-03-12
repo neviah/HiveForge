@@ -496,3 +496,90 @@ Definition of done:
 
 ---
 
+# **9. Concrete Completion Sprint Plan (Living Reference)**
+
+This section is the active implementation plan to drive HiveForge to completion. Keep this updated as tasks are finished.
+
+## **Sprint A — Real Execution + Message Bus (Current)**
+
+### **A1. Real Task Execution Lifecycle (replace simulated heartbeat completion)**
+
+Implement:
+
+1. Start real agent execution when a task enters `inprogress`.
+2. Mark task `done` only when execution exits successfully.
+3. On non-zero exit, requeue task with coordinator-managed retry metadata.
+4. Track `startedAt`, `lastProgressAt`, and timeout checks by elapsed wall-clock time.
+
+Exit criteria:
+
+- No task is auto-completed just because one heartbeat passed.
+- Slow local LLM runs are tolerated as long as progress is observed.
+
+### **A2. Message Bus Hardening (`/sandbox/agents/messages.db`)**
+
+Implement:
+
+1. Ensure `/sandbox/agents/messages.db` exists at startup/bootstrap.
+2. Persist coordinator-routed events for task assignment, progress, completion, and failure.
+3. Add read endpoint for dashboard/log inspection with project filtering.
+
+Exit criteria:
+
+- Coordinator routing decisions are inspectable from persisted message-bus records.
+- Restart preserves message-bus history.
+
+---
+
+## **Sprint B — Continuous Pipeline + Connectors**
+
+### **B1. Recurring Work Engine**
+
+Implement scheduled recurring jobs per template (maintenance, content cadence, deploy checks, campaign checks).
+
+Exit criteria:
+
+- Project keeps producing tasks beyond initial backlog.
+
+### **B2. Connector Execution Paths (credential broker enforced)**
+
+Implement real adapters for GitHub/Netlify/Google services via coordinator policy gates.
+
+Exit criteria:
+
+- External actions are brokered, budget-scoped, and logged allow/deny.
+
+---
+
+## **Sprint C — Reliability + QA Gates**
+
+### **C1. Guardrails and Policy Tests**
+
+Implement deny-by-default regression tests, overspend blocking tests, and scope enforcement tests.
+
+### **C2. Chaos and Recovery Tests**
+
+Implement restart/crash simulations for coordinator, heartbeat loops, and message bus continuity.
+
+Exit criteria:
+
+- System remains stable and policy-compliant under fault scenarios.
+
+---
+
+## **Sprint D — Production Certification**
+
+Definition of done runbook:
+
+1. Create one Business template project.
+2. Run for multiple heartbeat cycles.
+3. Verify autonomous planning, task execution, and maintenance loops.
+4. Verify restart and safe resume.
+5. Verify all policy and budget controls remain enforced.
+
+Exit criteria:
+
+- HiveForge is fully autonomous, LM Studio-only, sandboxed, and Pinokio-compatible.
+
+---
+

@@ -8,6 +8,8 @@ const { spawnSync } = require('child_process');
 const SANDBOX_ROOT = path.join(__dirname, 'sandbox');
 const WORKSPACE_ROOT = path.join(SANDBOX_ROOT, 'workspace');
 const SSH_DIR = path.join(SANDBOX_ROOT, '.ssh');
+const AGENTS_DIR = path.join(SANDBOX_ROOT, 'agents');
+const MESSAGE_BUS_PATH = path.join(AGENTS_DIR, 'messages.db');
 const CONFIG_PATH = path.join(SANDBOX_ROOT, 'config.json');
 
 function ensureDir(dirPath) {
@@ -88,6 +90,10 @@ function bootstrapSandbox() {
   ensureDir(SANDBOX_ROOT);
   ensureDir(WORKSPACE_ROOT);
   ensureDir(SSH_DIR);
+  ensureDir(AGENTS_DIR);
+  if (!fs.existsSync(MESSAGE_BUS_PATH)) {
+    fs.writeFileSync(MESSAGE_BUS_PATH, '');
+  }
   writeConfig();
   const pubKey = ensureSshKeys();
   configureGit();
