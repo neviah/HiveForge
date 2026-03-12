@@ -6,7 +6,7 @@ module.exports = {
       method: 'shell.run',
       params: {
         message: [
-          'git pull'
+          'git fetch origin main && git reset --hard origin/main && echo [HiveForge] Update pulled successfully.'
         ]
       }
     },
@@ -14,7 +14,7 @@ module.exports = {
       method: 'shell.run',
       params: {
         message: [
-          'echo HiveForge update completed. No install or start steps were executed.'
+          'echo [HiveForge] Done. Stop and Start HiveForge in Pinokio to apply the update.'
         ]
       }
     }

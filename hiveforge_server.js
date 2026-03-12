@@ -1330,6 +1330,17 @@ async function main() {
   loadProjectsFromDisk();
 
   const server = http.createServer((req, res) => {
+    // Log which templates were discovered so startup issues are immediately visible
+    try {
+      ensureDir(TEMPLATES_ROOT);
+      const foundTemplates = fs.readdirSync(TEMPLATES_ROOT)
+        .filter((f) => f.endsWith('.json') && f !== 'schema.json')
+        .map((f) => f.replace('.json', ''));
+      log(`Templates available (${foundTemplates.length}): ${foundTemplates.join(', ') || 'NONE — check templates/ directory'}`);
+    } catch (err) {
+      log(`Warning: could not read templates directory: ${err.message}`);
+    }
+
     const urlObj = new URL(req.url || '/', 'http://localhost');
     const pathname = urlObj.pathname;
 

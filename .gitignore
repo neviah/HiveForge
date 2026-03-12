@@ -6,6 +6,12 @@ sandbox/.ssh/
 sandbox/ramclaw.log
 sandbox/config.json
 sandbox/workspace/
+sandbox/hiveforge.log
+sandbox/projects/
+sandbox/credentials/*.enc
+sandbox/credentials/audit.log.ndjson
+sandbox/credentials/budget_counters.json
+sandbox/credentials/policies/
 node_modules/
 .clawhub/
 /skills/
