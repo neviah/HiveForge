@@ -27,6 +27,7 @@ const appState = {
   llm: {
     endpoint: 'http://127.0.0.1:1234/v1',
     reachable: false,
+    model: null,
     lastCheckedAt: null
   }
 };
@@ -488,23 +489,22 @@ function deleteCredentialMetadata(service) {
 }
 
 function makeAnalyticsSnapshot(projectState) {
-  const doneCount = projectState.tasks.filter((task) => task.status === 'done').length;
-  const inProgress = projectState.tasks.filter((task) => task.status === 'inprogress').length;
-  const visitors = 1200 + (doneCount * 85);
-  const conversions = 40 + (doneCount * 4);
-  const revenue = 1800 + (doneCount * 260);
-  const adSpend = 600 + (inProgress * 25) + (doneCount * 15);
-  const roas = adSpend > 0 ? (revenue / adSpend).toFixed(2) : '0.00';
-  const openRate = `${Math.min(95, 28 + doneCount * 2)}%`;
+  const done = projectState.tasks.filter((t) => t.status === 'done').length;
+  const inProgress = projectState.tasks.filter((t) => t.status === 'inprogress').length;
+  const backlog = projectState.tasks.filter((t) => t.status === 'backlog').length;
+  const agentsActive = projectState.agents.filter((a) => a.status === 'running').length;
+  const totalAgents = projectState.agents.length;
+  const totalTokens = projectState.agents.reduce((sum, a) => sum + (Number(a.tokens) || 0), 0);
+  const uptime = projectUptime(projectState);
 
   return {
     kpi: [
-      String(visitors),
-      String(conversions),
-      `$${revenue.toFixed(2)}`,
-      `$${adSpend.toFixed(2)}`,
-      `${roas}x`,
-      openRate
+      String(done),
+      String(inProgress),
+      String(backlog),
+      `${agentsActive}/${totalAgents}`,
+      String(totalTokens),
+      uptime
     ],
     lastUpdated: nowIso()
   };
@@ -915,17 +915,22 @@ async function pingLMStudio(endpoint) {
         const resp = await fetch(url, { signal: controller.signal });
         if (resp.ok) {
           clearTimeout(timeout);
-          return true;
+          let model = null;
+          try {
+            const data = await resp.json();
+            model = (Array.isArray(data?.data) && data.data[0]?.id) ? data.data[0].id : null;
+          } catch {}
+          return { reachable: true, model };
         }
       } catch (err) {
       }
     }
 
     clearTimeout(timeout);
-    return false;
+    return { reachable: false, model: null };
   } catch (err) {
     clearTimeout(timeout);
-    return false;
+    return { reachable: false, model: null };
   }
 }
 
@@ -1350,10 +1355,11 @@ async function main() {
   appConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
   const endpoint = appConfig.llm?.endpoint || 'http://127.0.0.1:1234/v1';
   appState.llm.endpoint = endpoint;
-  const ok = await pingLMStudio(endpoint);
-  appState.llm.reachable = ok;
+  const lmResult = await pingLMStudio(endpoint);
+  appState.llm.reachable = lmResult.reachable;
+  if (lmResult.model) appState.llm.model = lmResult.model;
   appState.llm.lastCheckedAt = new Date().toISOString();
-  if (!ok) {
+  if (!lmResult.reachable) {
     log(`Warning: LM Studio is not reachable at ${endpoint}. UI will still start; tasks may fail until LM Studio API is enabled.`);
   }
 
@@ -1712,10 +1718,19 @@ async function main() {
         if (action === 'pause') {
           runtime.state.status = 'paused';
           stopProjectLoop(projectId);
+          runtime.state.agents.forEach((agent) => {
+            if (!agent.isCoordinator && agent.status === 'running') {
+              agent.status = 'idle';
+              agent.currentTask = null;
+              markAgentLog(agent, 'Paused by project control');
+            }
+          });
           appendProjectLog(runtime.state, 'message', { kind: 'project_paused' });
+          emitProjectEvent(projectId, 'project_status', { status: 'paused', projectId });
         } else if (action === 'resume') {
           runtime.state.status = 'running';
           appendProjectLog(runtime.state, 'message', { kind: 'project_resumed' });
+          emitProjectEvent(projectId, 'project_status', { status: 'running', projectId });
           startProjectLoop(projectId);
         } else if (action === 'restart_agents') {
           runtime.state.agents.forEach((agent) => {
@@ -1752,7 +1767,7 @@ async function main() {
     }
 
     if (pathname === '/api/llm_health' && req.method === 'GET') {
-      const model = (appConfig && appConfig.llm && appConfig.llm.model) || 'lm-studio-local';
+      const model = appState.llm.model || (appConfig && appConfig.llm && appConfig.llm.model) || 'connected';
       writeJson(res, appState.llm.reachable
         ? { status: 'ok', model, endpoint: appState.llm.endpoint }
         : { status: 'error', message: 'LM Studio not reachable', endpoint: appState.llm.endpoint });
@@ -1858,8 +1873,9 @@ async function main() {
     }
 
     if (req.url === '/api/llm/check') {
-      pingLMStudio(appState.llm.endpoint).then((reachable) => {
-        appState.llm.reachable = reachable;
+      pingLMStudio(appState.llm.endpoint).then((result) => {
+        appState.llm.reachable = result.reachable;
+        if (result.model) appState.llm.model = result.model;
         appState.llm.lastCheckedAt = new Date().toISOString();
         writeJson(res, appState.llm);
       }).catch(() => {

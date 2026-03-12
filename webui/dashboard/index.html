@@ -391,6 +391,24 @@
       <button class="hf-btn danger hf-btn sm" onclick="Dashboard.projectControl('delete')" style="margin-left:auto;">🗑 Delete Project</button>
     </div>
 
+    <!-- ── Add Agent to Project Modal ── -->
+    <div id="addAgentModal" class="hf-modal-overlay" style="display:none;" onclick="if(event.target===this)Dashboard.closeAddAgentModal()">
+      <div class="hf-modal">
+        <div class="hf-modal-header">
+          <span class="hf-modal-title">Add Agent to Project</span>
+          <button class="hf-modal-close" onclick="Dashboard.closeAddAgentModal()">&#x2715;</button>
+        </div>
+        <div class="hf-modal-body">
+          <div id="addAgentModalAgentName" style="font-size:0.95rem;font-weight:600;margin-bottom:0.75rem;"></div>
+          <div style="font-size:0.85rem;color:var(--muted);margin-bottom:0.5rem;">Choose which project to add this agent to:</div>
+          <div id="addAgentProjectList" class="hf-modal-project-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Toast notifications ── -->
+    <div id="toastContainer" class="hf-toast-container"></div>
+
   </main>
 </div>
 

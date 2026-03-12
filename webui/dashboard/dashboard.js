@@ -80,7 +80,7 @@ const CREDENTIAL_SERVICES = [
   { id:'email_provider',label:'Email Provider',    icon:'📧', desc:'SMTP / transactional email (Mailgun etc.).' },
 ];
 
-const KPI_LABELS = ['Visitors (7d)', 'Conversions', 'Revenue', 'Ad Spend', 'ROAS', 'Open Rate'];
+const KPI_LABELS = ['Tasks Done', 'In Progress', 'Backlog', 'Agents Active', 'Tokens Used', 'Uptime'];
 const KPI_PLACEHOLDER = ['—', '—', '—', '—', '—', '—'];
 const PLATFORM_CONNECTIONS = [
   {
@@ -108,6 +108,7 @@ const state = {
   logs:           [],
   marketplaceFilter: { division: 'All', query: '' },
   sseSource:      null,
+  _pendingAddAgentId: null,
 };
 
 // ─── API Helpers (stubs — will call real server routes once Task 4 is done) ──
@@ -189,10 +190,11 @@ function startSSE(projectId) {
   if (state.sseSource) { state.sseSource.close(); state.sseSource = null; }
   if (!projectId) return;
   const src = new EventSource(`/events?projectId=${projectId}`);
-  src.addEventListener('agent_message',   e => handleSSEEvent('message', JSON.parse(e.data)));
-  src.addEventListener('task_update',     e => handleSSEEvent('task',    JSON.parse(e.data)));
-  src.addEventListener('heartbeat',       e => handleSSEEvent('heartbeat',JSON.parse(e.data)));
-  src.addEventListener('error',           e => handleSSEEvent('error',   JSON.parse(e.data)));
+  src.addEventListener('agent_message',   e => handleSSEEvent('message',        JSON.parse(e.data)));
+  src.addEventListener('task_update',     e => handleSSEEvent('task',            JSON.parse(e.data)));
+  src.addEventListener('heartbeat',       e => handleSSEEvent('heartbeat',       JSON.parse(e.data)));
+  src.addEventListener('project_status',  e => handleSSEEvent('project_status',  JSON.parse(e.data)));
+  src.addEventListener('error',           e => handleSSEEvent('error',           JSON.parse(e.data)));
   src.onerror = () => console.warn('[HiveForge] SSE connection dropped — will retry.');
   state.sseSource = src;
 }
@@ -201,9 +203,16 @@ function handleSSEEvent(type, data) {
   // Append to logs
   appendLogEntry({ type, data, ts: new Date().toISOString() });
   // Trigger targeted refresh for the relevant panel
-  if (type === 'task')      renderKanban(state.tasks = patchTask(state.tasks, data));
-  if (type === 'heartbeat') renderHeartbeatCard(data);
-  if (type === 'message')   renderAgentCard(data);
+  if (type === 'task')           renderKanban(state.tasks = patchTask(state.tasks, data));
+  if (type === 'heartbeat')      renderHeartbeatCard(data);
+  if (type === 'message')        renderAgentCard(data);
+  if (type === 'project_status') {
+    if (state.activeProject && data.projectId === state.activeProject.id) {
+      state.activeProject.status = data.status;
+      renderSidebarProjectList(state.projects.map(p => p.id === data.projectId ? { ...p, status: data.status } : p));
+      if (state.activeSection === 'agents') onSectionActivate('agents');
+    }
+  }
 }
 
 function patchTask(tasks, updated) {
@@ -612,17 +621,18 @@ const Dashboard = {
   },
 
   async addAgent(agentId) {
-    if (!state.activeProject) { alert('No active project selected.'); return; }
-    try {
-      await apiFetch(API.agents, {
-        method: 'POST',
-        body: JSON.stringify({ projectId: state.activeProject.id, agentId }),
-      });
-      activateSection('agents');
-    } catch (err) {
-      alert(`Could not add agent: ${err.message}\n(Backend not yet wired — see Task 4)`);
-    }
+    if (!state.projects.length) { showToast('No projects yet — create one first.', 'error'); return; }
+    if (state.projects.length === 1) { await doAddAgent(agentId, state.projects[0].id); return; }
+    showAddAgentPicker(agentId);
   },
+
+  async confirmAddAgent(projectId) {
+    const agentId = state._pendingAddAgentId;
+    closeAddAgentModal();
+    if (agentId && projectId) await doAddAgent(agentId, projectId);
+  },
+
+  closeAddAgentModal() { closeAddAgentModal(); },
 
   async saveCred() {
     const service = document.getElementById('credService').value;
@@ -674,9 +684,22 @@ const Dashboard = {
         state.activeProject = null;
         document.getElementById('activeProjectPill').style.display = 'none';
         activateSection('projects');
+      } else if (action === 'pause') {
+        state.activeProject.status = 'paused';
+        showToast('Project paused — agents set to idle.', 'info');
+        renderSidebarProjectList(state.projects.map(p => p.id === state.activeProject.id ? state.activeProject : p));
+        if (state.activeSection === 'agents') onSectionActivate('agents');
+      } else if (action === 'resume') {
+        state.activeProject.status = 'running';
+        showToast('Project resumed.', 'ok');
+        renderSidebarProjectList(state.projects.map(p => p.id === state.activeProject.id ? state.activeProject : p));
+        if (state.activeSection === 'agents') onSectionActivate('agents');
+      } else if (action === 'restart_agents') {
+        showToast('Agents restarted.', 'ok');
+        if (state.activeSection === 'agents') onSectionActivate('agents');
       }
     } catch (err) {
-      alert(`Control action failed: ${err.message}`);
+      showToast(`Control action failed: ${err.message}`, 'error');
     }
   },
 
@@ -732,6 +755,53 @@ function showStatus(el, msg, type) {
   el.style.display = 'inline';
   el.className     = `hf-status ${type}`;
   el.textContent   = msg;
+}
+
+// ─── Toast + Project Picker ───────────────────────────────────────────────────
+
+function showToast(msg, type = 'info') {
+  const container = document.getElementById('toastContainer');
+  if (!container) return;
+  const toast = document.createElement('div');
+  toast.className = `hf-toast hf-toast-${type}`;
+  toast.textContent = msg;
+  container.appendChild(toast);
+  setTimeout(() => toast.classList.add('show'), 10);
+  setTimeout(() => { toast.classList.remove('show'); setTimeout(() => toast.remove(), 300); }, 3500);
+}
+
+function showAddAgentPicker(agentId) {
+  state._pendingAddAgentId = agentId;
+  const agentInfo = MARKETPLACE_AGENTS.find(a => a.id === agentId);
+  document.getElementById('addAgentModalAgentName').textContent = agentInfo ? agentInfo.name : agentId;
+  const list = document.getElementById('addAgentProjectList');
+  list.innerHTML = state.projects.map(p => `
+    <button class="hf-modal-project-item" onclick="Dashboard.confirmAddAgent('${p.id}')">
+      <span class="hf-sidebar-project-dot ${esc(p.status)}"></span>
+      <span class="hf-sidebar-project-main">
+        <span class="hf-sidebar-project-name">${esc(p.name)}</span>
+        <span class="hf-sidebar-project-meta">${esc(TEMPLATES[p.template]?.label ?? p.template)}</span>
+      </span>
+    </button>`).join('');
+  document.getElementById('addAgentModal').style.display = 'flex';
+}
+
+function closeAddAgentModal() {
+  document.getElementById('addAgentModal').style.display = 'none';
+  state._pendingAddAgentId = null;
+}
+
+async function doAddAgent(agentId, projectId) {
+  try {
+    await apiFetch(API.agents, {
+      method: 'POST',
+      body: JSON.stringify({ projectId, agentId }),
+    });
+    showToast('Agent added to project!', 'ok');
+    if (state.activeProject?.id === projectId) activateSection('agents');
+  } catch (err) {
+    showToast(`Could not add agent: ${err.message}`, 'error');
+  }
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
