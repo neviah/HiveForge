@@ -3007,6 +3007,7 @@ async function main() {
 
         ensureRecurringState(runtime.state);
         const recurring = payload.recurring && typeof payload.recurring === 'object' ? payload.recurring : {};
+        let enqueuedNow = 0;
         if (typeof recurring.enabled === 'boolean') {
           runtime.state.recurring.enabled = recurring.enabled;
           appendProjectLog(runtime.state, 'message', {
@@ -3022,8 +3023,26 @@ async function main() {
           });
         }
 
+        if (recurring.enqueueNow === true) {
+          enqueuedNow = enqueueRecurringTasks(runtime.state, nowIso(), 'manual_trigger');
+          appendProjectLog(runtime.state, 'message', {
+            kind: 'project_recurring_run_now',
+            enqueued: enqueuedNow,
+          });
+          appendMessageBusEntry({
+            projectId,
+            from: 'coordinator',
+            to: 'scheduler',
+            kind: 'project_recurring_run_now',
+            payload: { enqueued: enqueuedNow },
+          });
+        }
+
         persistProjectState(runtime.state);
-        writeJson(res, summarizeProjectAutomation(runtime.state));
+        writeJson(res, {
+          ...summarizeProjectAutomation(runtime.state),
+          enqueuedNow,
+        });
       }).catch((err) => {
         writeJson(res, { error: err.message }, 400);
       });

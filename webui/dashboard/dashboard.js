@@ -306,9 +306,13 @@ function renderProjectAutomation(data) {
   empty.style.display = 'none';
   panel.style.display = 'block';
   enabledInput.checked = Boolean(data.recurring?.enabled);
+  const lastRunAt = data.recurring?.lastRunAt || {};
   const entries = Array.isArray(data.schedule) ? data.schedule : [];
   schedule.innerHTML = entries.length
-    ? entries.map((entry) => `<div style="padding:0.3rem 0;border-bottom:1px solid var(--border);"><strong>${esc(entry.title)}</strong><div style="font-size:0.78rem;color:var(--muted);">${esc(entry.phase)} · every ${esc(entry.everyHuman || 'n/a')}</div></div>`).join('')
+    ? entries.map((entry) => {
+      const ranAt = lastRunAt[entry.key] ? new Date(lastRunAt[entry.key]).toLocaleString() : 'Never';
+      return `<div style="padding:0.3rem 0;border-bottom:1px solid var(--border);"><strong>${esc(entry.title)}</strong><div style="font-size:0.78rem;color:var(--muted);">${esc(entry.phase)} · every ${esc(entry.everyHuman || 'n/a')}</div><div style="font-size:0.76rem;color:var(--muted);">Last run: ${esc(ranAt)}</div></div>`;
+    }).join('')
     : '<div style="color:var(--muted);">No recurring schedule defined for this template.</div>';
 }
 
@@ -1249,6 +1253,32 @@ const Dashboard = {
     } catch (err) {
       showStatus(status, `Failed: ${err.message}`, 'error');
       showToast(`Could not save project automation: ${err.message}`, 'error');
+    }
+  },
+
+  async runRecurringNow() {
+    if (!state.activeProject) {
+      showToast('No active project selected.', 'error');
+      return;
+    }
+    const status = document.getElementById('projectAutomationStatus');
+    showStatus(status, 'Running now…', 'running');
+    try {
+      const updated = await apiFetch(API.projectSettings, {
+        method: 'POST',
+        body: JSON.stringify({
+          projectId: state.activeProject.id,
+          recurring: { enqueueNow: true },
+        }),
+      });
+      renderProjectAutomation(updated);
+      state.tasks = await fetchTasks(state.activeProject.id);
+      if (state.activeSection === 'kanban') renderKanban(state.tasks);
+      showStatus(status, 'Triggered.', 'ok');
+      showToast(`Recurring run triggered. Enqueued ${Number(updated.enqueuedNow || 0)} task(s).`, 'ok');
+    } catch (err) {
+      showStatus(status, `Failed: ${err.message}`, 'error');
+      showToast(`Could not trigger recurring run: ${err.message}`, 'error');
     }
   },
 

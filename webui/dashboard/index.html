@@ -315,6 +315,7 @@
             <option value="task_failed">task_failed</option>
             <option value="execution_cancelled">execution_cancelled</option>
             <option value="recurring_task_enqueued">recurring_task_enqueued</option>
+            <option value="project_recurring_run_now">project_recurring_run_now</option>
             <option value="policy_decision">policy_decision</option>
             <option value="connector_policy_decision">connector_policy_decision</option>
           </select>
@@ -530,6 +531,7 @@
             <div id="projectRecurringSchedule" class="hf-log-stream" style="max-height:180px;"></div>
             <div class="hf-btn-row" style="margin-top:0.9rem;margin-bottom:0;">
               <button class="hf-btn" onclick="Dashboard.saveProjectAutomation()">Save Project Automation</button>
+              <button class="hf-btn secondary" onclick="Dashboard.runRecurringNow()">Run Recurring Cycle Now</button>
               <span id="projectAutomationStatus" class="hf-status" style="display:none;"></span>
             </div>
           </div>
