@@ -598,20 +598,21 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 7. External connector idempotency propagation for mutating operations (provider headers + duplicate suppression for manual execute path).
 8. Approval governance policy packs with auto-approve/auto-deny logic and immutable decision audit export endpoint.
 9. Template-level weekly objective generation with owner/SLA tracking and recurring sales/support/finance loops with KPI ownership.
+10. Reliability and recovery QA expansion with outage retry heuristics, delayed-webhook chaos coverage, config-corruption recovery tests, and heartbeat soak simulation coverage.
 
 ## **Next Critical Milestones**
 
-1. **Reliability and Recovery QA**
-   - Expand chaos tests for connector outages, delayed webhooks, and config corruption recovery.
-   - Add long-run soak test (24h+) for heartbeat stability and memory growth checks.
-
-2. **Production Safety Gate**
+1. **Production Safety Gate**
    - Add preflight checklist endpoint that blocks production-mode actions when required controls are missing.
    - Include credential scope validation, budget sanity, notification route health, and rollback readiness.
 
-3. **Provider-Specific Idempotency Expansion**
+2. **Provider-Specific Idempotency Expansion**
    - Extend adapter-level idempotency token usage to future mutating connectors beyond Netlify.
    - Add reconciliation checks for connectors that only support eventual consistency semantics.
+
+## **Future Feature Candidates**
+
+1. Website live support chat connector (for example, Intercom/Zendesk/custom widget) with Coordinator-gated read/reply/close operations for Support roles.
 
 ## **Definition of Operational Readiness**
 

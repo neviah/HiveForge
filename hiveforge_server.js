@@ -431,6 +431,7 @@ function connectorRetryPlan(connectorId, attemptNumber, reason, detail = {}) {
     || reasonText.includes('429')
     || reasonText.includes('5xx')
     || reasonText.includes('http 5')
+    || (reasonText.includes('webhook') && reasonText.includes('delay'))
     || reasonText.includes('execution_failed')
   );
   const nextAttempt = Math.max(1, Number(attemptNumber || 1));
@@ -6571,6 +6572,7 @@ module.exports = {
   refreshWeeklyKpiPlan,
   ensureOperationalLoopState,
   makeAnalyticsSnapshot,
+  runProjectHeartbeat,
   ensureMessageBus,
   appendMessageBusEntry,
   readMessageBusEntries,
