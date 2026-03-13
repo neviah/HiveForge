@@ -599,14 +599,11 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 8. Approval governance policy packs with auto-approve/auto-deny logic and immutable decision audit export endpoint.
 9. Template-level weekly objective generation with owner/SLA tracking and recurring sales/support/finance loops with KPI ownership.
 10. Reliability and recovery QA expansion with outage retry heuristics, delayed-webhook chaos coverage, config-corruption recovery tests, and heartbeat soak simulation coverage.
+11. Production Safety Gate with preflight checklist API and production-mode action blocking for missing controls (credential scope, budget sanity, notification route health, rollback readiness).
 
 ## **Next Critical Milestones**
 
-1. **Production Safety Gate**
-   - Add preflight checklist endpoint that blocks production-mode actions when required controls are missing.
-   - Include credential scope validation, budget sanity, notification route health, and rollback readiness.
-
-2. **Provider-Specific Idempotency Expansion**
+1. **Provider-Specific Idempotency Expansion**
    - Extend adapter-level idempotency token usage to future mutating connectors beyond Netlify.
    - Add reconciliation checks for connectors that only support eventual consistency semantics.
 

@@ -3478,6 +3478,139 @@ function notificationSettingsSummary() {
   };
 }
 
+function hasPriorSuccessfulDeploy(projectState, siteId = '') {
+  const wantedSiteId = String(siteId || '').trim();
+  const executions = projectState && projectState.connectorExecutions && typeof projectState.connectorExecutions === 'object'
+    ? Object.values(projectState.connectorExecutions)
+    : [];
+  return executions.some((entry) => {
+    if (!entry || entry.status !== 'succeeded') return false;
+    if (String(entry.connector || '').trim().toLowerCase() !== 'netlify') return false;
+    if (String(entry.operation || '').trim().toLowerCase() !== 'trigger_deploy') return false;
+    if (!wantedSiteId) return true;
+    const resultSiteId = String(entry.result && entry.result.siteId ? entry.result.siteId : '').trim();
+    return resultSiteId === wantedSiteId;
+  });
+}
+
+function evaluateProductionPreflight(projectState, options = {}) {
+  const connectorId = String(options.connector || '').trim().toLowerCase();
+  const operation = String(options.operation || '').trim().toLowerCase();
+  const estimatedCost = Number.isFinite(Number(options.estimatedCost)) ? Number(options.estimatedCost) : 0;
+  const input = options.input && typeof options.input === 'object' ? options.input : {};
+  const notifications = options.notifications && typeof options.notifications === 'object'
+    ? options.notifications
+    : notificationSettingsSummary();
+  const checks = [];
+
+  if (!projectState || !projectState.id) {
+    return {
+      ok: false,
+      summary: 'Production preflight failed: missing project context.',
+      checks: [{ id: 'project_context', ok: false, reason: 'projectId is required for production preflight.' }],
+    };
+  }
+
+  const connectorMeta = connectorId ? CONNECTOR_REGISTRY[connectorId] || null : null;
+  const credentialService = connectorMeta && connectorMeta.credentialService ? connectorMeta.credentialService : null;
+  if (credentialService) {
+    const metadata = readCredentialMetadata();
+    const cred = metadata.find((entry) => entry.service === credentialService);
+    const hasToken = Boolean(readCredentialToken(credentialService));
+    checks.push({
+      id: 'credential_scope_validation',
+      ok: Boolean(cred && cred.connected && hasToken),
+      reason: cred && cred.connected && hasToken
+        ? `Credential ${credentialService} is connected for production execution.`
+        : `Credential ${credentialService} is missing, disconnected, or has no token.`,
+    });
+  } else {
+    checks.push({
+      id: 'credential_scope_validation',
+      ok: true,
+      reason: 'No credential-scoped connector required for this operation.',
+    });
+  }
+
+  if (credentialService) {
+    const policy = getProjectCredentialPolicy(projectState.id, credentialService);
+    const budget = getCredentialBudgetSnapshot(projectState.id)[credentialService] || normalizeBudgetCounterEntry({}, nowIso());
+    const projectedMonthly = Number(((Number(budget.monthlySpent || 0)) + Math.max(0, estimatedCost)).toFixed(2));
+    const cap = typeof policy.monthlyCap === 'number' && Number.isFinite(policy.monthlyCap) ? policy.monthlyCap : null;
+    const budgetOk = Boolean(policy.enabled) && (cap === null || projectedMonthly <= cap);
+    checks.push({
+      id: 'budget_sanity',
+      ok: budgetOk,
+      reason: budgetOk
+        ? `Projected monthly spend $${projectedMonthly} is within configured budget policy.`
+        : (!policy.enabled
+          ? `Credential policy for ${credentialService} is disabled.`
+          : `Projected monthly spend $${projectedMonthly} exceeds cap $${cap}.`),
+      detail: {
+        monthlySpent: Number(budget.monthlySpent || 0),
+        estimatedCost,
+        projectedMonthly,
+        monthlyCap: cap,
+      },
+    });
+  } else {
+    checks.push({
+      id: 'budget_sanity',
+      ok: true,
+      reason: 'No budget-scoped credential involved in this operation.',
+    });
+  }
+
+  const notifyReady = Boolean(
+    (notifications && notifications.whatsapp && notifications.whatsapp.enabled)
+    || (notifications && notifications.telegram && notifications.telegram.enabled)
+  );
+  checks.push({
+    id: 'notification_route_health',
+    ok: notifyReady,
+    reason: notifyReady
+      ? 'At least one operator notification route is configured (WhatsApp/Telegram).'
+      : 'No operator notification routes are configured for production incidents.',
+  });
+
+  if (connectorId === 'netlify' && operation === 'trigger_deploy') {
+    const siteId = String(input.siteId || options.siteId || '').trim();
+    const explicitRollback = Boolean(input.rollbackDeployId || input.rollbackPlan || options.rollbackReady === true);
+    const historicalRollback = hasPriorSuccessfulDeploy(projectState, siteId);
+    const rollbackOk = Boolean(siteId) && (explicitRollback || historicalRollback);
+    checks.push({
+      id: 'rollback_readiness',
+      ok: rollbackOk,
+      reason: rollbackOk
+        ? 'Rollback readiness confirmed via explicit rollback plan or prior successful deploy history.'
+        : 'Rollback readiness failed: provide siteId and rollback plan or establish prior successful deploy history.',
+      detail: {
+        siteId: siteId || null,
+        explicitRollback,
+        historicalRollback,
+      },
+    });
+  } else {
+    checks.push({
+      id: 'rollback_readiness',
+      ok: true,
+      reason: 'Rollback readiness check not required for this connector/operation.',
+    });
+  }
+
+  const ok = checks.every((entry) => Boolean(entry.ok));
+  return {
+    ok,
+    summary: ok
+      ? 'Production preflight checks passed.'
+      : 'Production preflight checks failed. Resolve failing controls before production-mode execution.',
+    connector: connectorId || null,
+    operation: operation || null,
+    checks,
+    checkedAt: nowIso(),
+  };
+}
+
 function writeJson(res, payload, statusCode = 200) {
   res.writeHead(statusCode, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(payload));
@@ -5693,14 +5826,96 @@ async function main() {
       return;
     }
 
+    if (pathname === '/api/preflight' && (req.method === 'GET' || req.method === 'POST')) {
+      const runWithPayload = (payload = {}) => {
+        const projectId = String(payload.projectId || '').trim();
+        const connector = String(payload.connector || '').trim();
+        const operation = String(payload.operation || '').trim();
+        const estimatedCost = Number(payload.estimatedCost || 0);
+        const input = payload.input && typeof payload.input === 'object' ? payload.input : {};
+
+        const runtime = projectId ? projectRuntimes.get(projectId) : null;
+        if (!runtime) {
+          writeJson(res, { error: 'Project not found' }, 404);
+          return;
+        }
+
+        const preflight = evaluateProductionPreflight(runtime.state, {
+          connector,
+          operation,
+          estimatedCost,
+          input,
+        });
+        writeJson(res, {
+          projectId,
+          ...preflight,
+        }, preflight.ok ? 200 : 412);
+      };
+
+      if (req.method === 'GET') {
+        runWithPayload({
+          projectId: String(urlObj.searchParams.get('projectId') || '').trim(),
+          connector: String(urlObj.searchParams.get('connector') || '').trim(),
+          operation: String(urlObj.searchParams.get('operation') || '').trim(),
+          estimatedCost: Number(urlObj.searchParams.get('estimatedCost') || 0),
+          input: {
+            siteId: String(urlObj.searchParams.get('siteId') || '').trim(),
+            rollbackDeployId: String(urlObj.searchParams.get('rollbackDeployId') || '').trim(),
+          },
+        });
+      } else {
+        readRequestBody(req).then((body) => {
+          let payload = {};
+          try {
+            payload = parseJsonBodySafe(body);
+          } catch (err) {
+            writeJson(res, { error: 'Invalid JSON body' }, 400);
+            return;
+          }
+          runWithPayload(payload);
+        }).catch((err) => {
+          writeJson(res, { error: err.message }, 400);
+        });
+      }
+      return;
+    }
+
     if (pathname === '/api/netlify/deploy' && req.method === 'POST') {
       readRequestBody(req).then(async (body) => {
         let payload = {};
         try { payload = parseJsonBodySafe(body); } catch (_) {}
         const siteId = String(payload.siteId || '').trim();
+        const projectId = String(payload.projectId || '').trim();
         if (!siteId) {
           writeJson(res, { ok: false, error: 'siteId is required.' }, 400);
           return;
+        }
+        if (projectId) {
+          const runtime = projectRuntimes.get(projectId);
+          if (!runtime) {
+            writeJson(res, { ok: false, error: 'Project not found.' }, 404);
+            return;
+          }
+          const preflight = evaluateProductionPreflight(runtime.state, {
+            connector: 'netlify',
+            operation: 'trigger_deploy',
+            estimatedCost: 0,
+            input: {
+              siteId,
+              rollbackDeployId: String(payload.rollbackDeployId || '').trim(),
+              rollbackPlan: payload.rollbackPlan || null,
+            },
+            rollbackReady: Boolean(payload.rollbackReady),
+          });
+          if (!preflight.ok) {
+            writeJson(res, {
+              ok: false,
+              error: 'Production preflight checks failed.',
+              errorCode: 'PRECHECK_FAILED',
+              preflight,
+            }, 412);
+            return;
+          }
         }
         try {
           const result = await executeNetlifyConnector({ operation: 'trigger_deploy', siteId });
@@ -5932,6 +6147,7 @@ async function main() {
         const input = payload.input && typeof payload.input === 'object' ? payload.input : {};
         const actorRole = String(payload.actorRole || '').trim();
         const requiresPermission = Boolean(payload.requiresPermission);
+        const productionMode = Boolean(payload.productionMode);
 
         if (!connector) {
           writeJson(res, { error: 'connector is required' }, 400);
@@ -5949,7 +6165,32 @@ async function main() {
             ? String(payload.idempotencyKey || '').trim() || connectorMutationExecutionKey(connector, operation, input)
             : null;
 
-          if (result.ok && !dryRun && projectId && executionKey) {
+          if (result.ok && !dryRun && productionMode) {
+            const runtime = projectRuntimes.get(projectId);
+            if (!runtime) {
+              response.ok = false;
+              response.decision = 'deny';
+              response.reason = 'Project not found for production preflight.';
+              response.errorCode = 'project_not_found';
+            } else {
+              const preflight = evaluateProductionPreflight(runtime.state, {
+                connector,
+                operation,
+                estimatedCost: Number(estimatedCost || 0),
+                input,
+                rollbackReady: Boolean(payload.rollbackReady),
+              });
+              response.preflight = preflight;
+              if (!preflight.ok) {
+                response.ok = false;
+                response.decision = 'deny';
+                response.reason = preflight.summary;
+                response.errorCode = 'PRECHECK_FAILED';
+              }
+            }
+          }
+
+          if (response.ok && !dryRun && projectId && executionKey) {
             const runtime = projectRuntimes.get(projectId);
             if (runtime && runtime.state) {
               ensureConnectorExecutionState(runtime.state);
@@ -5990,7 +6231,7 @@ async function main() {
             }
           }
 
-          if (result.ok && !dryRun) {
+          if (response.ok && !dryRun) {
             if (!response.execution) {
               if (projectId && executionKey) {
                 const runtime = projectRuntimes.get(projectId);
@@ -6573,6 +6814,7 @@ module.exports = {
   ensureOperationalLoopState,
   makeAnalyticsSnapshot,
   runProjectHeartbeat,
+  evaluateProductionPreflight,
   ensureMessageBus,
   appendMessageBusEntry,
   readMessageBusEntries,
