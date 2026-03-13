@@ -3900,7 +3900,18 @@ async function main() {
   server.listen(port, host, () => log(`HiveForge UI running at http://localhost:${port}`));
 }
 
-main().catch((err) => {
-  log(`Start failed: ${err.message}`);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    log(`Start failed: ${err.message}`);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  executeConnectorPolicy,
+  upsertProjectCredentialPolicy,
+  recordCredentialSpend,
+  getCredentialBudgetSnapshot,
+  ensureCredentialStorage,
+  SUPPORTED_CREDENTIAL_SERVICES,
+};
