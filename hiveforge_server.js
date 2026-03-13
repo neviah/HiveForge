@@ -1099,6 +1099,63 @@ function stopProjectLoop(projectId) {
   runtime.timer = null;
 }
 
+function recoverProjectStateAfterRestart(state) {
+  if (!state || !state.id) {
+    return { requeuedTaskIds: [], allDoneAfterRecovery: false };
+  }
+
+  if (!Array.isArray(state.logs)) state.logs = [];
+  if (!Array.isArray(state.tasks)) state.tasks = [];
+  if (!Array.isArray(state.agents)) state.agents = [];
+  if (!state.heartbeat) {
+    state.heartbeat = { status: 'unknown', lastBeat: null, autoFixCount: 0, cycleCount: 0, log: [] };
+  }
+
+  state.tasks.forEach((t) => { if (typeof t.inprogressCycles !== 'number') t.inprogressCycles = 0; });
+  state.tasks.forEach((t) => {
+    if (!t.executionState) t.executionState = t.status === 'done' ? 'done' : (t.status === 'inprogress' ? 'running' : 'queued');
+    if (typeof t.retryCount !== 'number') t.retryCount = 0;
+    if (typeof t.lastFailedAt === 'undefined') t.lastFailedAt = null;
+    if (typeof t.lastError === 'undefined') t.lastError = null;
+    if (typeof t.lastProgressAt === 'undefined') t.lastProgressAt = null;
+    if (typeof t.executionTaskRunId === 'undefined') t.executionTaskRunId = null;
+    if (typeof t.recurringKey === 'undefined') t.recurringKey = null;
+  });
+  ensureRecurringState(state);
+
+  const requeuedTaskIds = [];
+  state.tasks.forEach((t) => {
+    if (t.status === 'inprogress') {
+      const previousAssignee = t.assignee;
+      requeueTaskToBacklog(t, 'process_restart', false);
+      requeuedTaskIds.push(t.id);
+      appendMessageBusEntry({
+        projectId: state.id,
+        from: 'coordinator',
+        to: previousAssignee || 'unknown',
+        kind: 'task_requeued_on_restart',
+        payload: { taskId: t.id, title: t.title, reason: 'process_restart' },
+      });
+    }
+  });
+
+  state.agents.forEach((agent) => {
+    if (!agent.isCoordinator && agent.status === 'running') {
+      agent.status = 'idle';
+      agent.currentTask = null;
+    }
+  });
+
+  const allDoneAfterRecovery = state.tasks.length > 0 && state.tasks.every((t) => t.status === 'done');
+  if (state.status === 'running' && allDoneAfterRecovery) {
+    state.status = 'completed';
+    state.completedAt = state.completedAt || nowIso();
+    state.heartbeat.status = 'completed';
+  }
+
+  return { requeuedTaskIds, allDoneAfterRecovery };
+}
+
 function loadProjectsFromDisk() {
   ensureDir(PROJECTS_ROOT);
   const children = fs.readdirSync(PROJECTS_ROOT, { withFileTypes: true });
@@ -1106,57 +1163,15 @@ function loadProjectsFromDisk() {
     if (!entry.isDirectory()) return;
     const state = safeJsonRead(path.join(PROJECTS_ROOT, entry.name, 'state.json'), null);
     if (!state || !state.id) return;
-    if (!Array.isArray(state.logs)) state.logs = [];
-    if (!Array.isArray(state.tasks)) state.tasks = [];
-    if (!Array.isArray(state.agents)) state.agents = [];
-    if (!state.heartbeat) {
-      state.heartbeat = { status: 'unknown', lastBeat: null, autoFixCount: 0, cycleCount: 0, log: [] };
-    }
     const runtime = { state, timer: null, execution: null };
     projectRuntimes.set(state.id, runtime);
-    // Normalize tasks that were saved before inprogressCycles was added
-    state.tasks.forEach((t) => { if (typeof t.inprogressCycles !== 'number') t.inprogressCycles = 0; });
-    state.tasks.forEach((t) => {
-      if (!t.executionState) t.executionState = t.status === 'done' ? 'done' : (t.status === 'inprogress' ? 'running' : 'queued');
-      if (typeof t.retryCount !== 'number') t.retryCount = 0;
-      if (typeof t.lastFailedAt === 'undefined') t.lastFailedAt = null;
-      if (typeof t.lastError === 'undefined') t.lastError = null;
-      if (typeof t.lastProgressAt === 'undefined') t.lastProgressAt = null;
-      if (typeof t.executionTaskRunId === 'undefined') t.executionTaskRunId = null;
-      if (typeof t.recurringKey === 'undefined') t.recurringKey = null;
-    });
-    ensureRecurringState(state);
-    // Recovery: process restart cannot resume child process mid-run, so requeue active tasks.
-    state.tasks.forEach((t) => {
-      if (t.status === 'inprogress') {
-        const previousAssignee = t.assignee;
-        requeueTaskToBacklog(t, 'process_restart', false);
-        appendMessageBusEntry({
-          projectId: state.id,
-          from: 'coordinator',
-          to: previousAssignee || 'unknown',
-          kind: 'task_requeued_on_restart',
-          payload: { taskId: t.id, title: t.title, reason: 'process_restart' },
-        });
-      }
-    });
-    state.agents.forEach((agent) => {
-      if (!agent.isCoordinator && agent.status === 'running') {
-        agent.status = 'idle';
-        agent.currentTask = null;
-      }
-    });
-    // Recovery: if all tasks are done but status says running, mark completed
+    recoverProjectStateAfterRestart(state);
+
+    // Recovery: resume running projects, or persist completed normalization.
     if (state.status === 'running') {
-      const allDone = state.tasks.length > 0 && state.tasks.every((t) => t.status === 'done');
-      if (allDone) {
-        state.status = 'completed';
-        state.completedAt = state.completedAt || nowIso();
-        state.heartbeat.status = 'completed';
-        persistProjectState(state);
-      } else {
-        startProjectLoop(state.id);
-      }
+      startProjectLoop(state.id);
+    } else {
+      persistProjectState(state);
     }
   });
 }
@@ -3913,5 +3928,9 @@ module.exports = {
   recordCredentialSpend,
   getCredentialBudgetSnapshot,
   ensureCredentialStorage,
+  ensureMessageBus,
+  appendMessageBusEntry,
+  readMessageBusEntries,
+  recoverProjectStateAfterRestart,
   SUPPORTED_CREDENTIAL_SERVICES,
 };
