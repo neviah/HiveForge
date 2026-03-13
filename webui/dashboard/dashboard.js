@@ -461,7 +461,11 @@ function renderKanban(tasks) {
         ${t.lastProgressAt ? `<div style="font-size:0.74rem;color:var(--muted);margin-top:0.2rem;">Last progress: ${esc(new Date(t.lastProgressAt).toLocaleTimeString())}</div>` : ''}
         ${Number(t.retryCount || 0) > 0 ? `<div style="font-size:0.74rem;color:#b45309;margin-top:0.2rem;">Retries: ${Number(t.retryCount || 0)}</div>` : ''}
         ${t.blockedBy ? `<div style="font-size:0.75rem;color:#e87;margin-top:0.2rem;">⛔ Blocked by: ${esc(t.blockedBy)}</div>` : ''}
-      </div>`).join('') || `<div style="color:var(--muted);font-size:0.82rem;padding:0.5rem;">Empty</div>`;
+      </div>`
+      + (t.lastError && Number(t.retryCount || 0) > 0 ? `<div style="font-size:0.73rem;color:#ef4444;margin-top:0.2rem;">Last error: ${esc(t.lastError)}</div>` : '')
+      + (t.lastFailedAt && Number(t.retryCount || 0) > 0 ? `<div style="font-size:0.73rem;color:var(--muted);margin-top:0.1rem;">Failed at: ${esc(new Date(t.lastFailedAt).toLocaleTimeString())}</div>` : '')
+      + (t.completedAt && t.status === 'done' ? `<div style="font-size:0.73rem;color:var(--muted);margin-top:0.1rem;">Completed: ${esc(new Date(t.completedAt).toLocaleTimeString())}</div>` : '')
+    ).join('') || `<div style="color:var(--muted);font-size:0.82rem;padding:0.5rem;">Empty</div>`;
   }
 }
 

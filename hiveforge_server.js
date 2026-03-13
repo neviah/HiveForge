@@ -603,6 +603,24 @@ function safeJsonReadFromText(raw, fallback = {}) {
   }
 }
 
+// ── Shared task-requeue helper ────────────────────────────────────────────
+// All code paths that return a task to backlog must use this so fields stay
+// consistent and debug metadata (lastError, lastFailedAt) is preserved.
+function requeueTaskToBacklog(task, reason = 'requeued', bumpRetry = true) {
+  task.status = 'backlog';
+  task.assignee = null;
+  task.startedAt = null;
+  task.executionState = 'queued';
+  task.inprogressCycles = 0;
+  task.executionTaskRunId = null;
+  task.lastProgressAt = null;
+  if (bumpRetry) {
+    task.retryCount = Number(task.retryCount || 0) + 1;
+    task.lastFailedAt = nowIso();
+    task.lastError = reason;
+  }
+}
+
 function cancelProjectExecution(projectId, reason = 'cancelled', requeueTask = true) {
   const runtime = projectRuntimes.get(projectId);
   if (!runtime || !runtime.execution) return false;
@@ -620,13 +638,7 @@ function cancelProjectExecution(projectId, reason = 'cancelled', requeueTask = t
   const task = runtime.state.tasks.find((t) => t.id === execution.taskId);
   if (task && task.status === 'inprogress') {
     if (requeueTask) {
-      task.status = 'backlog';
-      task.assignee = null;
-      task.startedAt = null;
-      task.executionState = 'queued';
-      task.inprogressCycles = 0;
-      task.executionTaskRunId = null;
-      task.lastProgressAt = null;
+      requeueTaskToBacklog(task, reason, false);
     }
     emitProjectEvent(projectId, 'task_update', task);
   }
@@ -722,13 +734,7 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
       return;
     }
   } else {
-    task.status = 'backlog';
-    task.assignee = null;
-    task.startedAt = null;
-    task.executionState = 'queued';
-    task.retryCount = Number(task.retryCount || 0) + 1;
-    task.inprogressCycles = 0;
-    task.executionTaskRunId = null;
+    requeueTaskToBacklog(task, `exit_code_${exitCode}`, true);
     runtime.state.heartbeat.autoFixCount = (runtime.state.heartbeat.autoFixCount || 0) + 1;
 
     if (worker) {
@@ -905,13 +911,7 @@ function runProjectHeartbeat(projectState, source = 'interval') {
       // Stall detected — auto-fix: cancel execution and requeue
       const cancelled = cancelProjectExecution(projectState.id, 'stall_timeout', true);
       if (!cancelled) {
-        activeTask.status = 'backlog';
-        activeTask.assignee = null;
-        activeTask.startedAt = null;
-        activeTask.executionState = 'queued';
-        activeTask.inprogressCycles = 0;
-        activeTask.executionTaskRunId = null;
-        activeTask.lastProgressAt = null;
+        requeueTaskToBacklog(activeTask, 'stall_timeout', true);
       }
       projectState.heartbeat.autoFixCount = (projectState.heartbeat.autoFixCount || 0) + 1;
       appendProjectLog(projectState, 'fix', {
@@ -965,14 +965,7 @@ function runProjectHeartbeat(projectState, source = 'interval') {
         });
         const started = startProjectTaskExecution(projectState, nextTask, assignee);
         if (!started) {
-          nextTask.status = 'backlog';
-          nextTask.assignee = null;
-          nextTask.startedAt = null;
-          nextTask.executionState = 'queued';
-          nextTask.retryCount = Number(nextTask.retryCount || 0) + 1;
-          nextTask.inprogressCycles = 0;
-          nextTask.executionTaskRunId = null;
-          nextTask.lastProgressAt = null;
+          requeueTaskToBacklog(nextTask, 'spawn_failed', true);
           assignee.status = 'idle';
           assignee.currentTask = null;
           projectState.heartbeat.autoFixCount = (projectState.heartbeat.autoFixCount || 0) + 1;
@@ -1085,13 +1078,14 @@ function loadProjectsFromDisk() {
     // Recovery: process restart cannot resume child process mid-run, so requeue active tasks.
     state.tasks.forEach((t) => {
       if (t.status === 'inprogress') {
-        t.status = 'backlog';
-        t.assignee = null;
-        t.startedAt = null;
-        t.executionState = 'queued';
-        t.inprogressCycles = 0;
-        t.executionTaskRunId = null;
-        t.lastProgressAt = null;
+        requeueTaskToBacklog(t, 'process_restart', false);
+        appendMessageBusEntry({
+          projectId: state.id,
+          from: 'coordinator',
+          to: t.assignee || 'unknown',
+          kind: 'task_requeued_on_restart',
+          payload: { taskId: t.id, title: t.title, reason: 'process_restart' },
+        });
       }
     });
     state.agents.forEach((agent) => {
@@ -3264,11 +3258,8 @@ async function main() {
           if (isCompleted) {
             // Full replay: reset all tasks to backlog
             runtime.state.tasks.forEach((t) => {
-              t.status = 'backlog';
-              t.assignee = null;
-              t.startedAt = null;
+              requeueTaskToBacklog(t, 'restart_replay', false);
               t.completedAt = null;
-              t.inprogressCycles = 0;
               t.blockedBy = t.dependencies?.[0] || null;
             });
             runtime.state.completedAt = null;
@@ -3276,10 +3267,7 @@ async function main() {
             // Reset any stalled inprogress tasks back to backlog
             runtime.state.tasks.forEach((t) => {
               if (t.status === 'inprogress') {
-                t.status = 'backlog';
-                t.assignee = null;
-                t.startedAt = null;
-                t.inprogressCycles = 0;
+                requeueTaskToBacklog(t, 'restart_agents', false);
               }
             });
           }
