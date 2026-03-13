@@ -19,5 +19,7 @@ Files:
 - content_creator.json
 
 Notes:
-- personality_prompt_path is intentionally null during Task 6.
-- Task 7 will map each role to a concrete agency-agents .md path.
+- subordinate agents can include one or more personality prompt paths from agency-agents.
+- operating_mode controls whether a project is finite_delivery or continuous_business.
+- recurring_loops define template-specific recurring operations owned by specific roles.
+- auto_staffing_policy controls coordinator-driven optional-agent expansion under load.

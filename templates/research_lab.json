@@ -58,6 +58,24 @@
                             "Brand Guardian",
                             "SEO Specialist"
                         ],
+    "operating_mode":  "finite_delivery",
+    "recurring_loops":  [
+                            {
+                                "key":  "research_peer_review_loop",
+                                "title":  "Run periodic peer-review and hypothesis re-prioritization",
+                                "phase":  "peer_review",
+                                "owner_role":  "Reality Checker",
+                                "every_ms":  21600000,
+                                "enabled":  true
+                            }
+                        ],
+    "auto_staffing_policy":  {
+                                 "enabled":  true,
+                                 "cooldown_minutes":  120,
+                                 "backlog_per_agent_threshold":  3,
+                                 "max_optional_adds":  2,
+                                 "max_agents":  9
+                             },
     "workflow_definition":  {
                                 "phases":  [
                                                "question_design",

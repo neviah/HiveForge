@@ -68,6 +68,32 @@
                             "Sprint Prioritizer",
                             "Performance Benchmarker"
                         ],
+    "operating_mode":  "continuous_business",
+    "recurring_loops":  [
+                            {
+                                "key":  "agency_deploy_pipeline",
+                                "title":  "Run deployment readiness, deploy checks, and rollback audit",
+                                "phase":  "deployment",
+                                "owner_role":  "DevOps Automator",
+                                "every_ms":  10800000,
+                                "enabled":  true
+                            },
+                            {
+                                "key":  "agency_incident_review",
+                                "title":  "Review incidents, error budgets, and reliability actions",
+                                "phase":  "maintenance",
+                                "owner_role":  "Reality Checker",
+                                "every_ms":  14400000,
+                                "enabled":  true
+                            }
+                        ],
+    "auto_staffing_policy":  {
+                                 "enabled":  true,
+                                 "cooldown_minutes":  30,
+                                 "backlog_per_agent_threshold":  2,
+                                 "max_optional_adds":  5,
+                                 "max_agents":  16
+                             },
     "workflow_definition":  {
                                 "phases":  [
                                                "discovery",

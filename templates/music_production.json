@@ -64,6 +64,24 @@
                             "Instagram Curator",
                             "Legal Compliance Checker"
                         ],
+    "operating_mode":  "finite_delivery",
+    "recurring_loops":  [
+                            {
+                                "key":  "music_release_maintenance",
+                                "title":  "Run release channel sync and metadata QA",
+                                "phase":  "release",
+                                "owner_role":  "Studio Producer",
+                                "every_ms":  21600000,
+                                "enabled":  true
+                            }
+                        ],
+    "auto_staffing_policy":  {
+                                 "enabled":  true,
+                                 "cooldown_minutes":  90,
+                                 "backlog_per_agent_threshold":  3,
+                                 "max_optional_adds":  2,
+                                 "max_agents":  10
+                             },
     "workflow_definition":  {
                                 "phases":  [
                                                "concept",

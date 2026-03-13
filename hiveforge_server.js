@@ -60,6 +60,48 @@ const RECURRING_SCHEDULE_BY_TEMPLATE = {
     { key: 'creator_engagement_review', title: 'Review engagement metrics and optimize hooks', phase: 'analytics', everyMs: 3 * 60 * 60 * 1000 },
   ],
 };
+const DEFAULT_OPERATING_MODE_BY_TEMPLATE = {
+  business: 'continuous_business',
+  software_agency: 'continuous_business',
+  content_creator: 'continuous_business',
+  game_studio: 'finite_delivery',
+  publishing_house: 'finite_delivery',
+  music_production: 'finite_delivery',
+  research_lab: 'finite_delivery',
+};
+const DEFAULT_AUTO_STAFFING_POLICY = {
+  enabled: true,
+  cooldownMs: 60 * 60 * 1000,
+  backlogPerAgentThreshold: 2,
+  maxOptionalAdds: 3,
+};
+const OPTIONAL_AGENT_PERSONALITY_PATHS = {
+  'Security Engineer': ['../agency-agents/engineering/engineering-security-engineer.md'],
+  'Reality Checker': ['../agency-agents/testing/testing-reality-checker.md'],
+  'PPC Campaign Strategist': ['../agency-agents/marketing/marketing-ppc-campaign-strategist.md'],
+  'Brand Guardian': ['../agency-agents/marketing/marketing-brand-guardian.md'],
+  'Legal Compliance Checker': ['../agency-agents/support/support-legal-compliance-checker.md'],
+  'SEO Specialist': ['../agency-agents/marketing/marketing-seo-specialist.md'],
+  'Analytics Reporter': ['../agency-agents/support/support-analytics-reporter.md'],
+  'API Tester': ['../agency-agents/testing/testing-api-tester.md'],
+  'Incident Response Commander': ['../agency-agents/support/support-incident-response-commander.md'],
+  'Technical Writer': ['../agency-agents/engineering/engineering-technical-writer.md'],
+  'Feedback Synthesizer': ['../agency-agents/support/support-feedback-synthesizer.md'],
+  'Sprint Prioritizer': ['../agency-agents/project-management/project-manager-sprint-prioritizer.md'],
+  'Performance Benchmarker': ['../agency-agents/testing/testing-performance-benchmarker.md'],
+  'Narrative Designer': ['../agency-agents/game-development/game-narrative-designer.md'],
+  'Level Designer': ['../agency-agents/game-development/game-level-designer.md'],
+  'Technical Artist': ['../agency-agents/game-development/game-technical-artist.md'],
+  'Paid Social Strategist': ['../agency-agents/marketing/marketing-paid-social-strategist.md'],
+  'TikTok Strategist': ['../agency-agents/marketing/marketing-tiktok-strategist.md'],
+  'Instagram Curator': ['../agency-agents/marketing/marketing-instagram-curator.md'],
+  'LinkedIn Content Creator': ['../agency-agents/marketing/marketing-linkedin-content-creator.md'],
+};
+const AGENT_PERSONALITY_ROOTS = [
+  path.resolve(__dirname, 'agency-agents'),
+  path.resolve(__dirname, '..', 'agency-agents'),
+  path.resolve(__dirname),
+];
 const sseClients = new Set();
 const projectSseClients = new Map();
 const activeTasks = new Map();
@@ -229,6 +271,83 @@ function roleToAgentId(role, index) {
   return `${normalized || 'agent'}_${index + 1}`;
 }
 
+function normalizeOperatingMode(mode) {
+  const normalized = String(mode || '').trim().toLowerCase();
+  if (normalized === 'continuous_business' || normalized === 'finite_delivery') {
+    return normalized;
+  }
+  return 'finite_delivery';
+}
+
+function templateOperatingMode(templateKey, templateData) {
+  if (templateData && typeof templateData.operating_mode === 'string') {
+    return normalizeOperatingMode(templateData.operating_mode);
+  }
+  const fallback = DEFAULT_OPERATING_MODE_BY_TEMPLATE[String(templateKey || '').toLowerCase()] || 'finite_delivery';
+  return normalizeOperatingMode(fallback);
+}
+
+function normalizeRecurringLoopSpec(spec, idx = 0) {
+  const key = String(spec && spec.key ? spec.key : `template_loop_${idx + 1}`)
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return {
+    key: key || `template_loop_${idx + 1}`,
+    title: String(spec && spec.title ? spec.title : `Recurring loop ${idx + 1}`),
+    phase: String(spec && spec.phase ? spec.phase : 'maintenance'),
+    ownerRole: String(spec && spec.owner_role ? spec.owner_role : ''),
+    everyMs: clampInt(spec && spec.every_ms, 60 * 60 * 1000, 60 * 1000, 7 * 24 * 60 * 60 * 1000),
+  };
+}
+
+function recurringScheduleForTemplate(templateKey, templateData = null) {
+  const fromTemplate = Array.isArray(templateData && templateData.recurring_loops)
+    ? templateData.recurring_loops
+      .filter((entry) => entry && entry.enabled !== false)
+      .map((entry, idx) => normalizeRecurringLoopSpec(entry, idx))
+    : [];
+  const templateSchedule = RECURRING_SCHEDULE_BY_TEMPLATE[String(templateKey || '').toLowerCase()] || [];
+  const merged = fromTemplate.length ? [...DEFAULT_RECURRING_SCHEDULE, ...fromTemplate] : [...DEFAULT_RECURRING_SCHEDULE, ...templateSchedule];
+  return merged.map((entry, idx) => normalizeRecurringLoopSpec({
+    key: entry.key,
+    title: entry.title,
+    phase: entry.phase,
+    owner_role: entry.ownerRole,
+    every_ms: entry.everyMs,
+  }, idx));
+}
+
+function templateAutoStaffingPolicy(templateData = null, subordinateCount = 0) {
+  const raw = templateData && typeof templateData.auto_staffing_policy === 'object'
+    ? templateData.auto_staffing_policy
+    : {};
+  const maxOptionalAdds = clampInt(
+    raw.max_optional_adds,
+    DEFAULT_AUTO_STAFFING_POLICY.maxOptionalAdds,
+    0,
+    20,
+  );
+  const maxAgents = clampInt(
+    raw.max_agents,
+    Math.max(subordinateCount + maxOptionalAdds, subordinateCount),
+    subordinateCount,
+    100,
+  );
+  return {
+    enabled: typeof raw.enabled === 'boolean' ? raw.enabled : DEFAULT_AUTO_STAFFING_POLICY.enabled,
+    cooldownMs: clampInt(raw.cooldown_minutes, DEFAULT_AUTO_STAFFING_POLICY.cooldownMs / 60000, 1, 24 * 60) * 60 * 1000,
+    backlogPerAgentThreshold: clampInt(raw.backlog_per_agent_threshold, DEFAULT_AUTO_STAFFING_POLICY.backlogPerAgentThreshold, 1, 20),
+    maxOptionalAdds,
+    maxAgents,
+  };
+}
+
+function optionalAgentPersonalityPaths(role) {
+  const mapped = OPTIONAL_AGENT_PERSONALITY_PATHS[String(role || '')];
+  return Array.isArray(mapped) ? [...mapped] : [];
+}
+
 function createInitialAgents(projectId, template) {
   const agents = [];
   agents.push({
@@ -240,7 +359,10 @@ function createInitialAgents(projectId, template) {
     tasksDone: 0,
     tokens: 0,
     recentLog: ['Coordinator online'],
-    isCoordinator: true
+    isCoordinator: true,
+    personalityPromptPaths: [],
+    templateRole: 'Coordinator Agent',
+    sourceRole: 'Coordinator Agent',
   });
 
   const subordinates = Array.isArray(template.subordinate_agents) ? template.subordinate_agents : [];
@@ -250,12 +372,17 @@ function createInitialAgents(projectId, template) {
       id: roleToAgentId(role, idx),
       name: role,
       role: role,
+      templateRole: String(agentSpec.role || role),
+      sourceRole: String(agentSpec.role || role),
       status: 'idle',
       currentTask: null,
       tasksDone: 0,
       tokens: 0,
       recentLog: ['Idle'],
-      isCoordinator: false
+      isCoordinator: false,
+      personalityPromptPaths: Array.isArray(agentSpec.personality_prompt_paths)
+        ? agentSpec.personality_prompt_paths.map((entry) => String(entry || '').trim()).filter(Boolean)
+        : [],
     });
   });
 
@@ -288,16 +415,6 @@ function createInitialTasks(template) {
   }));
 }
 
-function recurringScheduleForTemplate(templateKey) {
-  const templateSchedule = RECURRING_SCHEDULE_BY_TEMPLATE[String(templateKey || '').toLowerCase()] || [];
-  return [...DEFAULT_RECURRING_SCHEDULE, ...templateSchedule].map((entry) => ({
-    key: entry.key,
-    title: entry.title,
-    phase: entry.phase || 'maintenance',
-    everyMs: clampInt(entry.everyMs, 60 * 60 * 1000, 60 * 1000, 7 * 24 * 60 * 60 * 1000),
-  }));
-}
-
 function humanizeDurationMs(ms) {
   const totalMinutes = Math.max(1, Math.round(Number(ms || 0) / 60000));
   if (totalMinutes % (24 * 60) === 0) return `${totalMinutes / (24 * 60)}d`;
@@ -311,11 +428,19 @@ function summarizeProjectAutomation(projectState) {
     recurring: {
       enabled: Boolean(projectState.recurring.enabled),
       lastRunAt: projectState.recurring.lastRunAt || {},
+      operatingMode: projectState.operatingMode || 'finite_delivery',
     },
-    schedule: recurringScheduleForTemplate(projectState.template).map((entry) => ({
+    schedule: projectState.recurring.schedule.map((entry) => ({
       ...entry,
       everyHuman: humanizeDurationMs(entry.everyMs),
     })),
+    staffing: {
+      enabled: Boolean(projectState.staffing && projectState.staffing.enabled),
+      optionalPoolSize: Array.isArray(projectState.staffing && projectState.staffing.optionalPool)
+        ? projectState.staffing.optionalPool.length
+        : 0,
+      maxAgents: Number(projectState.staffing && projectState.staffing.maxAgents) || 0,
+    },
   };
 }
 
@@ -329,14 +454,41 @@ function ensureRecurringState(projectState) {
   if (!projectState.recurring.lastRunAt || typeof projectState.recurring.lastRunAt !== 'object') {
     projectState.recurring.lastRunAt = {};
   }
+  if (!Array.isArray(projectState.recurring.schedule)) {
+    projectState.recurring.schedule = recurringScheduleForTemplate(projectState.template);
+  }
   if (typeof projectState.recurring.lastIdleNoticeAt === 'undefined') {
     projectState.recurring.lastIdleNoticeAt = null;
   }
 }
 
+function ensureStaffingState(projectState) {
+  if (!projectState.staffing || typeof projectState.staffing !== 'object') {
+    const subordinates = projectState.agents.filter((agent) => !agent.isCoordinator).length;
+    projectState.staffing = {
+      enabled: DEFAULT_AUTO_STAFFING_POLICY.enabled,
+      cooldownMs: DEFAULT_AUTO_STAFFING_POLICY.cooldownMs,
+      backlogPerAgentThreshold: DEFAULT_AUTO_STAFFING_POLICY.backlogPerAgentThreshold,
+      maxOptionalAdds: DEFAULT_AUTO_STAFFING_POLICY.maxOptionalAdds,
+      maxAgents: subordinates + DEFAULT_AUTO_STAFFING_POLICY.maxOptionalAdds,
+      baseSubordinateCount: subordinates,
+      optionalPool: [],
+      lastScaledAt: null,
+    };
+  }
+  if (!Array.isArray(projectState.staffing.optionalPool)) projectState.staffing.optionalPool = [];
+  if (typeof projectState.staffing.lastScaledAt === 'undefined') projectState.staffing.lastScaledAt = null;
+  if (!Number.isFinite(Number(projectState.staffing.baseSubordinateCount))) {
+    projectState.staffing.baseSubordinateCount = projectState.agents.filter((agent) => !agent.isCoordinator).length;
+  }
+}
+
 function shouldKeepRunningForRecurring(projectState) {
   ensureRecurringState(projectState);
-  return Boolean(projectState.recurring.enabled) && recurringScheduleForTemplate(projectState.template).length > 0;
+  return projectState.operatingMode === 'continuous_business'
+    && Boolean(projectState.recurring.enabled)
+    && Array.isArray(projectState.recurring.schedule)
+    && projectState.recurring.schedule.length > 0;
 }
 
 function hasPendingRecurringTask(projectState, recurringKey) {
@@ -350,7 +502,7 @@ function enqueueRecurringTasks(projectState, ts, source = 'interval') {
   if (!projectState.recurring.enabled) return 0;
 
   const nowMs = Date.parse(ts || nowIso());
-  const schedule = recurringScheduleForTemplate(projectState.template);
+  const schedule = projectState.recurring.schedule;
   let inserted = 0;
 
   for (const spec of schedule) {
@@ -408,6 +560,113 @@ function enqueueRecurringTasks(projectState, ts, source = 'interval') {
   }
 
   return inserted;
+}
+
+function agentAlreadyPresent(projectState, roleName) {
+  const target = String(roleName || '').toLowerCase();
+  return projectState.agents.some((agent) => String(agent.role || '').toLowerCase() === target);
+}
+
+function pickAutoStaffingRole(projectState) {
+  const pool = Array.isArray(projectState.staffing && projectState.staffing.optionalPool)
+    ? projectState.staffing.optionalPool
+    : [];
+  if (!pool.length) return null;
+
+  const backlogText = projectState.tasks
+    .filter((task) => task.status === 'backlog')
+    .map((task) => `${task.title || ''} ${task.phase || ''} ${task.description || ''}`.toLowerCase())
+    .join(' ');
+
+  const priorities = [
+    { role: 'Legal Compliance Checker', keywords: ['legal', 'privacy', 'contract', 'policy', 'compliance'] },
+    { role: 'Security Engineer', keywords: ['security', 'incident', 'vulnerability', 'auth', 'breach'] },
+    { role: 'SEO Specialist', keywords: ['seo', 'ranking', 'search', 'metadata', 'backlink'] },
+    { role: 'Analytics Reporter', keywords: ['analytics', 'kpi', 'roi', 'cohort', 'funnel'] },
+    { role: 'PPC Campaign Strategist', keywords: ['ads', 'campaign', 'cac', 'cpc', 'ctr'] },
+    { role: 'Reality Checker', keywords: ['qa', 'test', 'verify', 'review', 'audit'] },
+  ];
+
+  for (const priority of priorities) {
+    if (!pool.includes(priority.role)) continue;
+    if (agentAlreadyPresent(projectState, priority.role)) continue;
+    const match = priority.keywords.some((kw) => backlogText.includes(kw));
+    if (match) return priority.role;
+  }
+
+  return pool.find((roleName) => !agentAlreadyPresent(projectState, roleName)) || null;
+}
+
+function evaluateAutoStaffing(projectState, ts) {
+  ensureStaffingState(projectState);
+  const staffing = projectState.staffing;
+  if (!staffing.enabled) return null;
+
+  const nowMs = Date.parse(ts || nowIso());
+  const lastScaledMs = Date.parse(staffing.lastScaledAt || '');
+  if (!Number.isNaN(lastScaledMs) && nowMs - lastScaledMs < staffing.cooldownMs) {
+    return null;
+  }
+
+  const workers = projectState.agents.filter((agent) => !agent.isCoordinator);
+  const backlog = projectState.tasks.filter((task) => task.status === 'backlog').length;
+  const running = workers.filter((agent) => agent.status === 'running').length;
+  const optionalCount = Math.max(0, workers.length - Number(staffing.baseSubordinateCount || workers.length));
+  const shouldScale = backlog >= Math.max(1, workers.length) * staffing.backlogPerAgentThreshold && running >= workers.length;
+
+  if (!shouldScale) return null;
+  if (workers.length >= staffing.maxAgents) return null;
+  if (optionalCount >= staffing.maxOptionalAdds) return null;
+
+  const role = pickAutoStaffingRole(projectState);
+  if (!role) return null;
+
+  const newAgent = {
+    id: roleToAgentId(role, projectState.agents.length),
+    name: role,
+    role,
+    templateRole: role,
+    sourceRole: role,
+    status: 'idle',
+    currentTask: null,
+    tasksDone: 0,
+    tokens: 0,
+    recentLog: ['Auto-added by coordinator'],
+    isCoordinator: false,
+    personalityPromptPaths: optionalAgentPersonalityPaths(role),
+  };
+  projectState.agents.push(newAgent);
+  staffing.lastScaledAt = ts || nowIso();
+
+  appendProjectLog(projectState, 'task', {
+    kind: 'agent_auto_added',
+    agentId: newAgent.id,
+    role: newAgent.role,
+    reason: 'backlog_pressure',
+    backlog,
+  });
+  appendMessageBusEntry({
+    projectId: projectState.id,
+    from: 'coordinator',
+    to: newAgent.id,
+    kind: 'agent_auto_added',
+    payload: {
+      agentId: newAgent.id,
+      role: newAgent.role,
+      backlog,
+      optionalCount: optionalCount + 1,
+    },
+  });
+  emitProjectEvent(projectState.id, 'agent_message', {
+    agentId: newAgent.id,
+    name: newAgent.name,
+    role: newAgent.role,
+    status: newAgent.status,
+    currentTask: newAgent.currentTask,
+    tasksDone: newAgent.tasksDone,
+    recentLog: newAgent.recentLog,
+  });
+  return newAgent;
 }
 
 function summarizeProject(projectState) {
@@ -782,6 +1041,25 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
   persistProjectState(runtime.state);
 }
 
+function loadAgentPersonalityPrompt(paths) {
+  if (!Array.isArray(paths) || !paths.length) return '';
+  const snippets = [];
+  paths.forEach((entry) => {
+    const rel = String(entry || '').trim();
+    if (!rel) return;
+    const resolved = path.resolve(__dirname, rel);
+    const allowed = AGENT_PERSONALITY_ROOTS.some((root) => resolved.startsWith(root));
+    if (!allowed || !fs.existsSync(resolved)) return;
+    try {
+      const text = fs.readFileSync(resolved, 'utf-8').trim();
+      if (!text) return;
+      snippets.push(`# Personality Source: ${path.basename(resolved)}\n${text.slice(0, 12000)}`);
+    } catch (err) {
+    }
+  });
+  return snippets.join('\n\n');
+}
+
 function startProjectTaskExecution(projectState, task, assignee) {
   const runtime = projectRuntimes.get(projectState.id);
   if (!runtime || runtime.execution) return false;
@@ -798,13 +1076,15 @@ function startProjectTaskExecution(projectState, task, assignee) {
     },
   });
 
+  const personalityPrompt = loadAgentPersonalityPrompt(assignee.personalityPromptPaths);
   const prompt = [
     `Project: ${projectState.name}`,
     `Goal: ${projectState.goal || 'N/A'}`,
     `Assigned Agent Role: ${assignee.role}`,
     `Task ${task.id}: ${task.title}`,
+    personalityPrompt ? `Agent Personality Guidance:\n${personalityPrompt}` : '',
     'Execute the task and provide concrete output artifacts or decisions. End with TASK_DONE when complete.'
-  ].join('\n');
+  ].filter(Boolean).join('\n\n');
 
   const { taskRun, child } = runAgentTask(prompt, null);
   if (!child) {
@@ -939,10 +1219,12 @@ function runProjectHeartbeat(projectState, source = 'interval') {
 
   const beatTs = nowIso();
   ensureRecurringState(projectState);
+  ensureStaffingState(projectState);
   projectState.heartbeat.lastBeat = beatTs;
   projectState.heartbeat.status = 'alive';
   projectState.heartbeat.cycleCount = (projectState.heartbeat.cycleCount || 0) + 1;
   enqueueRecurringTasks(projectState, beatTs, source);
+  evaluateAutoStaffing(projectState, beatTs);
 
   // ── Stall detection + auto-fix ───────────────────────────────────────────
   const runtime = projectRuntimes.get(projectState.id);
@@ -1122,7 +1404,13 @@ function recoverProjectStateAfterRestart(state) {
     if (typeof t.executionTaskRunId === 'undefined') t.executionTaskRunId = null;
     if (typeof t.recurringKey === 'undefined') t.recurringKey = null;
   });
+  if (typeof state.operatingMode !== 'string') {
+    state.operatingMode = templateOperatingMode(state.template, null);
+  } else {
+    state.operatingMode = normalizeOperatingMode(state.operatingMode);
+  }
   ensureRecurringState(state);
+  ensureStaffingState(state);
 
   const requeuedTaskIds = [];
   state.tasks.forEach((t) => {
@@ -1148,7 +1436,7 @@ function recoverProjectStateAfterRestart(state) {
   });
 
   const allDoneAfterRecovery = state.tasks.length > 0 && state.tasks.every((t) => t.status === 'done');
-  if (state.status === 'running' && allDoneAfterRecovery) {
+  if (state.status === 'running' && allDoneAfterRecovery && !shouldKeepRunningForRecurring(state)) {
     state.status = 'completed';
     state.completedAt = state.completedAt || nowIso();
     state.heartbeat.status = 'completed';
@@ -1185,10 +1473,15 @@ function createProjectFromTemplate({ name, template, goal }) {
 
   const id = crypto.randomUUID();
   const createdAt = nowIso();
+  const initialAgents = createInitialAgents(id, tpl);
+  const subordinateCount = initialAgents.filter((agent) => !agent.isCoordinator).length;
+  const operatingMode = templateOperatingMode(template, tpl);
+  const staffingPolicy = templateAutoStaffingPolicy(tpl, subordinateCount);
   const state = {
     id,
     name,
     template,
+    operatingMode,
     goal: goal || tpl.goal_definition || '',
     status: 'running',
     startedAt: createdAt,
@@ -1200,9 +1493,20 @@ function createProjectFromTemplate({ name, template, goal }) {
     recurring: {
       enabled: true,
       lastRunAt: {},
+      schedule: recurringScheduleForTemplate(template, tpl),
       lastIdleNoticeAt: null,
     },
-    agents: createInitialAgents(id, tpl),
+    staffing: {
+      enabled: staffingPolicy.enabled,
+      cooldownMs: staffingPolicy.cooldownMs,
+      backlogPerAgentThreshold: staffingPolicy.backlogPerAgentThreshold,
+      maxOptionalAdds: staffingPolicy.maxOptionalAdds,
+      maxAgents: staffingPolicy.maxAgents,
+      baseSubordinateCount: subordinateCount,
+      optionalPool: Array.isArray(tpl.optional_agents) ? tpl.optional_agents.map((entry) => String(entry || '').trim()).filter(Boolean) : [],
+      lastScaledAt: null,
+    },
+    agents: initialAgents,
     tasks: createInitialTasks(tpl),
     logs: [],
     heartbeat: {
@@ -4131,5 +4435,8 @@ module.exports = {
   appendMessageBusEntry,
   readMessageBusEntries,
   recoverProjectStateAfterRestart,
+  evaluateAutoStaffing,
+  ensureStaffingState,
+  shouldKeepRunningForRecurring,
   SUPPORTED_CREDENTIAL_SERVICES,
 };

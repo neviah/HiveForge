@@ -19,6 +19,10 @@
     "display_name": {"type": "string"},
     "version": {"type": "string"},
     "goal_definition": {"type": "string"},
+    "operating_mode": {
+      "type": "string",
+      "enum": ["finite_delivery", "continuous_business"]
+    },
     "coordinator_agent": {
       "type": "object",
       "required": ["required", "role", "system_prompt_profile", "system_prompt_path"],
@@ -49,6 +53,31 @@
     "optional_agents": {
       "type": "array",
       "items": {"type": "string"}
+    },
+    "recurring_loops": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "title", "phase", "every_ms"],
+        "properties": {
+          "key": {"type": "string"},
+          "title": {"type": "string"},
+          "phase": {"type": "string"},
+          "owner_role": {"type": "string"},
+          "every_ms": {"type": "integer", "minimum": 60000},
+          "enabled": {"type": "boolean"}
+        }
+      }
+    },
+    "auto_staffing_policy": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "cooldown_minutes": {"type": "integer", "minimum": 1},
+        "backlog_per_agent_threshold": {"type": "integer", "minimum": 1},
+        "max_optional_adds": {"type": "integer", "minimum": 0},
+        "max_agents": {"type": "integer", "minimum": 1}
+      }
     },
     "workflow_definition": {
       "type": "object",

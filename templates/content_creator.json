@@ -56,6 +56,32 @@
                             "LinkedIn Content Creator",
                             "Brand Guardian"
                         ],
+    "operating_mode":  "continuous_business",
+    "recurring_loops":  [
+                            {
+                                "key":  "creator_publish_loop",
+                                "title":  "Publish cross-channel content batch and distribution checks",
+                                "phase":  "distribution",
+                                "owner_role":  "Social Media Strategist",
+                                "every_ms":  10800000,
+                                "enabled":  true
+                            },
+                            {
+                                "key":  "creator_analytics_loop",
+                                "title":  "Review engagement metrics and adjust hooks",
+                                "phase":  "analytics",
+                                "owner_role":  "SEO Specialist",
+                                "every_ms":  10800000,
+                                "enabled":  true
+                            }
+                        ],
+    "auto_staffing_policy":  {
+                                 "enabled":  true,
+                                 "cooldown_minutes":  45,
+                                 "backlog_per_agent_threshold":  2,
+                                 "max_optional_adds":  3,
+                                 "max_agents":  12
+                             },
     "workflow_definition":  {
                                 "phases":  [
                                                "planning",

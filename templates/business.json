@@ -76,6 +76,48 @@
                             "SEO Specialist",
                             "Analytics Reporter"
                         ],
+    "operating_mode":  "continuous_business",
+    "recurring_loops":  [
+                            {
+                                "key":  "business_maintenance_loop",
+                                "title":  "Run site/platform maintenance and issue triage",
+                                "phase":  "maintenance",
+                                "owner_role":  "Backend Architect",
+                                "every_ms":  7200000,
+                                "enabled":  true
+                            },
+                            {
+                                "key":  "business_ads_loop",
+                                "title":  "Review ad spend pacing and optimize campaigns",
+                                "phase":  "marketing",
+                                "owner_role":  "Growth Hacker + Content Creator",
+                                "every_ms":  10800000,
+                                "enabled":  true
+                            },
+                            {
+                                "key":  "business_support_loop",
+                                "title":  "Process support backlog and improve customer FAQ",
+                                "phase":  "support",
+                                "owner_role":  "Support Responder",
+                                "every_ms":  5400000,
+                                "enabled":  true
+                            },
+                            {
+                                "key":  "business_analytics_loop",
+                                "title":  "Analyze KPI trends and propose growth actions",
+                                "phase":  "analytics",
+                                "owner_role":  "Finance Tracker",
+                                "every_ms":  14400000,
+                                "enabled":  true
+                            }
+                        ],
+    "auto_staffing_policy":  {
+                                 "enabled":  true,
+                                 "cooldown_minutes":  45,
+                                 "backlog_per_agent_threshold":  2,
+                                 "max_optional_adds":  4,
+                                 "max_agents":  14
+                             },
     "workflow_definition":  {
                                 "phases":  [
                                                "strategy",

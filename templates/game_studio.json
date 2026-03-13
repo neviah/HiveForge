@@ -74,6 +74,24 @@
                             "Feedback Synthesizer",
                             "Sprint Prioritizer"
                         ],
+    "operating_mode":  "finite_delivery",
+    "recurring_loops":  [
+                            {
+                                "key":  "studio_liveops_review",
+                                "title":  "Review build health and player issue backlog",
+                                "phase":  "qa",
+                                "owner_role":  "Evidence Collector",
+                                "every_ms":  21600000,
+                                "enabled":  true
+                            }
+                        ],
+    "auto_staffing_policy":  {
+                                 "enabled":  true,
+                                 "cooldown_minutes":  60,
+                                 "backlog_per_agent_threshold":  3,
+                                 "max_optional_adds":  3,
+                                 "max_agents":  13
+                             },
     "workflow_definition":  {
                                 "phases":  [
                                                "concept",

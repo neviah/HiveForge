@@ -66,6 +66,24 @@
                             "Feedback Synthesizer",
                             "Legal Compliance Checker"
                         ],
+    "operating_mode":  "finite_delivery",
+    "recurring_loops":  [
+                            {
+                                "key":  "publishing_editorial_qc",
+                                "title":  "Run editorial quality and source verification sweep",
+                                "phase":  "editing",
+                                "owner_role":  "Reality Checker",
+                                "every_ms":  21600000,
+                                "enabled":  true
+                            }
+                        ],
+    "auto_staffing_policy":  {
+                                 "enabled":  true,
+                                 "cooldown_minutes":  90,
+                                 "backlog_per_agent_threshold":  3,
+                                 "max_optional_adds":  2,
+                                 "max_agents":  10
+                             },
     "workflow_definition":  {
                                 "phases":  [
                                                "editorial_planning",

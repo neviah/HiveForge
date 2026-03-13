@@ -70,6 +70,7 @@ test('recovery requeues inprogress task and idles running subordinate', () => {
 test('recovery marks running project completed when all tasks are done', () => {
   const projectId = uniqueProjectId('all-done');
   const state = baseState(projectId);
+  state.operatingMode = 'finite_delivery';
   state.tasks.push({
     id: 'TASK-1',
     title: 'Done task',
