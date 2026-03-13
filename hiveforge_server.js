@@ -31,6 +31,8 @@ const AUTO_ACTION_RETRY_POLICY = {
   baseDelayMs: 30 * 1000,
   maxDelayMs: 30 * 60 * 1000,
 };
+const CONNECTOR_EXECUTION_STALE_MS = 15 * 60 * 1000;
+const MAX_CONNECTOR_EXECUTIONS = 2000;
 const DEFAULT_CONNECTOR_RETRY_POLICIES = {
   default: { maxAttempts: 3, baseDelayMs: 30 * 1000, maxDelayMs: 30 * 60 * 1000 },
   github: { maxAttempts: 2, baseDelayMs: 20 * 1000, maxDelayMs: 10 * 60 * 1000 },
@@ -241,6 +243,60 @@ function ensureDeadLetterState(projectState) {
   if (!Array.isArray(projectState.deadLetters)) {
     projectState.deadLetters = [];
   }
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => canonicalJson(entry)).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function connectorExecutionKey(task) {
+  const connector = String(task && task.autoAction && task.autoAction.connector ? task.autoAction.connector : '').trim().toLowerCase();
+  const operation = String(task && task.autoAction && task.autoAction.operation ? task.autoAction.operation : '').trim().toLowerCase();
+  const input = task && task.autoAction && task.autoAction.input && typeof task.autoAction.input === 'object'
+    ? task.autoAction.input
+    : {};
+  const inputHash = crypto.createHash('sha256').update(canonicalJson(input)).digest('hex').slice(0, 16);
+  return `${String(task && task.id ? task.id : 'task')}::${connector}::${operation}::${inputHash}`;
+}
+
+function ensureConnectorExecutionState(projectState) {
+  if (!projectState.connectorExecutions || typeof projectState.connectorExecutions !== 'object') {
+    projectState.connectorExecutions = {};
+  }
+}
+
+function markConnectorExecutionRecord(projectState, executionKey, patch = {}) {
+  ensureConnectorExecutionState(projectState);
+  const existing = projectState.connectorExecutions[executionKey] && typeof projectState.connectorExecutions[executionKey] === 'object'
+    ? projectState.connectorExecutions[executionKey]
+    : {};
+  const next = {
+    ...existing,
+    ...patch,
+    executionKey,
+    updatedAt: patch.updatedAt || nowIso(),
+  };
+  projectState.connectorExecutions[executionKey] = next;
+
+  const keys = Object.keys(projectState.connectorExecutions);
+  if (keys.length > MAX_CONNECTOR_EXECUTIONS) {
+    const sorted = keys
+      .map((key) => ({ key, updatedAt: Date.parse(projectState.connectorExecutions[key]?.updatedAt || '') || 0 }))
+      .sort((a, b) => a.updatedAt - b.updatedAt);
+    const removeCount = Math.max(0, keys.length - MAX_CONNECTOR_EXECUTIONS);
+    for (let idx = 0; idx < removeCount; idx += 1) {
+      delete projectState.connectorExecutions[sorted[idx].key];
+    }
+  }
+
+  return next;
 }
 
 function ensureKpiGoalState(projectState) {
@@ -1059,6 +1115,7 @@ function finalizeAutoActionTask(projectState, task, ok, reason, detail = {}) {
 
 function sendTaskToDeadLetter(projectState, task, reason, detail = {}) {
   ensureDeadLetterState(projectState);
+  ensureConnectorExecutionState(projectState);
   const at = nowIso();
   task.status = 'done';
   task.executionState = 'failed';
@@ -1082,6 +1139,15 @@ function sendTaskToDeadLetter(projectState, task, reason, detail = {}) {
   };
   projectState.deadLetters.unshift(record);
   if (projectState.deadLetters.length > 200) projectState.deadLetters.length = 200;
+
+  const executionKey = String(detail && detail.executionKey ? detail.executionKey : '').trim();
+  if (executionKey) {
+    markConnectorExecutionRecord(projectState, executionKey, {
+      status: 'dead_lettered',
+      lastError: String(reason || 'dead_lettered'),
+      deadLetteredAt: at,
+    });
+  }
 
   appendProjectLog(projectState, 'error', {
     kind: 'recurring_auto_action_dead_lettered',
@@ -1157,6 +1223,34 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
     return false;
   }
 
+  ensureConnectorExecutionState(projectState);
+  const executionKey = connectorExecutionKey(task);
+  const previousExecution = projectState.connectorExecutions[executionKey] || null;
+  if (previousExecution && previousExecution.status === 'succeeded') {
+    finalizeAutoActionTask(projectState, task, true, previousExecution.message || 'idempotent_replay_success', {
+      connector: action.connector,
+      operation: action.operation,
+      source,
+      idempotentReplay: true,
+      executionKey,
+      originalCompletedAt: previousExecution.completedAt || null,
+    });
+    persistProjectState(projectState);
+    return true;
+  }
+
+  if (previousExecution && previousExecution.status === 'running') {
+    const startedMs = Date.parse(previousExecution.startedAt || previousExecution.updatedAt || '');
+    if (Number.isFinite(startedMs) && (Date.now() - startedMs) < CONNECTOR_EXECUTION_STALE_MS) {
+      return false;
+    }
+    markConnectorExecutionRecord(projectState, executionKey, {
+      status: 'stale_running',
+      staleAt: nowIso(),
+      message: 'Marked stale after runtime recovery timeout.',
+    });
+  }
+
   const actorRole = String(action.actorRole || '').trim();
   const actor = actorRole ? findRuntimeAgentByRole(projectState, actorRole) : null;
   task.status = 'inprogress';
@@ -1172,7 +1266,19 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
     connector: action.connector,
     operation: action.operation,
     actorRole,
+    executionKey,
   };
+
+  markConnectorExecutionRecord(projectState, executionKey, {
+    taskId: task.id,
+    connector: String(action.connector || '').trim().toLowerCase(),
+    operation: String(action.operation || '').trim().toLowerCase(),
+    status: 'running',
+    startedAt: task.startedAt,
+    attempts: Number(previousExecution && previousExecution.attempts || 0) + 1,
+    source,
+    lastError: null,
+  });
 
   executeConnectorPolicy(action.connector, {
     dryRun: false,
@@ -1197,6 +1303,12 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
           source,
           requiresPermission: true,
           checks: policyResult.checks,
+          executionKey,
+        });
+        markConnectorExecutionRecord(projectState, executionKey, {
+          status: 'awaiting_approval',
+          lastError: policyResult.reason,
+          checks: policyResult.checks,
         });
         persistProjectState(projectState);
         return;
@@ -1208,6 +1320,11 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
         source,
         requiresPermission: needsPermission,
         checks: policyResult.checks,
+        executionKey,
+      });
+      markConnectorExecutionRecord(projectState, executionKey, {
+        status: 'failed',
+        lastError: policyResult.reason,
       });
       persistProjectState(projectState);
       return;
@@ -1218,6 +1335,7 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
       input: action.input || {},
       projectId: projectState.id,
       estimatedCost: Number(action.estimatedCost || 0),
+      idempotencyKey: executionKey,
     });
 
     if (!execution.ok) {
@@ -1228,6 +1346,11 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
         actorRole,
         source,
         errorCode: execution.errorCode || null,
+        executionKey,
+      });
+      markConnectorExecutionRecord(projectState, executionKey, {
+        status: 'failed',
+        lastError: failureReason,
       });
       persistProjectState(projectState);
       return;
@@ -1244,6 +1367,14 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
       actorRole,
       source,
       actualCost,
+      executionKey,
+    });
+    markConnectorExecutionRecord(projectState, executionKey, {
+      status: 'succeeded',
+      message: execution.message || 'ok',
+      completedAt: nowIso(),
+      actualCost,
+      result: execution.data || null,
     });
     persistProjectState(projectState);
   }).catch(async (err) => {
@@ -1258,6 +1389,11 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
       operation: action.operation,
       actorRole,
       source,
+      executionKey,
+    });
+    markConnectorExecutionRecord(projectState, executionKey, {
+      status: 'failed',
+      lastError: errMsg,
     });
     persistProjectState(projectState);
   }).finally(() => {
@@ -2239,6 +2375,7 @@ function recoverProjectStateAfterRestart(state) {
   ensureStaffingState(state);
   ensureKpiGoalState(state);
   ensureDeadLetterState(state);
+  ensureConnectorExecutionState(state);
   if (!state.kpiAlerting || typeof state.kpiAlerting !== 'object') {
     state.kpiAlerting = { lastSentAt: null, lastSignature: null };
   }
@@ -2360,6 +2497,7 @@ function createProjectFromTemplate({ name, template, goal }) {
       },
     },
     deadLetters: [],
+    connectorExecutions: {},
     kpiAlerting: {
       lastSentAt: null,
       lastSignature: null,
@@ -5856,6 +5994,8 @@ module.exports = {
   ensureCredentialStorage,
   assessApprovalRisk,
   connectorRetryPlan,
+  connectorExecutionKey,
+  markConnectorExecutionRecord,
   makeAnalyticsSnapshot,
   ensureMessageBus,
   appendMessageBusEntry,

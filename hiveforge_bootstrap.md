@@ -592,8 +592,9 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 1. Capability-aware task assignment at heartbeat routing stage.
 2. Explicit approval workflow with risk scoring, single/batch approve/deny APIs, and dashboard approvals workspace.
 3. Connector retry engine with backoff and dead-letter queue support.
-4. Per-connector retry policies exposed in Settings and persisted in config.
-5. KPI goals, weekly planning, variance alerts, and KPI notification escalation (WhatsApp/Telegram with cooldown).
+4. Connector execution idempotency ledger for recurring actions (replay suppression + stale-running recovery guard).
+5. Per-connector retry policies exposed in Settings and persisted in config.
+6. KPI goals, weekly planning, variance alerts, and KPI notification escalation (WhatsApp/Telegram with cooldown).
 
 ## **Next Critical Milestones**
 

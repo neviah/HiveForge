@@ -6,6 +6,8 @@ const assert = require('node:assert/strict');
 const {
   assessApprovalRisk,
   connectorRetryPlan,
+  connectorExecutionKey,
+  markConnectorExecutionRecord,
   makeAnalyticsSnapshot,
   ensureCredentialStorage,
 } = require('../hiveforge_server');
@@ -87,4 +89,46 @@ test('analytics snapshot includes variance alerts when goals drift', () => {
   assert.equal(typeof snapshot.variance.weeklyTasksDone, 'number');
   assert.equal(Array.isArray(snapshot.deadLetters), true);
   assert.equal(snapshot.deadLetters.length, 1);
+});
+
+test('connector execution key is deterministic for equivalent input payloads', () => {
+  const taskA = {
+    id: 'RECUR-abc',
+    autoAction: {
+      connector: 'netlify',
+      operation: 'trigger_deploy',
+      input: { siteId: 'site-1', options: { force: true, region: 'us' } },
+    },
+  };
+  const taskB = {
+    id: 'RECUR-abc',
+    autoAction: {
+      connector: 'netlify',
+      operation: 'trigger_deploy',
+      input: { options: { region: 'us', force: true }, siteId: 'site-1' },
+    },
+  };
+
+  const keyA = connectorExecutionKey(taskA);
+  const keyB = connectorExecutionKey(taskB);
+  assert.equal(keyA, keyB);
+});
+
+test('connector execution ledger upsert keeps latest status', () => {
+  const state = { connectorExecutions: {} };
+  const key = 'task-1::netlify::trigger_deploy::abcdef';
+
+  markConnectorExecutionRecord(state, key, {
+    status: 'running',
+    startedAt: new Date().toISOString(),
+    attempts: 1,
+  });
+  markConnectorExecutionRecord(state, key, {
+    status: 'succeeded',
+    completedAt: new Date().toISOString(),
+    attempts: 1,
+  });
+
+  assert.equal(state.connectorExecutions[key].status, 'succeeded');
+  assert.equal(state.connectorExecutions[key].attempts, 1);
 });
