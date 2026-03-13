@@ -78,9 +78,9 @@ const appState = {
   }
 };
 
-const SUPPORTED_CREDENTIAL_SERVICES = ['netlify', 'stripe', 'google_ads', 'analytics', 'email_provider'];
+const SUPPORTED_CREDENTIAL_SERVICES = ['github', 'netlify', 'stripe', 'google_ads', 'analytics', 'email_provider'];
 const CONNECTOR_REGISTRY = {
-  github: { id: 'github', label: 'GitHub', provider: 'github' },
+  github: { id: 'github', label: 'GitHub', credentialService: 'github' },
   telegram: { id: 'telegram', label: 'Telegram', provider: 'telegram' },
   whatsapp: { id: 'whatsapp', label: 'WhatsApp', provider: 'whatsapp' },
   netlify: { id: 'netlify', label: 'Netlify', credentialService: 'netlify' },
@@ -2065,10 +2065,285 @@ async function executeNetlifyConnector(options = {}) {
   };
 }
 
+async function executeGithubConnector(options = {}) {
+  const operation = String(options.operation || 'get_user').trim() || 'get_user';
+  const token = readCredentialToken('github');
+  if (!token) {
+    return {
+      ok: false,
+      errorCode: 'SECRET_MISSING',
+      message: 'GitHub credential token is missing.',
+      operation,
+      actualCost: 0,
+      data: null,
+    };
+  }
+
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'HiveForge',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+
+  if (operation === 'get_user') {
+    const resp = await fetchWithTimeout('https://api.github.com/user', { headers }, 10000);
+    if (!resp.ok) {
+      return {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: `GitHub user request failed with HTTP ${resp.status}.`,
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    const body = await resp.json();
+    return {
+      ok: true,
+      message: `Fetched GitHub user ${body?.login || 'unknown'}.`,
+      operation,
+      actualCost: 0,
+      data: {
+        login: body?.login || null,
+        name: body?.name || null,
+        publicRepos: body?.public_repos ?? null,
+      },
+    };
+  }
+
+  if (operation === 'list_repos') {
+    const resp = await fetchWithTimeout('https://api.github.com/user/repos?per_page=20&sort=updated', { headers }, 10000);
+    if (!resp.ok) {
+      return {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: `GitHub repos request failed with HTTP ${resp.status}.`,
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    const body = await resp.json();
+    const repos = Array.isArray(body) ? body.slice(0, 20).map((repo) => ({
+      id: repo?.id || null,
+      name: repo?.name || null,
+      fullName: repo?.full_name || null,
+      private: Boolean(repo?.private),
+      url: repo?.html_url || null,
+      pushedAt: repo?.pushed_at || null,
+    })) : [];
+    return {
+      ok: true,
+      message: `Fetched ${repos.length} GitHub repo${repos.length === 1 ? '' : 's'}.`,
+      operation,
+      actualCost: 0,
+      data: { repos },
+    };
+  }
+
+  return {
+    ok: false,
+    errorCode: 'VALIDATION_ERROR',
+    message: `Unsupported GitHub operation: ${operation}. Use get_user or list_repos.`,
+    operation,
+    actualCost: 0,
+    data: null,
+  };
+}
+
+async function executeAnalyticsConnector(options = {}) {
+  const operation = String(options.operation || 'list_accounts').trim() || 'list_accounts';
+  const token = readCredentialToken('analytics');
+  if (!token) {
+    return {
+      ok: false,
+      errorCode: 'SECRET_MISSING',
+      message: 'Google Analytics credential token is missing.',
+      operation,
+      actualCost: 0,
+      data: null,
+    };
+  }
+
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    'User-Agent': 'HiveForge',
+  };
+
+  if (operation === 'get_profile') {
+    const resp = await fetchWithTimeout('https://www.googleapis.com/oauth2/v3/userinfo', { headers }, 10000);
+    if (!resp.ok) {
+      return {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: `Google profile request failed with HTTP ${resp.status}.`,
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    const body = await resp.json();
+    return {
+      ok: true,
+      message: 'Fetched Google profile for analytics credential.',
+      operation,
+      actualCost: 0,
+      data: {
+        email: body?.email || null,
+        name: body?.name || null,
+        subject: body?.sub || null,
+      },
+    };
+  }
+
+  if (operation === 'list_accounts') {
+    const resp = await fetchWithTimeout('https://analyticsadmin.googleapis.com/v1beta/accounts?pageSize=20', { headers }, 10000);
+    if (!resp.ok) {
+      return {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: `Analytics accounts request failed with HTTP ${resp.status}. Try get_profile to validate token scope first.`,
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    const body = await resp.json();
+    const accounts = Array.isArray(body?.accounts) ? body.accounts.slice(0, 20).map((account) => ({
+      name: account?.name || null,
+      displayName: account?.displayName || null,
+      regionCode: account?.regionCode || null,
+    })) : [];
+    return {
+      ok: true,
+      message: `Fetched ${accounts.length} Analytics account${accounts.length === 1 ? '' : 's'}.`,
+      operation,
+      actualCost: 0,
+      data: { accounts },
+    };
+  }
+
+  return {
+    ok: false,
+    errorCode: 'VALIDATION_ERROR',
+    message: `Unsupported Analytics operation: ${operation}. Use list_accounts or get_profile.`,
+    operation,
+    actualCost: 0,
+    data: null,
+  };
+}
+
+async function executeGoogleAdsConnector(options = {}) {
+  const operation = String(options.operation || 'get_profile').trim() || 'get_profile';
+  const token = readCredentialToken('google_ads');
+  if (!token) {
+    return {
+      ok: false,
+      errorCode: 'SECRET_MISSING',
+      message: 'Google Ads credential token is missing.',
+      operation,
+      actualCost: 0,
+      data: null,
+    };
+  }
+
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    'User-Agent': 'HiveForge',
+  };
+
+  if (operation === 'get_profile') {
+    const resp = await fetchWithTimeout('https://www.googleapis.com/oauth2/v3/userinfo', { headers }, 10000);
+    if (!resp.ok) {
+      return {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: `Google profile request failed with HTTP ${resp.status}.`,
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    const body = await resp.json();
+    return {
+      ok: true,
+      message: 'Fetched Google profile for ads credential.',
+      operation,
+      actualCost: 0,
+      data: {
+        email: body?.email || null,
+        name: body?.name || null,
+        subject: body?.sub || null,
+      },
+    };
+  }
+
+  if (operation === 'list_accessible_customers') {
+    const developerToken = String(process.env.GOOGLE_ADS_DEVELOPER_TOKEN || '').trim();
+    if (!developerToken) {
+      return {
+        ok: false,
+        errorCode: 'VALIDATION_ERROR',
+        message: 'GOOGLE_ADS_DEVELOPER_TOKEN is required for list_accessible_customers. Use get_profile if you only want token validation.',
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    const resp = await fetchWithTimeout('https://googleads.googleapis.com/v18/customers:listAccessibleCustomers', {
+      method: 'POST',
+      headers: {
+        ...headers,
+        'developer-token': developerToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    }, 12000);
+    if (!resp.ok) {
+      return {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: `Google Ads customers request failed with HTTP ${resp.status}.`,
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    const body = await resp.json();
+    const resourceNames = Array.isArray(body?.resourceNames) ? body.resourceNames : [];
+    return {
+      ok: true,
+      message: `Fetched ${resourceNames.length} accessible Google Ads customer${resourceNames.length === 1 ? '' : 's'}.`,
+      operation,
+      actualCost: 0,
+      data: { resourceNames },
+    };
+  }
+
+  return {
+    ok: false,
+    errorCode: 'VALIDATION_ERROR',
+    message: `Unsupported Google Ads operation: ${operation}. Use get_profile or list_accessible_customers.`,
+    operation,
+    actualCost: 0,
+    data: null,
+  };
+}
+
 async function executeLiveConnector(connectorId, options = {}) {
   const connectorKey = String(connectorId || '').trim().toLowerCase();
+  if (connectorKey === 'github') {
+    return executeGithubConnector(options);
+  }
   if (connectorKey === 'netlify') {
     return executeNetlifyConnector(options);
+  }
+  if (connectorKey === 'analytics') {
+    return executeAnalyticsConnector(options);
+  }
+  if (connectorKey === 'google_ads') {
+    return executeGoogleAdsConnector(options);
   }
   return {
     ok: false,

@@ -83,6 +83,7 @@ const MARKETPLACE_AGENTS = [
 const DIVISIONS = ['All', ...new Set(MARKETPLACE_AGENTS.map(a => a.division))].sort((a,b) => a === 'All' ? -1 : a.localeCompare(b));
 
 const CREDENTIAL_SERVICES = [
+  { id:'github',        label:'GitHub',            icon:'🐙', desc:'Repository access, automation, and deployment workflows.' },
   { id:'netlify',       label:'Netlify',          icon:'🌐', desc:'Deploy static sites & serverless functions.' },
   { id:'stripe',        label:'Stripe',            icon:'💳', desc:'Process payments, subscriptions, invoices.'  },
   { id:'google_ads',    label:'Google Ads',        icon:'📣', desc:'Create and manage ad campaigns.'            },
@@ -130,6 +131,10 @@ const SERVICE_LABELS = {
 };
 
 const SERVICE_TOKEN_GUIDES = {
+  github: {
+    where: 'GitHub Settings -> Developer settings -> Personal access tokens.',
+    what: 'Use a fine-grained token with repo scopes you need (or classic token if preferred).',
+  },
   netlify: {
     where: 'User Settings -> Applications -> Personal access tokens.',
     what: 'Paste the full personal access token.',
