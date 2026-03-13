@@ -26,6 +26,16 @@ const DEFAULT_RUNTIME_SETTINGS = {
   maxAutoFixes: 5,
   countManualHeartbeatForStall: false,
 };
+const AUTO_ACTION_RETRY_POLICY = {
+  maxAttempts: 3,
+  baseDelayMs: 30 * 1000,
+  maxDelayMs: 30 * 60 * 1000,
+};
+const DEFAULT_KPI_GOALS = {
+  weeklyTasksDoneTarget: 15,
+  maxBacklog: 10,
+  maxMonthlySpend: 500,
+};
 const DEFAULT_RECURRING_SCHEDULE = [
   { key: 'maintenance_health', title: 'Run maintenance health check', phase: 'maintenance', everyMs: 60 * 60 * 1000 },
   { key: 'growth_review', title: 'Review growth metrics and next actions', phase: 'growth', everyMs: 3 * 60 * 60 * 1000 },
@@ -150,6 +160,147 @@ function clampInt(value, fallback, min, max) {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(min, Math.min(max, Math.round(n)));
+}
+
+function clampNumber(value, fallback, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+function startOfUtcWeekIso(ts = nowIso()) {
+  const dt = new Date(ts);
+  if (Number.isNaN(dt.getTime())) return nowIso();
+  const day = dt.getUTCDay();
+  const diff = day === 0 ? -6 : (1 - day);
+  dt.setUTCDate(dt.getUTCDate() + diff);
+  dt.setUTCHours(0, 0, 0, 0);
+  return dt.toISOString();
+}
+
+function ensureDeadLetterState(projectState) {
+  if (!Array.isArray(projectState.deadLetters)) {
+    projectState.deadLetters = [];
+  }
+}
+
+function ensureKpiGoalState(projectState) {
+  if (!projectState.kpiGoals || typeof projectState.kpiGoals !== 'object') {
+    projectState.kpiGoals = {
+      ...DEFAULT_KPI_GOALS,
+      weeklyPlan: {
+        weekStart: startOfUtcWeekIso(),
+        lastPlannedAt: null,
+        nextReviewAt: null,
+        summary: null,
+      },
+    };
+  }
+  const goals = projectState.kpiGoals;
+  goals.weeklyTasksDoneTarget = clampInt(goals.weeklyTasksDoneTarget, DEFAULT_KPI_GOALS.weeklyTasksDoneTarget, 1, 5000);
+  goals.maxBacklog = clampInt(goals.maxBacklog, DEFAULT_KPI_GOALS.maxBacklog, 0, 10000);
+  goals.maxMonthlySpend = clampNumber(goals.maxMonthlySpend, DEFAULT_KPI_GOALS.maxMonthlySpend, 0, 100000000);
+  if (!goals.weeklyPlan || typeof goals.weeklyPlan !== 'object') {
+    goals.weeklyPlan = {
+      weekStart: startOfUtcWeekIso(),
+      lastPlannedAt: null,
+      nextReviewAt: null,
+      summary: null,
+    };
+  }
+  if (!goals.weeklyPlan.weekStart) goals.weeklyPlan.weekStart = startOfUtcWeekIso();
+}
+
+function connectorRetryPlan(attemptNumber, reason, detail = {}) {
+  const reasonText = String(reason || detail?.errorCode || '').toLowerCase();
+  const retryable = (
+    reasonText.includes('timeout')
+    || reasonText.includes('timed out')
+    || reasonText.includes('econnreset')
+    || reasonText.includes('enetdown')
+    || reasonText.includes('connect')
+    || reasonText.includes('temporar')
+    || reasonText.includes('rate limit')
+    || reasonText.includes('429')
+    || reasonText.includes('5xx')
+    || reasonText.includes('http 5')
+    || reasonText.includes('execution_failed')
+  );
+  const nextAttempt = Math.max(1, Number(attemptNumber || 1));
+  const rawDelay = AUTO_ACTION_RETRY_POLICY.baseDelayMs * Math.pow(2, Math.max(0, nextAttempt - 1));
+  return {
+    retryable,
+    delayMs: Math.min(AUTO_ACTION_RETRY_POLICY.maxDelayMs, rawDelay),
+  };
+}
+
+function assessApprovalRisk(task, detail = {}) {
+  let score = 15;
+  const checks = Array.isArray(detail.checks) ? detail.checks : [];
+  const estimatedCost = Number(detail.estimatedCost || task?.autoAction?.estimatedCost || 0);
+  const hasPolicyDeny = checks.some((entry) => !entry.ok && (entry.type === 'project_policy' || entry.type === 'budget_cap' || entry.type === 'role_capability' || entry.type === 'role_deploy'));
+  const connector = String(detail.connector || task?.autoAction?.connector || '').toLowerCase();
+  const operation = String(detail.operation || task?.autoAction?.operation || '').toLowerCase();
+
+  if (hasPolicyDeny) score += 25;
+  if (connector === 'netlify' && operation === 'trigger_deploy') score += 20;
+  if (connector === 'stripe') score += 18;
+  if (connector === 'google_ads') score += 16;
+  if (estimatedCost >= 1000) score += 25;
+  else if (estimatedCost >= 250) score += 15;
+  else if (estimatedCost > 0) score += 8;
+  if (String(detail.reason || '').toLowerCase().includes('permission')) score += 8;
+
+  const bounded = Math.max(0, Math.min(100, score));
+  let level = 'low';
+  if (bounded >= 70) level = 'high';
+  else if (bounded >= 40) level = 'medium';
+  return { score: bounded, level, requiresHuman: bounded >= 40 };
+}
+
+function projectActualMetrics(projectState) {
+  const weekStart = startOfUtcWeekIso(nowIso());
+  const weekStartMs = Date.parse(weekStart);
+  const monthlySpend = Object.values(getCredentialBudgetSnapshot(projectState.id) || {}).reduce((sum, entry) => {
+    return sum + (Number(entry && entry.monthlySpent) || 0);
+  }, 0);
+  const tasksDoneThisWeek = projectState.tasks.filter((task) => {
+    if (task.status !== 'done' || !task.completedAt) return false;
+    const completedMs = Date.parse(task.completedAt);
+    return Number.isFinite(completedMs) && completedMs >= weekStartMs;
+  }).length;
+  const backlog = projectState.tasks.filter((task) => task.status === 'backlog').length;
+  return {
+    tasksDoneThisWeek,
+    backlog,
+    monthlySpend: Number(monthlySpend.toFixed(2)),
+  };
+}
+
+function computeKpiVarianceAndAlerts(projectState) {
+  ensureKpiGoalState(projectState);
+  ensureDeadLetterState(projectState);
+  const goals = projectState.kpiGoals;
+  const actual = projectActualMetrics(projectState);
+  const variance = {
+    weeklyTasksDone: actual.tasksDoneThisWeek - goals.weeklyTasksDoneTarget,
+    backlog: actual.backlog - goals.maxBacklog,
+    monthlySpend: Number((actual.monthlySpend - goals.maxMonthlySpend).toFixed(2)),
+  };
+  const alerts = [];
+  if (variance.weeklyTasksDone < 0) {
+    alerts.push(`Weekly throughput below target by ${Math.abs(variance.weeklyTasksDone)} tasks.`);
+  }
+  if (variance.backlog > 0) {
+    alerts.push(`Backlog is ${variance.backlog} over the configured limit.`);
+  }
+  if (variance.monthlySpend > 0) {
+    alerts.push(`Monthly spend is $${variance.monthlySpend.toFixed(2)} above target.`);
+  }
+  if (projectState.deadLetters.length > 0) {
+    alerts.push(`${projectState.deadLetters.length} task(s) are in dead-letter queue.`);
+  }
+  return { goals, actual, variance, alerts };
 }
 
 function runtimeSettings() {
@@ -464,6 +615,8 @@ function createInitialTasks(template) {
     executionTaskRunId: null,
     inprogressCycles: 0,
     pendingApproval: null,
+    autoActionNotBeforeAt: null,
+    deadLetteredAt: null,
     createdAt,
     completedAt: null,
     startedAt: null,
@@ -480,6 +633,7 @@ function humanizeDurationMs(ms) {
 
 function summarizeProjectAutomation(projectState) {
   ensureRecurringState(projectState);
+  ensureDeadLetterState(projectState);
   return {
     recurring: {
       enabled: Boolean(projectState.recurring.enabled),
@@ -496,6 +650,9 @@ function summarizeProjectAutomation(projectState) {
         ? projectState.staffing.optionalPool.length
         : 0,
       maxAgents: Number(projectState.staffing && projectState.staffing.maxAgents) || 0,
+    },
+    deadLetters: {
+      count: projectState.deadLetters.length,
     },
   };
 }
@@ -596,6 +753,8 @@ function enqueueRecurringTasks(projectState, ts, source = 'interval') {
       executionTaskRunId: null,
       inprogressCycles: 0,
       pendingApproval: null,
+      autoActionNotBeforeAt: null,
+      deadLetteredAt: null,
       createdAt: ts,
       completedAt: null,
       startedAt: null,
@@ -745,9 +904,14 @@ function evaluateAutoStaffing(projectState, ts) {
 
 function pickRunnableAutoActionTask(projectState) {
   const done = projectDoneTaskIds(projectState);
+  const nowMs = Date.now();
   return projectState.tasks.find((task) => {
     if (task.status !== 'backlog') return false;
     if (!task.autoAction || task.autoAction.type !== 'connector') return false;
+    if (task.autoActionNotBeforeAt) {
+      const notBeforeMs = Date.parse(task.autoActionNotBeforeAt);
+      if (Number.isFinite(notBeforeMs) && nowMs < notBeforeMs) return false;
+    }
     const deps = Array.isArray(task.dependencies) ? task.dependencies : [];
     return deps.every((depId) => done.has(depId));
   }) || null;
@@ -759,6 +923,8 @@ function finalizeAutoActionTask(projectState, task, ok, reason, detail = {}) {
   task.executionState = ok ? 'done' : 'failed';
   task.lastError = ok ? null : String(reason || 'auto_action_failed');
   task.lastProgressAt = nowIso();
+  task.autoActionNotBeforeAt = null;
+  task.pendingApproval = null;
   appendProjectLog(projectState, ok ? 'task' : 'error', {
     kind: ok ? 'recurring_auto_action_completed' : 'recurring_auto_action_failed',
     taskId: task.id,
@@ -779,6 +945,94 @@ function finalizeAutoActionTask(projectState, task, ok, reason, detail = {}) {
     },
   });
   emitProjectEvent(projectState.id, 'task_update', task);
+}
+
+function sendTaskToDeadLetter(projectState, task, reason, detail = {}) {
+  ensureDeadLetterState(projectState);
+  const at = nowIso();
+  task.status = 'done';
+  task.executionState = 'failed';
+  task.completedAt = at;
+  task.lastFailedAt = at;
+  task.lastProgressAt = at;
+  task.lastError = String(reason || 'dead_lettered');
+  task.deadLetteredAt = at;
+  task.autoActionNotBeforeAt = null;
+
+  const record = {
+    taskId: task.id,
+    title: task.title,
+    recurringKey: task.recurringKey || null,
+    connector: task.autoAction?.connector || null,
+    operation: task.autoAction?.operation || null,
+    retryCount: Number(task.retryCount || 0),
+    failedAt: at,
+    reason: String(reason || 'dead_lettered'),
+    detail,
+  };
+  projectState.deadLetters.unshift(record);
+  if (projectState.deadLetters.length > 200) projectState.deadLetters.length = 200;
+
+  appendProjectLog(projectState, 'error', {
+    kind: 'recurring_auto_action_dead_lettered',
+    ...record,
+  });
+  appendMessageBusEntry({
+    projectId: projectState.id,
+    from: 'coordinator',
+    to: 'dlq',
+    kind: 'task_dead_lettered',
+    payload: record,
+  });
+  emitProjectEvent(projectState.id, 'task_update', task);
+}
+
+function scheduleAutoActionRetry(projectState, task, reason, detail = {}) {
+  const nextRetryCount = Number(task.retryCount || 0) + 1;
+  const retryPlan = connectorRetryPlan(nextRetryCount, reason, detail);
+  if (!retryPlan.retryable || nextRetryCount > AUTO_ACTION_RETRY_POLICY.maxAttempts) {
+    sendTaskToDeadLetter(projectState, task, reason, detail);
+    return false;
+  }
+
+  const at = nowIso();
+  const notBeforeAt = new Date(Date.now() + retryPlan.delayMs).toISOString();
+  task.status = 'backlog';
+  task.executionState = 'queued';
+  task.assignee = null;
+  task.startedAt = null;
+  task.inprogressCycles = 0;
+  task.retryCount = nextRetryCount;
+  task.lastFailedAt = at;
+  task.lastProgressAt = at;
+  task.lastError = String(reason || 'retry_scheduled');
+  task.autoActionNotBeforeAt = notBeforeAt;
+
+  appendProjectLog(projectState, 'fix', {
+    kind: 'recurring_auto_action_retry_scheduled',
+    taskId: task.id,
+    recurringKey: task.recurringKey,
+    reason,
+    retryCount: nextRetryCount,
+    retryDelayMs: retryPlan.delayMs,
+    notBeforeAt,
+    detail,
+  });
+  appendMessageBusEntry({
+    projectId: projectState.id,
+    from: 'coordinator',
+    to: 'automation_engine',
+    kind: 'recurring_auto_action_retry_scheduled',
+    payload: {
+      taskId: task.id,
+      reason,
+      retryCount: nextRetryCount,
+      retryDelayMs: retryPlan.delayMs,
+      notBeforeAt,
+    },
+  });
+  emitProjectEvent(projectState.id, 'task_update', task);
+  return true;
 }
 
 function executeRecurringAutoAction(projectState, task, source = 'interval') {
@@ -835,12 +1089,13 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
         persistProjectState(projectState);
         return;
       }
-      finalizeAutoActionTask(projectState, task, false, policyResult.reason, {
+      scheduleAutoActionRetry(projectState, task, policyResult.reason, {
         connector: action.connector,
         operation: action.operation,
         actorRole,
         source,
         requiresPermission: needsPermission,
+        checks: policyResult.checks,
       });
       persistProjectState(projectState);
       return;
@@ -854,11 +1109,13 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
     });
 
     if (!execution.ok) {
-      finalizeAutoActionTask(projectState, task, false, execution.message || execution.errorCode || 'execution_failed', {
+      const failureReason = execution.message || execution.errorCode || 'execution_failed';
+      scheduleAutoActionRetry(projectState, task, failureReason, {
         connector: action.connector,
         operation: action.operation,
         actorRole,
         source,
+        errorCode: execution.errorCode || null,
       });
       persistProjectState(projectState);
       return;
@@ -878,12 +1135,13 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
     });
     persistProjectState(projectState);
   }).catch(async (err) => {
+    const errMsg = redactSensitive(err.message);
     await notifyOperator(projectState, `Auto action error on ${action.connector}:${action.operation}`, {
       taskId: task.id,
       actorRole,
-      reason: redactSensitive(err.message),
+      reason: errMsg,
     });
-    finalizeAutoActionTask(projectState, task, false, redactSensitive(err.message), {
+    scheduleAutoActionRetry(projectState, task, errMsg, {
       connector: action.connector,
       operation: action.operation,
       actorRole,
@@ -1031,6 +1289,7 @@ function pickWorkerAgent(projectState, task = null) {
 
 function markTaskAwaitingApproval(projectState, task, reason, detail = {}) {
   const at = nowIso();
+  const risk = assessApprovalRisk(task, { ...detail, reason });
   task.status = 'review';
   task.executionState = 'awaiting_approval';
   task.lastError = String(reason || 'approval_required');
@@ -1038,12 +1297,14 @@ function markTaskAwaitingApproval(projectState, task, reason, detail = {}) {
   task.pendingApproval = {
     requestedAt: at,
     reason: String(reason || 'approval_required'),
+    risk,
     detail,
   };
   appendProjectLog(projectState, 'task', {
     kind: 'task_awaiting_approval',
     taskId: task.id,
     reason,
+    risk,
     detail,
   });
   appendMessageBusEntry({
@@ -1055,6 +1316,7 @@ function markTaskAwaitingApproval(projectState, task, reason, detail = {}) {
       taskId: task.id,
       title: task.title,
       reason,
+      risk,
       detail,
     },
   });
@@ -1575,9 +1837,12 @@ function runProjectHeartbeat(projectState, source = 'interval') {
   const beatTs = nowIso();
   ensureRecurringState(projectState);
   ensureStaffingState(projectState);
+  ensureKpiGoalState(projectState);
+  ensureDeadLetterState(projectState);
   projectState.heartbeat.lastBeat = beatTs;
   projectState.heartbeat.status = 'alive';
   projectState.heartbeat.cycleCount = (projectState.heartbeat.cycleCount || 0) + 1;
+  refreshWeeklyKpiPlan(projectState, beatTs);
   enqueueRecurringTasks(projectState, beatTs, source);
   evaluateAutoStaffing(projectState, beatTs);
 
@@ -1791,6 +2056,8 @@ function recoverProjectStateAfterRestart(state) {
     if (typeof t.executionTaskRunId === 'undefined') t.executionTaskRunId = null;
     if (typeof t.recurringKey === 'undefined') t.recurringKey = null;
     if (typeof t.pendingApproval === 'undefined') t.pendingApproval = null;
+    if (typeof t.autoActionNotBeforeAt === 'undefined') t.autoActionNotBeforeAt = null;
+    if (typeof t.deadLetteredAt === 'undefined') t.deadLetteredAt = null;
   });
   if (typeof state.operatingMode !== 'string') {
     state.operatingMode = templateOperatingMode(state.template, null);
@@ -1799,6 +2066,8 @@ function recoverProjectStateAfterRestart(state) {
   }
   ensureRecurringState(state);
   ensureStaffingState(state);
+  ensureKpiGoalState(state);
+  ensureDeadLetterState(state);
   if (!state.roleCapabilities || typeof state.roleCapabilities !== 'object') {
     state.roleCapabilities = {};
     state.agents.forEach((agent) => {
@@ -1907,6 +2176,16 @@ function createProjectFromTemplate({ name, template, goal }) {
       lastScaledAt: null,
     },
     roleCapabilities: templateRoleCapabilities(tpl, initialAgents),
+    kpiGoals: {
+      ...DEFAULT_KPI_GOALS,
+      weeklyPlan: {
+        weekStart: startOfUtcWeekIso(createdAt),
+        lastPlannedAt: null,
+        nextReviewAt: null,
+        summary: null,
+      },
+    },
+    deadLetters: [],
     agents: initialAgents,
     tasks: createInitialTasks(tpl),
     logs: [],
@@ -2205,7 +2484,47 @@ function deleteCredentialMetadata(service) {
   });
 }
 
+function refreshWeeklyKpiPlan(projectState, ts = nowIso()) {
+  ensureKpiGoalState(projectState);
+  const plan = projectState.kpiGoals.weeklyPlan;
+  const nowMs = Date.parse(ts);
+  const weekStart = startOfUtcWeekIso(ts);
+  if (plan.weekStart !== weekStart) {
+    plan.weekStart = weekStart;
+    plan.lastPlannedAt = null;
+    plan.nextReviewAt = null;
+    plan.summary = null;
+  }
+  const nextReviewMs = Date.parse(plan.nextReviewAt || '');
+  if (plan.lastPlannedAt && Number.isFinite(nextReviewMs) && nowMs < nextReviewMs) {
+    return;
+  }
+
+  const { goals, actual, variance } = computeKpiVarianceAndAlerts(projectState);
+  const summary = `Weekly plan: target ${goals.weeklyTasksDoneTarget} tasks, cap backlog ${goals.maxBacklog}, cap monthly spend $${goals.maxMonthlySpend}. Current: ${actual.tasksDoneThisWeek} tasks done this week, backlog ${actual.backlog}, monthly spend $${actual.monthlySpend}. Variance: throughput ${variance.weeklyTasksDone}, backlog ${variance.backlog}, spend ${variance.monthlySpend}.`;
+  plan.lastPlannedAt = ts;
+  plan.nextReviewAt = new Date(nowMs + 7 * 24 * 60 * 60 * 1000).toISOString();
+  plan.summary = summary;
+
+  appendProjectLog(projectState, 'message', {
+    kind: 'weekly_kpi_plan_generated',
+    weekStart: plan.weekStart,
+    summary,
+  });
+  appendMessageBusEntry({
+    projectId: projectState.id,
+    from: 'coordinator',
+    to: 'analytics_engine',
+    kind: 'weekly_kpi_plan_generated',
+    payload: {
+      weekStart: plan.weekStart,
+      summary,
+    },
+  });
+}
+
 function makeAnalyticsSnapshot(projectState) {
+  ensureKpiGoalState(projectState);
   const done = projectState.tasks.filter((t) => t.status === 'done').length;
   const inProgress = projectState.tasks.filter((t) => t.status === 'inprogress').length;
   const backlog = projectState.tasks.filter((t) => t.status === 'backlog').length;
@@ -2213,6 +2532,7 @@ function makeAnalyticsSnapshot(projectState) {
   const totalAgents = projectState.agents.length;
   const totalTokens = projectState.agents.reduce((sum, a) => sum + (Number(a.tokens) || 0), 0);
   const uptime = projectUptime(projectState);
+  const insight = computeKpiVarianceAndAlerts(projectState);
 
   return {
     kpi: [
@@ -2223,6 +2543,16 @@ function makeAnalyticsSnapshot(projectState) {
       String(totalTokens),
       uptime
     ],
+    metrics: insight.actual,
+    goals: {
+      weeklyTasksDoneTarget: insight.goals.weeklyTasksDoneTarget,
+      maxBacklog: insight.goals.maxBacklog,
+      maxMonthlySpend: insight.goals.maxMonthlySpend,
+    },
+    variance: insight.variance,
+    alerts: insight.alerts,
+    weeklyPlan: insight.goals.weeklyPlan,
+    deadLetters: Array.isArray(projectState.deadLetters) ? projectState.deadLetters.slice(0, 20) : [],
     lastUpdated: nowIso()
   };
 }
@@ -4057,6 +4387,8 @@ async function main() {
           lastProgressAt: null,
           executionTaskRunId: null,
           pendingApproval: null,
+          autoActionNotBeforeAt: null,
+          deadLetteredAt: null,
           createdAt: nowIso(),
           completedAt: null,
           startedAt: null,
@@ -4297,7 +4629,79 @@ async function main() {
     if (pathname === '/api/analytics' && req.method === 'GET') {
       const projectId = urlObj.searchParams.get('projectId');
       const runtime = projectId ? projectRuntimes.get(projectId) : null;
-      writeJson(res, runtime ? makeAnalyticsSnapshot(runtime.state) : { kpi: ['-', '-', '-', '-', '-', '-'], lastUpdated: nowIso() });
+      writeJson(res, runtime ? makeAnalyticsSnapshot(runtime.state) : {
+        kpi: ['-', '-', '-', '-', '-', '-'],
+        metrics: { tasksDoneThisWeek: 0, backlog: 0, monthlySpend: 0 },
+        goals: { ...DEFAULT_KPI_GOALS },
+        variance: { weeklyTasksDone: 0, backlog: 0, monthlySpend: 0 },
+        alerts: [],
+        weeklyPlan: null,
+        deadLetters: [],
+        lastUpdated: nowIso(),
+      });
+      return;
+    }
+
+    if (pathname === '/api/kpi_goals' && req.method === 'GET') {
+      const projectId = String(urlObj.searchParams.get('projectId') || '').trim();
+      const runtime = projectId ? projectRuntimes.get(projectId) : null;
+      if (!runtime) {
+        writeJson(res, { error: 'Project not found' }, 404);
+        return;
+      }
+      ensureKpiGoalState(runtime.state);
+      writeJson(res, {
+        projectId,
+        goals: {
+          weeklyTasksDoneTarget: runtime.state.kpiGoals.weeklyTasksDoneTarget,
+          maxBacklog: runtime.state.kpiGoals.maxBacklog,
+          maxMonthlySpend: runtime.state.kpiGoals.maxMonthlySpend,
+        },
+        weeklyPlan: runtime.state.kpiGoals.weeklyPlan,
+      });
+      return;
+    }
+
+    if (pathname === '/api/kpi_goals' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = parseJsonBodySafe(body);
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+        const projectId = String(payload.projectId || '').trim();
+        const runtime = projectId ? projectRuntimes.get(projectId) : null;
+        if (!runtime) {
+          writeJson(res, { error: 'Project not found' }, 404);
+          return;
+        }
+
+        ensureKpiGoalState(runtime.state);
+        const goalsPatch = payload.goals && typeof payload.goals === 'object' ? payload.goals : {};
+        runtime.state.kpiGoals.weeklyTasksDoneTarget = clampInt(goalsPatch.weeklyTasksDoneTarget, runtime.state.kpiGoals.weeklyTasksDoneTarget, 1, 5000);
+        runtime.state.kpiGoals.maxBacklog = clampInt(goalsPatch.maxBacklog, runtime.state.kpiGoals.maxBacklog, 0, 10000);
+        runtime.state.kpiGoals.maxMonthlySpend = clampNumber(goalsPatch.maxMonthlySpend, runtime.state.kpiGoals.maxMonthlySpend, 0, 100000000);
+        runtime.state.kpiGoals.weeklyPlan.lastPlannedAt = null;
+        runtime.state.kpiGoals.weeklyPlan.nextReviewAt = null;
+
+        refreshWeeklyKpiPlan(runtime.state, nowIso());
+        persistProjectState(runtime.state);
+        writeJson(res, {
+          ok: true,
+          projectId,
+          goals: {
+            weeklyTasksDoneTarget: runtime.state.kpiGoals.weeklyTasksDoneTarget,
+            maxBacklog: runtime.state.kpiGoals.maxBacklog,
+            maxMonthlySpend: runtime.state.kpiGoals.maxMonthlySpend,
+          },
+          weeklyPlan: runtime.state.kpiGoals.weeklyPlan,
+          analytics: makeAnalyticsSnapshot(runtime.state),
+        });
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
       return;
     }
 
@@ -5161,6 +5565,9 @@ module.exports = {
   recordCredentialSpend,
   getCredentialBudgetSnapshot,
   ensureCredentialStorage,
+  assessApprovalRisk,
+  connectorRetryPlan,
+  makeAnalyticsSnapshot,
   ensureMessageBus,
   appendMessageBusEntry,
   readMessageBusEntries,

@@ -441,6 +441,48 @@
         <div class="hf-analytics-kpi" id="analyticsKpi">
           <!-- populated by JS -->
         </div>
+        <div class="hf-card" style="max-width:980px;margin-bottom:1rem;">
+          <h3 style="margin-top:0;">Weekly KPI Goals</h3>
+          <div class="hf-grid-2" style="margin-bottom:0.7rem;">
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Weekly Tasks Target</label>
+              <input id="analyticsGoalWeeklyTasks" type="number" min="1" max="5000" step="1" style="width:100%;" />
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Backlog Cap</label>
+              <input id="analyticsGoalBacklogCap" type="number" min="0" max="10000" step="1" style="width:100%;" />
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Monthly Spend Cap (USD)</label>
+              <input id="analyticsGoalSpendCap" type="number" min="0" step="0.01" style="width:100%;" />
+            </div>
+            <div>
+              <div style="font-size:0.82rem;color:var(--muted);margin-top:1.8rem;">Variance is computed as current minus target, so positive spend/backlog means risk.</div>
+            </div>
+          </div>
+          <div class="hf-btn-row" style="margin-bottom:0.8rem;">
+            <button class="hf-btn" onclick="Dashboard.saveKpiGoals()">Save KPI Goals</button>
+            <span id="analyticsGoalStatus" class="hf-status" style="display:none;"></span>
+          </div>
+          <div class="hf-grid-2">
+            <div class="hf-chart-placeholder" style="min-height:auto;align-items:flex-start;">
+              <strong>Throughput Variance</strong>
+              <div id="analyticsVarianceThroughput" style="margin-top:0.4rem;color:var(--muted);">—</div>
+            </div>
+            <div class="hf-chart-placeholder" style="min-height:auto;align-items:flex-start;">
+              <strong>Backlog Variance</strong>
+              <div id="analyticsVarianceBacklog" style="margin-top:0.4rem;color:var(--muted);">—</div>
+            </div>
+            <div class="hf-chart-placeholder" style="min-height:auto;align-items:flex-start;">
+              <strong>Spend Variance</strong>
+              <div id="analyticsVarianceSpend" style="margin-top:0.4rem;color:var(--muted);">—</div>
+            </div>
+            <div class="hf-chart-placeholder" style="min-height:auto;align-items:flex-start;">
+              <strong>Dead-letter Tasks</strong>
+              <div id="analyticsDeadLetterCount" style="margin-top:0.4rem;color:var(--muted);">0</div>
+            </div>
+          </div>
+        </div>
         <div class="hf-grid-2">
           <div class="hf-chart-placeholder">
             <span style="font-size:2rem;">📈</span>
@@ -460,6 +502,21 @@
             <span style="font-size:2rem;">🔄</span>
             <span>Conversions &amp; ROI — populated by Analytics Reporter agent</span>
           </div>
+        </div>
+        <div class="hf-grid-2" style="margin-top:1rem;">
+          <div class="hf-card" style="max-width:960px;">
+            <h3 style="margin-top:0;">Variance Alerts</h3>
+            <div id="analyticsAlerts" class="hf-log-stream" style="max-height:180px;"></div>
+          </div>
+          <div class="hf-card" style="max-width:960px;">
+            <h3 style="margin-top:0;">Weekly Plan</h3>
+            <div id="analyticsWeeklyPlan" class="hf-log-stream" style="max-height:180px;color:var(--muted);"></div>
+          </div>
+        </div>
+        <div class="hf-card" style="max-width:980px;margin-top:1rem;">
+          <h3 style="margin-top:0;">Dead-letter Queue</h3>
+          <p style="color:var(--muted);margin-top:0;">Auto-actions that exhausted retries land here for operator review.</p>
+          <div id="analyticsDeadLetters" class="hf-log-stream" style="max-height:220px;"></div>
         </div>
       </section>
 

@@ -17,6 +17,7 @@ const API = {
   credentials: '/api/credentials',
   integrations:'/api/integrations',
   analytics:   '/api/analytics',
+  kpiGoals:    '/api/kpi_goals',
   logs:        '/api/logs',
   messageBus:  '/api/message_bus',
   marketplace: '/api/marketplace',
@@ -241,7 +242,16 @@ async function fetchIntegrations() {
 
 async function fetchAnalytics(projectId) {
   try { return await apiFetch(`${API.analytics}?projectId=${projectId}`); }
-  catch { return { kpi: KPI_PLACEHOLDER }; }
+  catch {
+    return {
+      kpi: KPI_PLACEHOLDER,
+      metrics: { tasksDoneThisWeek: 0, backlog: 0, monthlySpend: 0 },
+      goals: { weeklyTasksDoneTarget: 0, maxBacklog: 0, maxMonthlySpend: 0 },
+      variance: { weeklyTasksDone: 0, backlog: 0, monthlySpend: 0 },
+      alerts: [],
+      deadLetters: [],
+    };
+  }
 }
 
 async function fetchLogs(projectId, filter='all') {
@@ -561,6 +571,42 @@ function renderAnalytics(data) {
       <div class="hf-card-label">${label}</div>
       <div class="hf-card-value">${data?.kpi?.[i] ?? '—'}</div>
     </div>`).join('');
+
+  const goals = data?.goals || {};
+  const variance = data?.variance || {};
+  const alerts = Array.isArray(data?.alerts) ? data.alerts : [];
+  const deadLetters = Array.isArray(data?.deadLetters) ? data.deadLetters : [];
+
+  const weeklyTarget = document.getElementById('analyticsGoalWeeklyTasks');
+  const backlogCap = document.getElementById('analyticsGoalBacklogCap');
+  const spendCap = document.getElementById('analyticsGoalSpendCap');
+  if (weeklyTarget) weeklyTarget.value = String(goals.weeklyTasksDoneTarget ?? 15);
+  if (backlogCap) backlogCap.value = String(goals.maxBacklog ?? 10);
+  if (spendCap) spendCap.value = String(goals.maxMonthlySpend ?? 500);
+
+  setText('analyticsVarianceThroughput', `${Number(variance.weeklyTasksDone || 0) >= 0 ? '+' : ''}${Number(variance.weeklyTasksDone || 0)} tasks`);
+  setText('analyticsVarianceBacklog', `${Number(variance.backlog || 0) >= 0 ? '+' : ''}${Number(variance.backlog || 0)} backlog`);
+  setText('analyticsVarianceSpend', `${Number(variance.monthlySpend || 0) >= 0 ? '+' : ''}$${Number(variance.monthlySpend || 0).toFixed(2)}`);
+  setText('analyticsDeadLetterCount', String(deadLetters.length));
+
+  const weeklyPlan = document.getElementById('analyticsWeeklyPlan');
+  if (weeklyPlan) {
+    weeklyPlan.textContent = data?.weeklyPlan?.summary || 'Weekly KPI plan will be generated automatically on heartbeat and whenever goals are updated.';
+  }
+
+  const alertList = document.getElementById('analyticsAlerts');
+  if (alertList) {
+    alertList.innerHTML = alerts.length
+      ? alerts.map((msg) => `<div class="hf-log-line">${esc(msg)}</div>`).join('')
+      : '<div style="color:var(--muted);">No KPI alerts right now.</div>';
+  }
+
+  const deadLetterList = document.getElementById('analyticsDeadLetters');
+  if (deadLetterList) {
+    deadLetterList.innerHTML = deadLetters.length
+      ? deadLetters.slice(0, 20).map((entry) => `<div class="hf-log-line"><strong>${esc(entry.taskId || 'task')}</strong> ${esc(entry.connector || '')}/${esc(entry.operation || '')}<div style="color:var(--muted);margin-top:0.2rem;">${esc(entry.reason || 'failed')} · retries: ${esc(String(entry.retryCount || 0))}</div></div>`).join('')
+      : '<div style="color:var(--muted);">No dead-letter tasks.</div>';
+  }
 }
 
 // Credential cards
@@ -1444,6 +1490,33 @@ const Dashboard = {
     } catch (err) {
       if (list) list.innerHTML = `<div style="color:var(--error,#d9534f);">Error: ${esc(err.message)}</div>`;
       showStatus(status, 'Failed.', 'error');
+    }
+  },
+
+  async saveKpiGoals() {
+    if (!state.activeProject) {
+      showToast('No active project selected.', 'error');
+      return;
+    }
+    const status = document.getElementById('analyticsGoalStatus');
+    const weeklyTasksDoneTarget = Number(document.getElementById('analyticsGoalWeeklyTasks')?.value || 0);
+    const maxBacklog = Number(document.getElementById('analyticsGoalBacklogCap')?.value || 0);
+    const maxMonthlySpend = Number(document.getElementById('analyticsGoalSpendCap')?.value || 0);
+    showStatus(status, 'Saving…', 'running');
+    try {
+      const result = await apiFetch(API.kpiGoals, {
+        method: 'POST',
+        body: JSON.stringify({
+          projectId: state.activeProject.id,
+          goals: { weeklyTasksDoneTarget, maxBacklog, maxMonthlySpend },
+        }),
+      });
+      renderAnalytics(result.analytics || await fetchAnalytics(state.activeProject.id));
+      showStatus(status, 'Saved.', 'ok');
+      showToast('KPI goals updated.', 'ok');
+    } catch (err) {
+      showStatus(status, `Failed: ${err.message}`, 'error');
+      showToast(`Could not save KPI goals: ${err.message}`, 'error');
     }
   },
 
