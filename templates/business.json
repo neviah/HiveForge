@@ -117,6 +117,16 @@
                                 "title":  "Review ad spend pacing and optimize campaigns",
                                 "phase":  "marketing",
                                 "owner_role":  "Growth Hacker + Content Creator",
+                                "action":  {
+                                               "type":  "connector",
+                                               "connector":  "google_ads",
+                                               "operation":  "optimize_campaigns",
+                                               "estimated_cost":  20,
+                                               "input":  {
+                                                             "objective":  "improve_roas"
+                                                         },
+                                               "requires_permission":  false
+                                           },
                                 "every_ms":  10800000,
                                 "enabled":  true
                             },
@@ -125,6 +135,16 @@
                                 "title":  "Process support backlog and improve customer FAQ",
                                 "phase":  "support",
                                 "owner_role":  "Support Responder",
+                                "action":  {
+                                               "type":  "connector",
+                                               "connector":  "email_provider",
+                                               "operation":  "triage_inbox",
+                                               "estimated_cost":  5,
+                                               "input":  {
+                                                             "queue":  "support"
+                                                         },
+                                               "requires_permission":  false
+                                           },
                                 "every_ms":  5400000,
                                 "enabled":  true
                             },
@@ -133,6 +153,16 @@
                                 "title":  "Analyze KPI trends and propose growth actions",
                                 "phase":  "analytics",
                                 "owner_role":  "Finance Tracker",
+                                "action":  {
+                                               "type":  "connector",
+                                               "connector":  "stripe",
+                                               "operation":  "get_balance",
+                                               "estimated_cost":  0,
+                                               "input":  {
+                                                             "window":  "30d"
+                                                         },
+                                               "requires_permission":  false
+                                           },
                                 "every_ms":  14400000,
                                 "enabled":  true
                             }

@@ -167,6 +167,8 @@ test('provider idempotency mode maps supported write operations', () => {
   assert.equal(connectorIdempotencyMode('netlify', 'trigger_deploy'), 'forwarded_header');
   assert.equal(connectorIdempotencyMode('github', 'create_issue'), 'native_token');
   assert.equal(connectorIdempotencyMode('stripe', 'create_refund'), 'native_token');
+  assert.equal(connectorIdempotencyMode('email_provider', 'send_campaign'), 'native_token');
+  assert.equal(connectorIdempotencyMode('google_ads', 'create_campaign'), 'native_token');
   assert.equal(connectorIdempotencyMode('analytics', 'list_accounts'), 'not_required');
   assert.equal(connectorIdempotencyMode('unknown_connector', 'create_anything'), 'not_required');
 });

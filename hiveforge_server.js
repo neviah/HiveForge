@@ -3614,6 +3614,7 @@ function integrationStatus() {
   const cfg = appConfig || {};
   const integrations = cfg.integrations || {};
   const githubKeyPath = path.join(SANDBOX_ROOT, '.ssh', 'id_rsa.pub');
+  const apiGateway = integrations.apiGateway || {};
   return {
     github: {
       publicKeyPresent: fs.existsSync(githubKeyPath),
@@ -3627,7 +3628,77 @@ function integrationStatus() {
     whatsapp: {
       configured: !!(integrations.whatsapp && (integrations.whatsapp.accessToken || integrations.whatsapp.sessionPath)),
       notes: 'Set integrations.whatsapp credentials/session in sandbox/config.json to enable.'
+    },
+    apiGateway: {
+      configured: Boolean(String(apiGateway.endpoint || process.env.CLAWHUB_API_GATEWAY_ENDPOINT || '').trim()),
+      notes: 'Set integrations.apiGateway.endpoint (or CLAWHUB_API_GATEWAY_ENDPOINT) for autonomous external API actions.'
     }
+  };
+}
+
+function apiGatewaySettings() {
+  const cfg = appConfig || {};
+  const integrations = cfg.integrations || {};
+  const gateway = integrations.apiGateway || {};
+  return {
+    endpoint: String(gateway.endpoint || process.env.CLAWHUB_API_GATEWAY_ENDPOINT || '').trim(),
+    apiKey: String(gateway.apiKey || process.env.CLAWHUB_API_GATEWAY_API_KEY || '').trim(),
+    timeoutMs: clampInt(gateway.timeoutMs, 20000, 1000, 120000),
+  };
+}
+
+async function executeViaApiGateway(provider, operation, payload = {}, timeoutMs = null) {
+  const settings = apiGatewaySettings();
+  if (!settings.endpoint) {
+    return {
+      ok: false,
+      errorCode: 'VALIDATION_ERROR',
+      message: 'API gateway endpoint is not configured. Set integrations.apiGateway.endpoint or CLAWHUB_API_GATEWAY_ENDPOINT.',
+      operation,
+      actualCost: 0,
+      data: null,
+    };
+  }
+
+  const headers = {
+    'Content-Type': 'application/json',
+    'User-Agent': 'HiveForge',
+  };
+  if (settings.apiKey) {
+    headers.Authorization = `Bearer ${settings.apiKey}`;
+  }
+
+  const resp = await fetchWithTimeout(settings.endpoint, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      provider: String(provider || '').trim().toLowerCase(),
+      operation: String(operation || '').trim(),
+      payload,
+    }),
+  }, timeoutMs || settings.timeoutMs);
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    return {
+      ok: false,
+      errorCode: 'CONNECTOR_FAILURE',
+      message: `API gateway request failed with HTTP ${resp.status}${text ? `: ${redactSensitive(text).slice(0, 180)}` : ''}.`,
+      operation,
+      actualCost: 0,
+      data: null,
+    };
+  }
+
+  const body = await resp.json().catch(() => ({}));
+  const ok = body && body.ok !== false;
+  return {
+    ok,
+    errorCode: ok ? null : String(body.errorCode || 'CONNECTOR_FAILURE'),
+    message: String(body.message || `${provider}:${operation} via API gateway ${ok ? 'succeeded' : 'failed'}.`),
+    operation,
+    actualCost: Number.isFinite(Number(body.actualCost)) ? Number(body.actualCost) : 0,
+    data: body.data && typeof body.data === 'object' ? body.data : body,
   };
 }
 
@@ -4727,13 +4798,96 @@ async function executeGoogleAdsConnector(options = {}) {
     };
   }
 
+  if (operation === 'create_campaign' || operation === 'update_campaign_budget' || operation === 'optimize_campaigns') {
+    const gateway = await executeViaApiGateway('google_ads', operation, {
+      ...(options.input && typeof options.input === 'object' ? options.input : {}),
+      credentialToken: token,
+      idempotencyKey: options.idempotencyKey || null,
+      projectId: options.projectId || null,
+    }, 25000);
+    if (!gateway.ok) return gateway;
+    return {
+      ok: true,
+      message: gateway.message || `Google Ads operation ${operation} completed via API gateway.`,
+      operation,
+      actualCost: Number.isFinite(Number(gateway.actualCost))
+        ? Number(gateway.actualCost)
+        : Number(options.estimatedCost || 0),
+      data: gateway.data || null,
+    };
+  }
+
   return {
     ok: false,
     errorCode: 'VALIDATION_ERROR',
-    message: `Unsupported Google Ads operation: ${operation}. Use get_profile or list_accessible_customers.`,
+    message: `Unsupported Google Ads operation: ${operation}. Use get_profile, list_accessible_customers, create_campaign, update_campaign_budget, or optimize_campaigns.`,
     operation,
     actualCost: 0,
     data: null,
+  };
+}
+
+async function executeStripeConnector(options = {}) {
+  const operation = String(options.operation || 'get_balance').trim() || 'get_balance';
+  const token = readCredentialToken('stripe');
+  if (!token) {
+    return {
+      ok: false,
+      errorCode: 'SECRET_MISSING',
+      message: 'Stripe credential token is missing.',
+      operation,
+      actualCost: 0,
+      data: null,
+    };
+  }
+
+  const gateway = await executeViaApiGateway('stripe', operation, {
+    ...(options.input && typeof options.input === 'object' ? options.input : {}),
+    credentialToken: token,
+    idempotencyKey: options.idempotencyKey || null,
+    projectId: options.projectId || null,
+  }, 25000);
+  if (!gateway.ok) return gateway;
+  return {
+    ok: true,
+    message: gateway.message || `Stripe operation ${operation} completed via API gateway.`,
+    operation,
+    actualCost: Number.isFinite(Number(gateway.actualCost))
+      ? Number(gateway.actualCost)
+      : Number(options.estimatedCost || 0),
+    data: gateway.data || null,
+  };
+}
+
+async function executeEmailProviderConnector(options = {}) {
+  const operation = String(options.operation || 'list_inbox').trim() || 'list_inbox';
+  const token = readCredentialToken('email_provider');
+  if (!token) {
+    return {
+      ok: false,
+      errorCode: 'SECRET_MISSING',
+      message: 'Email provider credential token is missing.',
+      operation,
+      actualCost: 0,
+      data: null,
+    };
+  }
+
+  const gateway = await executeViaApiGateway('email_provider', operation, {
+    ...(options.input && typeof options.input === 'object' ? options.input : {}),
+    credentialToken: token,
+    idempotencyKey: options.idempotencyKey || null,
+    projectId: options.projectId || null,
+  }, 25000);
+  if (!gateway.ok) return gateway;
+  return {
+    ok: true,
+    message: gateway.message || `Email provider operation ${operation} completed via API gateway.`,
+    operation,
+    actualCost: Number.isFinite(Number(gateway.actualCost))
+      ? Number(gateway.actualCost)
+      : Number(options.estimatedCost || 0),
+    data: gateway.data || null,
   };
 }
 
@@ -4750,6 +4904,12 @@ async function executeLiveConnector(connectorId, options = {}) {
   }
   if (connectorKey === 'google_ads') {
     return executeGoogleAdsConnector(options);
+  }
+  if (connectorKey === 'stripe') {
+    return executeStripeConnector(options);
+  }
+  if (connectorKey === 'email_provider') {
+    return executeEmailProviderConnector(options);
   }
   return {
     ok: false,
@@ -6762,7 +6922,8 @@ async function main() {
       const status = integrationStatus();
       writeJson(res, {
         github: Boolean(status.github.configured || status.github.publicKeyPresent),
-        clawhub: fs.existsSync(path.join(__dirname, '.clawhub'))
+        clawhub: fs.existsSync(path.join(__dirname, '.clawhub')),
+        apiGateway: Boolean(status.apiGateway && status.apiGateway.configured),
       });
       return;
     }

@@ -601,12 +601,18 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 10. Reliability and recovery QA expansion with outage retry heuristics, delayed-webhook chaos coverage, config-corruption recovery tests, and heartbeat soak simulation coverage.
 11. Production Safety Gate with preflight checklist API and production-mode action blocking for missing controls (credential scope, budget sanity, notification route health, rollback readiness).
 12. Provider-specific idempotency expansion: mutating operation catalog across connectors, provider idempotency mode mapping, and eventual-consistency reconciliation checks.
+13. Autonomy connector expansion: API-gateway-backed business operations for marketing (Google Ads optimization), support (inbox triage), and finance (Stripe balance/reconciliation loop actions).
 
 ## **Next Critical Milestones**
 
 1. **Base System Milestones Complete**
    - Core backlog milestones in this section are complete.
    - Continue from Future Feature Candidates and extended connector coverage priorities.
+
+2. **Autonomous Operations Completion Track**
+   - Add production-grade Google Ads mutate flows (campaign create/update/pause with budget guardrails).
+   - Add support channel autonomy beyond email (website chat/ticket APIs with SLA-aware auto-response).
+   - Add finance automation flows (invoice/refund/collections lifecycle and cashflow variance actions).
 
 ## **Future Feature Candidates**
 
