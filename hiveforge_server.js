@@ -49,6 +49,69 @@ const DEFAULT_KPI_GOALS = {
   maxBacklog: 10,
   maxMonthlySpend: 500,
 };
+const DEFAULT_APPROVAL_GOVERNANCE = {
+  enabled: true,
+  autoApproveRules: [
+    {
+      id: 'approve-low-risk-read-only',
+      maxRiskScore: 35,
+      maxEstimatedCost: 50,
+      connectors: ['analytics', 'github'],
+      operations: ['get_profile', 'list_accounts', 'get_user', 'list_repos'],
+    },
+  ],
+  autoDenyRules: [
+    {
+      id: 'deny-critical-spend-or-risk',
+      minRiskScore: 90,
+      minEstimatedCost: 2500,
+    },
+    {
+      id: 'deny-deploy-from-untrusted-role',
+      connectors: ['netlify'],
+      operations: ['trigger_deploy'],
+      actorRoles: ['intern', 'contractor', 'unknown'],
+    },
+  ],
+};
+const WEEKLY_OBJECTIVES_BY_TEMPLATE = {
+  default: [
+    {
+      key: 'ops_throughput',
+      title: 'Stabilize weekly throughput against KPI target',
+      ownerRole: 'Senior Project Manager',
+      kpiOwnerRole: 'Analytics Reporter',
+      slaHours: 48,
+      metric: 'weeklyTasksDone',
+    },
+  ],
+  business: [
+    {
+      key: 'sales_pipeline_velocity',
+      title: 'Increase sales pipeline movement and response speed',
+      ownerRole: 'Sales Manager',
+      kpiOwnerRole: 'Analytics Reporter',
+      slaHours: 24,
+      metric: 'pipelineVelocity',
+    },
+    {
+      key: 'support_sla_health',
+      title: 'Hold support first-response SLA in all active queues',
+      ownerRole: 'Customer Support',
+      kpiOwnerRole: 'Analytics Reporter',
+      slaHours: 8,
+      metric: 'supportFirstResponse',
+    },
+    {
+      key: 'finance_spend_guardrail',
+      title: 'Maintain monthly spend inside approved guardrails',
+      ownerRole: 'Financial Controller',
+      kpiOwnerRole: 'Finance Tracker',
+      slaHours: 24,
+      metric: 'monthlySpend',
+    },
+  ],
+};
 const DEFAULT_RECURRING_SCHEDULE = [
   { key: 'maintenance_health', title: 'Run maintenance health check', phase: 'maintenance', everyMs: 60 * 60 * 1000 },
   { key: 'growth_review', title: 'Review growth metrics and next actions', phase: 'growth', everyMs: 3 * 60 * 60 * 1000 },
@@ -57,6 +120,8 @@ const RECURRING_SCHEDULE_BY_TEMPLATE = {
   business: [
     { key: 'business_content_cycle', title: 'Create weekly marketing content batch', phase: 'marketing', everyMs: 6 * 60 * 60 * 1000 },
     { key: 'business_pipeline_review', title: 'Review sales pipeline and optimize outreach', phase: 'sales', everyMs: 4 * 60 * 60 * 1000 },
+    { key: 'business_support_sla_loop', title: 'Review support queue SLA compliance and escalations', phase: 'support', ownerRole: 'Customer Support', kpiOwnerRole: 'Analytics Reporter', slaHours: 8, everyMs: 3 * 60 * 60 * 1000 },
+    { key: 'business_finance_control_loop', title: 'Audit spend variance and adjust finance controls', phase: 'finance', ownerRole: 'Financial Controller', kpiOwnerRole: 'Finance Tracker', slaHours: 24, everyMs: 6 * 60 * 60 * 1000 },
   ],
   software_agency: [
     { key: 'agency_deploy_audit', title: 'Run deployment readiness and rollback audit', phase: 'engineering', everyMs: 6 * 60 * 60 * 1000 },
@@ -326,6 +391,7 @@ function ensureKpiGoalState(projectState) {
         lastPlannedAt: null,
         nextReviewAt: null,
         summary: null,
+        objectives: [],
       },
     };
   }
@@ -339,9 +405,11 @@ function ensureKpiGoalState(projectState) {
       lastPlannedAt: null,
       nextReviewAt: null,
       summary: null,
+      objectives: [],
     };
   }
   if (!goals.weeklyPlan.weekStart) goals.weeklyPlan.weekStart = startOfUtcWeekIso();
+  if (!Array.isArray(goals.weeklyPlan.objectives)) goals.weeklyPlan.objectives = [];
 }
 
 function connectorRetryPlan(connectorId, attemptNumber, reason, detail = {}) {
@@ -555,6 +623,189 @@ function projectTemplateSnapshotPath(projectId) {
   return path.join(projectDir(projectId), 'template_snapshot.json');
 }
 
+function projectApprovalAuditPath(projectId) {
+  return path.join(projectDir(projectId), 'approval_audit.ndjson');
+}
+
+function readLastLine(filePath) {
+  if (!fs.existsSync(filePath)) return null;
+  const text = fs.readFileSync(filePath, 'utf-8');
+  const lines = text.split(/\r?\n/).filter(Boolean);
+  if (!lines.length) return null;
+  return lines[lines.length - 1];
+}
+
+function appendApprovalDecisionAudit(projectId, record = {}) {
+  const safeProjectId = String(projectId || '').trim();
+  if (!safeProjectId) return null;
+  ensureDir(projectDir(safeProjectId));
+  const target = projectApprovalAuditPath(safeProjectId);
+
+  let prevHash = null;
+  const lastLine = readLastLine(target);
+  if (lastLine) {
+    try {
+      const prior = JSON.parse(lastLine);
+      prevHash = prior.hash || null;
+    } catch (err) {
+      prevHash = null;
+    }
+  }
+
+  const base = {
+    id: crypto.randomUUID(),
+    ts: nowIso(),
+    projectId: safeProjectId,
+    taskId: String(record.taskId || ''),
+    decision: String(record.decision || ''),
+    actor: String(record.actor || 'operator'),
+    note: typeof record.note === 'string' && record.note ? record.note : null,
+    reason: typeof record.reason === 'string' && record.reason ? record.reason : null,
+    riskScore: Number.isFinite(Number(record.riskScore)) ? Number(record.riskScore) : null,
+    riskLevel: record.riskLevel ? String(record.riskLevel) : null,
+    estimatedCost: Number.isFinite(Number(record.estimatedCost)) ? Number(record.estimatedCost) : null,
+    connector: record.connector ? String(record.connector) : null,
+    operation: record.operation ? String(record.operation) : null,
+    matchedRuleId: record.matchedRuleId ? String(record.matchedRuleId) : null,
+    prevHash,
+  };
+  const hashSource = `${base.prevHash || ''}|${canonicalJson(base)}`;
+  const hash = crypto.createHash('sha256').update(hashSource).digest('hex');
+  const entry = { ...base, hash };
+  fs.appendFileSync(target, `${JSON.stringify(entry)}\n`, 'utf-8');
+  return entry;
+}
+
+function readApprovalDecisionAudit(projectId, limit = 200) {
+  const safeProjectId = String(projectId || '').trim();
+  if (!safeProjectId) return [];
+  const target = projectApprovalAuditPath(safeProjectId);
+  if (!fs.existsSync(target)) return [];
+  const max = clampInt(limit, 200, 1, 2000);
+  const lines = fs.readFileSync(target, 'utf-8').split(/\r?\n/).filter(Boolean);
+  const out = [];
+  for (let idx = lines.length - 1; idx >= 0; idx -= 1) {
+    if (out.length >= max) break;
+    try {
+      out.push(JSON.parse(lines[idx]));
+    } catch (err) {
+    }
+  }
+  return out;
+}
+
+function ensureApprovalGovernanceState(projectState) {
+  if (!projectState.approvalGovernance || typeof projectState.approvalGovernance !== 'object') {
+    projectState.approvalGovernance = {
+      enabled: DEFAULT_APPROVAL_GOVERNANCE.enabled,
+      autoApproveRules: DEFAULT_APPROVAL_GOVERNANCE.autoApproveRules.map((rule) => ({ ...rule })),
+      autoDenyRules: DEFAULT_APPROVAL_GOVERNANCE.autoDenyRules.map((rule) => ({ ...rule })),
+      updatedAt: null,
+    };
+  }
+  projectState.approvalGovernance.enabled = projectState.approvalGovernance.enabled !== false;
+  if (!Array.isArray(projectState.approvalGovernance.autoApproveRules)) {
+    projectState.approvalGovernance.autoApproveRules = DEFAULT_APPROVAL_GOVERNANCE.autoApproveRules.map((rule) => ({ ...rule }));
+  }
+  if (!Array.isArray(projectState.approvalGovernance.autoDenyRules)) {
+    projectState.approvalGovernance.autoDenyRules = DEFAULT_APPROVAL_GOVERNANCE.autoDenyRules.map((rule) => ({ ...rule }));
+  }
+}
+
+function roleLooksLike(value, expected) {
+  return String(value || '').trim().toLowerCase() === String(expected || '').trim().toLowerCase();
+}
+
+function ruleMatchesApprovalContext(rule = {}, context = {}) {
+  const riskScore = Number(context.riskScore || 0);
+  const estimatedCost = Number(context.estimatedCost || 0);
+  const connector = String(context.connector || '').toLowerCase();
+  const operation = String(context.operation || '').toLowerCase();
+  const actorRole = String(context.actorRole || '').toLowerCase();
+
+  if (typeof rule.minRiskScore === 'number' && riskScore < rule.minRiskScore) return false;
+  if (typeof rule.maxRiskScore === 'number' && riskScore > rule.maxRiskScore) return false;
+  if (typeof rule.minEstimatedCost === 'number' && estimatedCost < rule.minEstimatedCost) return false;
+  if (typeof rule.maxEstimatedCost === 'number' && estimatedCost > rule.maxEstimatedCost) return false;
+
+  if (Array.isArray(rule.connectors) && rule.connectors.length > 0) {
+    const allowed = rule.connectors.map((v) => String(v || '').toLowerCase());
+    if (!allowed.includes(connector)) return false;
+  }
+  if (Array.isArray(rule.operations) && rule.operations.length > 0) {
+    const allowed = rule.operations.map((v) => String(v || '').toLowerCase());
+    if (!allowed.includes(operation)) return false;
+  }
+  if (Array.isArray(rule.actorRoles) && rule.actorRoles.length > 0) {
+    const allowed = rule.actorRoles.map((v) => String(v || '').toLowerCase());
+    if (!allowed.some((entry) => roleLooksLike(actorRole, entry))) return false;
+  }
+  return true;
+}
+
+function evaluateApprovalGovernanceDecision(projectState, task, detail = {}) {
+  ensureApprovalGovernanceState(projectState);
+  const governance = projectState.approvalGovernance;
+  if (!governance.enabled) {
+    return { decision: null, matchedRuleId: null, reason: null };
+  }
+
+  const riskScore = Number(detail.riskScore || task?.pendingApproval?.risk?.score || 0);
+  const estimatedCost = Number(detail.estimatedCost || task?.autoAction?.estimatedCost || 0);
+  const connector = String(detail.connector || task?.autoAction?.connector || '').toLowerCase();
+  const operation = String(detail.operation || task?.autoAction?.operation || '').toLowerCase();
+  const actorRole = String(detail.actorRole || task?.autoAction?.actorRole || '').toLowerCase();
+  const context = { riskScore, estimatedCost, connector, operation, actorRole };
+
+  const denyRule = governance.autoDenyRules.find((rule) => ruleMatchesApprovalContext(rule, context));
+  if (denyRule) {
+    return {
+      decision: 'deny',
+      matchedRuleId: String(denyRule.id || 'auto_deny_rule'),
+      reason: `Auto-denied by policy pack rule ${String(denyRule.id || 'auto_deny_rule')}.`,
+    };
+  }
+
+  const approveRule = governance.autoApproveRules.find((rule) => ruleMatchesApprovalContext(rule, context));
+  if (approveRule) {
+    return {
+      decision: 'approve',
+      matchedRuleId: String(approveRule.id || 'auto_approve_rule'),
+      reason: `Auto-approved by policy pack rule ${String(approveRule.id || 'auto_approve_rule')}.`,
+    };
+  }
+
+  return { decision: null, matchedRuleId: null, reason: null };
+}
+
+function weeklyObjectiveSpecsForTemplate(templateKey) {
+  const safeTemplate = String(templateKey || '').toLowerCase();
+  const fromTemplate = WEEKLY_OBJECTIVES_BY_TEMPLATE[safeTemplate] || [];
+  return fromTemplate.length ? fromTemplate : WEEKLY_OBJECTIVES_BY_TEMPLATE.default;
+}
+
+function ensureOperationalLoopState(projectState) {
+  if (!projectState.operationalLoops || typeof projectState.operationalLoops !== 'object') {
+    projectState.operationalLoops = {
+      weekStart: startOfUtcWeekIso(),
+      generatedAt: null,
+      objectives: [],
+    };
+  }
+  if (!Array.isArray(projectState.operationalLoops.objectives)) {
+    projectState.operationalLoops.objectives = [];
+  }
+}
+
+function findOwnerAgentId(projectState, roleName) {
+  const wanted = String(roleName || '').trim().toLowerCase();
+  if (!wanted) return null;
+  const exact = projectState.agents.find((agent) => !agent.isCoordinator && String(agent.role || '').trim().toLowerCase() === wanted);
+  if (exact) return exact.id;
+  const fallback = projectState.agents.find((agent) => !agent.isCoordinator);
+  return fallback ? fallback.id : null;
+}
+
 function emitProjectEvent(projectId, eventName, payload) {
   const clients = projectSseClients.get(projectId);
   if (!clients || !clients.size) return;
@@ -640,7 +891,10 @@ function normalizeRecurringLoopSpec(spec, idx = 0) {
     key: key || `template_loop_${idx + 1}`,
     title: String(spec && spec.title ? spec.title : `Recurring loop ${idx + 1}`),
     phase: String(spec && spec.phase ? spec.phase : 'maintenance'),
-    ownerRole: String(spec && spec.owner_role ? spec.owner_role : ''),
+    ownerRole: String(spec && (spec.owner_role || spec.ownerRole) ? (spec.owner_role || spec.ownerRole) : ''),
+    kpiOwnerRole: String(spec && (spec.kpi_owner_role || spec.kpiOwnerRole) ? (spec.kpi_owner_role || spec.kpiOwnerRole) : ''),
+    slaHours: clampInt(spec && (spec.sla_hours || spec.slaHours), 24, 1, 7 * 24),
+    objectiveTag: String(spec && (spec.objective_tag || spec.objectiveTag) ? (spec.objective_tag || spec.objectiveTag) : '').trim() || null,
     everyMs: clampInt(spec && spec.every_ms, 60 * 60 * 1000, 60 * 1000, 7 * 24 * 60 * 60 * 1000),
     action: spec && spec.action && typeof spec.action === 'object'
       ? {
@@ -668,7 +922,11 @@ function recurringScheduleForTemplate(templateKey, templateData = null) {
     title: entry.title,
     phase: entry.phase,
     owner_role: entry.ownerRole,
+    kpi_owner_role: entry.kpiOwnerRole,
+    sla_hours: entry.slaHours,
+    objective_tag: entry.objectiveTag,
     every_ms: entry.everyMs,
+    action: entry.action,
   }, idx));
 }
 
@@ -818,6 +1076,8 @@ function humanizeDurationMs(ms) {
 function summarizeProjectAutomation(projectState) {
   ensureRecurringState(projectState);
   ensureDeadLetterState(projectState);
+  ensureApprovalGovernanceState(projectState);
+  ensureOperationalLoopState(projectState);
   return {
     recurring: {
       enabled: Boolean(projectState.recurring.enabled),
@@ -828,6 +1088,22 @@ function summarizeProjectAutomation(projectState) {
       ...entry,
       everyHuman: humanizeDurationMs(entry.everyMs),
     })),
+    approvalGovernance: {
+      enabled: Boolean(projectState.approvalGovernance.enabled),
+      autoApproveRuleCount: Array.isArray(projectState.approvalGovernance.autoApproveRules)
+        ? projectState.approvalGovernance.autoApproveRules.length
+        : 0,
+      autoDenyRuleCount: Array.isArray(projectState.approvalGovernance.autoDenyRules)
+        ? projectState.approvalGovernance.autoDenyRules.length
+        : 0,
+    },
+    weeklyObjectives: {
+      weekStart: projectState.operationalLoops.weekStart,
+      generatedAt: projectState.operationalLoops.generatedAt,
+      count: Array.isArray(projectState.operationalLoops.objectives)
+        ? projectState.operationalLoops.objectives.length
+        : 0,
+    },
     staffing: {
       enabled: Boolean(projectState.staffing && projectState.staffing.enabled),
       optionalPoolSize: Array.isArray(projectState.staffing && projectState.staffing.optionalPool)
@@ -913,6 +1189,9 @@ function enqueueRecurringTasks(projectState, ts, source = 'interval') {
       id: `RECUR-${spec.key}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000)}`,
       title: spec.title,
       phase: spec.phase,
+      ownerRole: spec.ownerRole || null,
+      kpiOwnerRole: spec.kpiOwnerRole || null,
+      slaHours: Number(spec.slaHours || 24),
       status: 'backlog',
       assignee: null,
       blockedBy: null,
@@ -1555,6 +1834,7 @@ function pickWorkerAgent(projectState, task = null) {
 
 function markTaskAwaitingApproval(projectState, task, reason, detail = {}) {
   const at = nowIso();
+  ensureApprovalGovernanceState(projectState);
   const risk = assessApprovalRisk(task, { ...detail, reason });
   task.status = 'review';
   task.executionState = 'awaiting_approval';
@@ -1586,6 +1866,46 @@ function markTaskAwaitingApproval(projectState, task, reason, detail = {}) {
       detail,
     },
   });
+
+  const governanceDecision = evaluateApprovalGovernanceDecision(projectState, task, {
+    riskScore: risk.score,
+    estimatedCost: Number(detail.estimatedCost || task?.autoAction?.estimatedCost || 0),
+    connector: detail.connector || task?.autoAction?.connector,
+    operation: detail.operation || task?.autoAction?.operation,
+    actorRole: detail.actorRole || task?.autoAction?.actorRole,
+  });
+  if (governanceDecision.decision) {
+    task.pendingApproval.policyDecision = {
+      source: 'approval_policy_pack',
+      matchedRuleId: governanceDecision.matchedRuleId,
+      evaluatedAt: at,
+    };
+    applyTaskApprovalDecision(
+      projectState,
+      task,
+      governanceDecision.decision,
+      governanceDecision.reason || 'Automated policy decision.',
+      'approval_policy_pack',
+    );
+    appendProjectLog(projectState, 'message', {
+      kind: 'task_approval_policy_pack_decision',
+      taskId: task.id,
+      decision: governanceDecision.decision,
+      matchedRuleId: governanceDecision.matchedRuleId,
+      reason: governanceDecision.reason,
+    });
+    appendMessageBusEntry({
+      projectId: projectState.id,
+      from: 'approval_policy_pack',
+      to: 'coordinator',
+      kind: 'task_approval_policy_pack_decision',
+      payload: {
+        taskId: task.id,
+        decision: governanceDecision.decision,
+        matchedRuleId: governanceDecision.matchedRuleId,
+      },
+    });
+  }
   emitProjectEvent(projectState.id, 'task_update', task);
 }
 
@@ -1642,6 +1962,22 @@ function applyTaskApprovalDecision(projectState, task, decision, note = '', acto
       payload: { taskId: task.id, note: note || null },
     });
   }
+
+  appendApprovalDecisionAudit(projectState.id, {
+    taskId: task.id,
+    decision,
+    actor,
+    note,
+    reason: priorPending.reason || task.lastError || null,
+    riskScore: Number(priorPending.risk && priorPending.risk.score || 0),
+    riskLevel: priorPending.risk && priorPending.risk.level ? priorPending.risk.level : null,
+    estimatedCost: Number(task && task.autoAction && task.autoAction.estimatedCost || 0),
+    connector: task && task.autoAction && task.autoAction.connector ? task.autoAction.connector : null,
+    operation: task && task.autoAction && task.autoAction.operation ? task.autoAction.operation : null,
+    matchedRuleId: priorPending.policyDecision && priorPending.policyDecision.matchedRuleId
+      ? priorPending.policyDecision.matchedRuleId
+      : null,
+  });
 
   emitProjectEvent(projectState.id, 'task_update', task);
   return task;
@@ -2162,6 +2498,8 @@ function runProjectHeartbeat(projectState, source = 'interval') {
   ensureRecurringState(projectState);
   ensureStaffingState(projectState);
   ensureKpiGoalState(projectState);
+  ensureApprovalGovernanceState(projectState);
+  ensureOperationalLoopState(projectState);
   ensureDeadLetterState(projectState);
   projectState.heartbeat.lastBeat = beatTs;
   projectState.heartbeat.status = 'alive';
@@ -2392,6 +2730,8 @@ function recoverProjectStateAfterRestart(state) {
   ensureRecurringState(state);
   ensureStaffingState(state);
   ensureKpiGoalState(state);
+  ensureApprovalGovernanceState(state);
+  ensureOperationalLoopState(state);
   ensureDeadLetterState(state);
   ensureConnectorExecutionState(state);
   if (!state.kpiAlerting || typeof state.kpiAlerting !== 'object') {
@@ -2512,7 +2852,19 @@ function createProjectFromTemplate({ name, template, goal }) {
         lastPlannedAt: null,
         nextReviewAt: null,
         summary: null,
+        objectives: [],
       },
+    },
+    approvalGovernance: {
+      enabled: DEFAULT_APPROVAL_GOVERNANCE.enabled,
+      autoApproveRules: DEFAULT_APPROVAL_GOVERNANCE.autoApproveRules.map((rule) => ({ ...rule })),
+      autoDenyRules: DEFAULT_APPROVAL_GOVERNANCE.autoDenyRules.map((rule) => ({ ...rule })),
+      updatedAt: null,
+    },
+    operationalLoops: {
+      weekStart: startOfUtcWeekIso(createdAt),
+      generatedAt: null,
+      objectives: [],
     },
     deadLetters: [],
     connectorExecutions: {},
@@ -2820,7 +3172,9 @@ function deleteCredentialMetadata(service) {
 
 function refreshWeeklyKpiPlan(projectState, ts = nowIso()) {
   ensureKpiGoalState(projectState);
+  ensureOperationalLoopState(projectState);
   const plan = projectState.kpiGoals.weeklyPlan;
+  const loops = projectState.operationalLoops;
   const nowMs = Date.parse(ts);
   const weekStart = startOfUtcWeekIso(ts);
   if (plan.weekStart !== weekStart) {
@@ -2829,16 +3183,50 @@ function refreshWeeklyKpiPlan(projectState, ts = nowIso()) {
     plan.nextReviewAt = null;
     plan.summary = null;
   }
+  if (loops.weekStart !== weekStart) {
+    loops.weekStart = weekStart;
+    loops.generatedAt = null;
+    loops.objectives = [];
+  }
   const nextReviewMs = Date.parse(plan.nextReviewAt || '');
   if (plan.lastPlannedAt && Number.isFinite(nextReviewMs) && nowMs < nextReviewMs) {
     return;
   }
 
+  const objectiveSpecs = weeklyObjectiveSpecsForTemplate(projectState.template);
+  const weekEndMs = Date.parse(weekStart) + (7 * 24 * 60 * 60 * 1000);
+  loops.generatedAt = ts;
+  loops.objectives = objectiveSpecs.map((spec, idx) => {
+    const ownerRole = String(spec.ownerRole || 'Senior Project Manager');
+    const kpiOwnerRole = String(spec.kpiOwnerRole || ownerRole);
+    const ownerAgentId = findOwnerAgentId(projectState, ownerRole);
+    const kpiOwnerAgentId = findOwnerAgentId(projectState, kpiOwnerRole);
+    const slaHours = clampInt(spec.slaHours, 24, 1, 7 * 24);
+    return {
+      id: `${weekStart.slice(0, 10)}::${String(spec.key || `objective_${idx + 1}`)}`,
+      key: String(spec.key || `objective_${idx + 1}`),
+      title: String(spec.title || `Weekly objective ${idx + 1}`),
+      ownerRole,
+      ownerAgentId,
+      kpiOwnerRole,
+      kpiOwnerAgentId,
+      metric: String(spec.metric || 'weeklyTasksDone'),
+      slaHours,
+      dueAt: new Date(Math.min(weekEndMs, nowMs + (slaHours * 60 * 60 * 1000))).toISOString(),
+      status: 'planned',
+      generatedAt: ts,
+    };
+  });
+
   const { goals, actual, variance } = computeKpiVarianceAndAlerts(projectState);
-  const summary = `Weekly plan: target ${goals.weeklyTasksDoneTarget} tasks, cap backlog ${goals.maxBacklog}, cap monthly spend $${goals.maxMonthlySpend}. Current: ${actual.tasksDoneThisWeek} tasks done this week, backlog ${actual.backlog}, monthly spend $${actual.monthlySpend}. Variance: throughput ${variance.weeklyTasksDone}, backlog ${variance.backlog}, spend ${variance.monthlySpend}.`;
+  const objectiveSummary = loops.objectives
+    .map((item) => `${item.title} (owner: ${item.ownerRole}, KPI owner: ${item.kpiOwnerRole}, SLA: ${item.slaHours}h)`)
+    .join(' | ');
+  const summary = `Weekly plan: target ${goals.weeklyTasksDoneTarget} tasks, cap backlog ${goals.maxBacklog}, cap monthly spend $${goals.maxMonthlySpend}. Current: ${actual.tasksDoneThisWeek} tasks done this week, backlog ${actual.backlog}, monthly spend $${actual.monthlySpend}. Variance: throughput ${variance.weeklyTasksDone}, backlog ${variance.backlog}, spend ${variance.monthlySpend}. Objectives: ${objectiveSummary}.`;
   plan.lastPlannedAt = ts;
   plan.nextReviewAt = new Date(nowMs + 7 * 24 * 60 * 60 * 1000).toISOString();
   plan.summary = summary;
+  plan.objectives = loops.objectives;
 
   appendProjectLog(projectState, 'message', {
     kind: 'weekly_kpi_plan_generated',
@@ -2853,6 +3241,7 @@ function refreshWeeklyKpiPlan(projectState, ts = nowIso()) {
     payload: {
       weekStart: plan.weekStart,
       summary,
+      objectives: loops.objectives,
     },
   });
 }
@@ -4803,6 +5192,40 @@ async function main() {
       return;
     }
 
+    if (pathname === '/api/approval_audit' && req.method === 'GET') {
+      const projectId = String(urlObj.searchParams.get('projectId') || '').trim();
+      const limit = Number(urlObj.searchParams.get('limit') || 200);
+      if (!projectId) {
+        writeJson(res, { error: 'projectId is required' }, 400);
+        return;
+      }
+      writeJson(res, {
+        projectId,
+        items: readApprovalDecisionAudit(projectId, limit),
+      });
+      return;
+    }
+
+    if (pathname === '/api/approval_audit/export' && req.method === 'GET') {
+      const projectId = String(urlObj.searchParams.get('projectId') || '').trim();
+      if (!projectId) {
+        writeJson(res, { error: 'projectId is required' }, 400);
+        return;
+      }
+      const target = projectApprovalAuditPath(projectId);
+      if (!fs.existsSync(target)) {
+        writeJson(res, { error: 'No approval audit exists for this project yet.' }, 404);
+        return;
+      }
+      const ndjson = fs.readFileSync(target, 'utf-8');
+      res.writeHead(200, {
+        'Content-Type': 'application/x-ndjson; charset=utf-8',
+        'Content-Disposition': `attachment; filename="approval-audit-${projectId}.ndjson"`,
+      });
+      res.end(ndjson);
+      return;
+    }
+
     if (pathname === '/api/retry_policy/test' && req.method === 'POST') {
       readRequestBody(req).then((body) => {
         let payload = {};
@@ -5339,7 +5762,11 @@ async function main() {
         }
 
         ensureRecurringState(runtime.state);
+        ensureApprovalGovernanceState(runtime.state);
         const recurring = payload.recurring && typeof payload.recurring === 'object' ? payload.recurring : {};
+        const approvalGovernance = payload.approvalGovernance && typeof payload.approvalGovernance === 'object'
+          ? payload.approvalGovernance
+          : {};
         let enqueuedNow = 0;
         if (typeof recurring.enabled === 'boolean') {
           runtime.state.recurring.enabled = recurring.enabled;
@@ -5368,6 +5795,22 @@ async function main() {
             to: 'scheduler',
             kind: 'project_recurring_run_now',
             payload: { enqueued: enqueuedNow },
+          });
+        }
+
+        if (typeof approvalGovernance.enabled === 'boolean') {
+          runtime.state.approvalGovernance.enabled = approvalGovernance.enabled;
+          runtime.state.approvalGovernance.updatedAt = nowIso();
+          appendProjectLog(runtime.state, 'message', {
+            kind: 'approval_governance_updated',
+            enabled: approvalGovernance.enabled,
+          });
+          appendMessageBusEntry({
+            projectId,
+            from: 'operator',
+            to: 'approval_policy_pack',
+            kind: 'approval_governance_updated',
+            payload: { enabled: approvalGovernance.enabled },
           });
         }
 
@@ -6116,11 +6559,17 @@ module.exports = {
   getCredentialBudgetSnapshot,
   ensureCredentialStorage,
   assessApprovalRisk,
+  ensureApprovalGovernanceState,
+  evaluateApprovalGovernanceDecision,
   connectorRetryPlan,
   connectorExecutionKey,
   connectorMutationExecutionKey,
   isMutatingConnectorOperation,
   markConnectorExecutionRecord,
+  appendApprovalDecisionAudit,
+  readApprovalDecisionAudit,
+  refreshWeeklyKpiPlan,
+  ensureOperationalLoopState,
   makeAnalyticsSnapshot,
   ensureMessageBus,
   appendMessageBusEntry,

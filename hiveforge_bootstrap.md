@@ -596,26 +596,20 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 5. Per-connector retry policies exposed in Settings and persisted in config.
 6. KPI goals, weekly planning, variance alerts, and KPI notification escalation (WhatsApp/Telegram with cooldown).
 7. External connector idempotency propagation for mutating operations (provider headers + duplicate suppression for manual execute path).
+8. Approval governance policy packs with auto-approve/auto-deny logic and immutable decision audit export endpoint.
+9. Template-level weekly objective generation with owner/SLA tracking and recurring sales/support/finance loops with KPI ownership.
 
 ## **Next Critical Milestones**
 
-1. **Approval Governance Layer**
-   - Add policy packs for auto-approve/auto-deny thresholds (risk + cost + connector + role).
-   - Add immutable operator decision audit export for compliance review.
-
-2. **Business Operating Loops**
-   - Add template-level weekly objective generation with owner assignment and SLA tracking.
-   - Add recurring sales/support/finance loops with explicit KPI ownership.
-
-3. **Reliability and Recovery QA**
+1. **Reliability and Recovery QA**
    - Expand chaos tests for connector outages, delayed webhooks, and config corruption recovery.
    - Add long-run soak test (24h+) for heartbeat stability and memory growth checks.
 
-4. **Production Safety Gate**
+2. **Production Safety Gate**
    - Add preflight checklist endpoint that blocks production-mode actions when required controls are missing.
    - Include credential scope validation, budget sanity, notification route health, and rollback readiness.
 
-5. **Provider-Specific Idempotency Expansion**
+3. **Provider-Specific Idempotency Expansion**
    - Extend adapter-level idempotency token usage to future mutating connectors beyond Netlify.
    - Add reconciliation checks for connectors that only support eventual consistency semantics.
 
