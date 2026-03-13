@@ -4599,11 +4599,13 @@ async function main() {
       const projectId = String(urlObj.searchParams.get('projectId') || '').trim();
       const sortBy = String(urlObj.searchParams.get('sortBy') || 'risk').trim().toLowerCase();
       const direction = String(urlObj.searchParams.get('direction') || 'desc').trim().toLowerCase() === 'asc' ? 'asc' : 'desc';
+      const minRisk = String(urlObj.searchParams.get('minRisk') || 'all').trim().toLowerCase();
       const runtime = projectId ? projectRuntimes.get(projectId) : null;
       if (!runtime) {
         writeJson(res, { error: 'Project not found' }, 404);
         return;
       }
+      const riskThreshold = minRisk === 'high' ? 70 : minRisk === 'medium' ? 40 : 0;
       const approvals = runtime.state.tasks
         .filter((task) => task.status === 'review' && task.executionState === 'awaiting_approval')
         .map((task) => ({
@@ -4615,7 +4617,8 @@ async function main() {
           reason: task.pendingApproval && task.pendingApproval.reason ? task.pendingApproval.reason : task.lastError,
           risk: task.pendingApproval && task.pendingApproval.risk ? task.pendingApproval.risk : { score: 0, level: 'low', requiresHuman: true },
           detail: task.pendingApproval && task.pendingApproval.detail ? task.pendingApproval.detail : {},
-        }));
+        }))
+        .filter((entry) => Number(entry.risk && entry.risk.score || 0) >= riskThreshold);
 
       approvals.sort((a, b) => {
         let cmp = 0;
@@ -4631,7 +4634,42 @@ async function main() {
         return direction === 'asc' ? cmp : -cmp;
       });
 
-      writeJson(res, { projectId, sortBy, direction, items: approvals });
+      writeJson(res, { projectId, sortBy, direction, minRisk, items: approvals });
+      return;
+    }
+
+    if (pathname === '/api/retry_policy/test' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = parseJsonBodySafe(body);
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+
+        const connector = String(payload.connector || 'default').trim().toLowerCase() || 'default';
+        const reason = String(payload.reason || 'HTTP 503 timeout').trim();
+        const policy = retryPolicyForConnector(connector);
+        const attempts = [];
+        for (let attempt = 1; attempt <= policy.maxAttempts + 1; attempt += 1) {
+          const plan = connectorRetryPlan(connector, attempt, reason, {});
+          attempts.push({
+            attempt,
+            retryable: Boolean(plan.retryable && attempt <= policy.maxAttempts),
+            delayMs: Number(plan.delayMs || 0),
+          });
+        }
+        writeJson(res, {
+          ok: true,
+          connector,
+          reason,
+          policy,
+          attempts,
+        });
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
       return;
     }
 

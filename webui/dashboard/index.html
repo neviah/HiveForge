@@ -217,6 +217,10 @@
           <p>Risk-scored approval queue from coordinator escalation events.</p>
         </div>
         <div class="hf-btn-row" style="margin-bottom:0.8rem;">
+          <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.setApprovalQuickFilter('high','risk','desc')">High Risk Only</button>
+          <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.setApprovalQuickFilter('medium','risk','desc')">Medium+</button>
+          <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.setApprovalQuickFilter('all','risk','desc')">All Risks</button>
+          <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.setApprovalQuickFilter('all','requestedAt','asc')">Oldest First</button>
           <select id="approvalsSortBy" style="width:180px;" onchange="Dashboard.setApprovalSort()">
             <option value="risk">Sort by Risk</option>
             <option value="requestedAt">Sort by Requested Time</option>
@@ -225,6 +229,11 @@
           <select id="approvalsSortDirection" style="width:130px;" onchange="Dashboard.setApprovalSort()">
             <option value="desc">Descending</option>
             <option value="asc">Ascending</option>
+          </select>
+          <select id="approvalsMinRisk" style="width:150px;" onchange="Dashboard.setApprovalSort()">
+            <option value="all">Min Risk: All</option>
+            <option value="medium">Min Risk: Medium</option>
+            <option value="high">Min Risk: High</option>
           </select>
           <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.toggleAllApprovals(true)">Select All</button>
           <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.toggleAllApprovals(false)">Clear</button>
@@ -717,12 +726,13 @@
         <div class="hf-card" style="max-width:760px;margin-top:1rem;">
           <h3 style="margin-top:0;">Connector Retry Policies</h3>
           <p style="color:var(--muted);margin-top:0;">Per-connector retry attempts and backoff delays for recurring connector actions.</p>
-          <div style="display:grid;grid-template-columns:1fr 280px;gap:0.5rem;font-size:0.75rem;color:var(--muted);padding-bottom:0.35rem;border-bottom:1px solid var(--border);">
+          <div style="display:grid;grid-template-columns:1fr 360px;gap:0.5rem;font-size:0.75rem;color:var(--muted);padding-bottom:0.35rem;border-bottom:1px solid var(--border);">
             <div>Connector</div>
-            <div style="display:grid;grid-template-columns:repeat(3,minmax(90px,1fr));gap:0.4rem;">
+            <div style="display:grid;grid-template-columns:repeat(4,minmax(80px,1fr));gap:0.4rem;">
               <span>Attempts</span>
               <span>Base (s)</span>
               <span>Max (s)</span>
+              <span>Test</span>
             </div>
           </div>
           <div id="settingsRetryPolicyList" style="margin-top:0.4rem;"></div>

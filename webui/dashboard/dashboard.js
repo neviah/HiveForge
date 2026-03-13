@@ -36,6 +36,7 @@ const API = {
   netlifyDeploy: '/api/netlify/deploy',
   netlifyDeploys: '/api/netlify/deploys',
   notificationTest: '/api/notifications/test',
+  retryPolicyTest: '/api/retry_policy/test',
 };
 
 const SECTION_TITLES = {
@@ -182,7 +183,7 @@ const state = {
   messageBusPoller: null,
   messageBusFilter: { kind: '', actor: '', q: '' },
   marketplaceFilter: { division: 'All', query: '' },
-  approvalsFilter: { sortBy: 'risk', direction: 'desc' },
+  approvalsFilter: { sortBy: 'risk', direction: 'desc', minRisk: 'all' },
   selectedApprovalTaskIds: new Set(),
   activeSettingsTab: 'runtime',
   sseSource:      null,
@@ -290,11 +291,12 @@ async function fetchProjectSettings(projectId) {
   return apiFetch(`${API.projectSettings}?projectId=${encodeURIComponent(projectId)}`);
 }
 
-async function fetchApprovals(projectId, sortBy = 'risk', direction = 'desc') {
+async function fetchApprovals(projectId, sortBy = 'risk', direction = 'desc', minRisk = 'all') {
   const qp = new URLSearchParams();
   qp.set('projectId', String(projectId || ''));
   qp.set('sortBy', String(sortBy || 'risk'));
   qp.set('direction', String(direction || 'desc'));
+  qp.set('minRisk', String(minRisk || 'all'));
   return apiFetch(`${API.approvals}?${qp.toString()}`);
 }
 
@@ -368,10 +370,11 @@ function renderRetryPolicySettings(retryPolicies = {}) {
           <div style="font-weight:600;">${esc(connector)}</div>
           <div style="font-size:0.76rem;color:var(--muted);">Connector retry policy</div>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(3,minmax(90px,1fr));gap:0.4rem;">
+        <div style="display:grid;grid-template-columns:repeat(4,minmax(80px,1fr));gap:0.4rem;align-items:center;">
           <input class="settings-retry-max-attempts" data-connector="${esc(connector)}" type="number" min="1" max="20" step="1" value="${esc(String(Number(cfg.maxAttempts) || 3))}" title="Max Attempts" />
           <input class="settings-retry-base-delay" data-connector="${esc(connector)}" type="number" min="1" max="43200" step="1" value="${esc(String(Math.round((Number(cfg.baseDelayMs) || 30000) / 1000)))}" title="Base Delay Seconds" />
           <input class="settings-retry-max-delay" data-connector="${esc(connector)}" type="number" min="1" max="86400" step="1" value="${esc(String(Math.round((Number(cfg.maxDelayMs) || 1800000) / 1000)))}" title="Max Delay Seconds" />
+          <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.testRetryPolicy('${esc(connector)}')">Test</button>
         </div>
       </div>
     `).join('')
@@ -1063,12 +1066,14 @@ async function onSectionActivate(id) {
     case 'kanban':      if (pid) renderKanban(state.tasks = await fetchTasks(pid)); break;
     case 'approvals': {
       if (pid) {
-        const { sortBy, direction } = state.approvalsFilter;
+        const { sortBy, direction, minRisk } = state.approvalsFilter;
         const sortByEl = document.getElementById('approvalsSortBy');
         const directionEl = document.getElementById('approvalsSortDirection');
+        const minRiskEl = document.getElementById('approvalsMinRisk');
         if (sortByEl) sortByEl.value = sortBy;
         if (directionEl) directionEl.value = direction;
-        renderApprovals(await fetchApprovals(pid, sortBy, direction));
+        if (minRiskEl) minRiskEl.value = minRisk;
+        renderApprovals(await fetchApprovals(pid, sortBy, direction, minRisk));
       }
       break;
     }
@@ -1192,6 +1197,20 @@ const Dashboard = {
   setApprovalSort() {
     state.approvalsFilter.sortBy = document.getElementById('approvalsSortBy')?.value || 'risk';
     state.approvalsFilter.direction = document.getElementById('approvalsSortDirection')?.value || 'desc';
+    state.approvalsFilter.minRisk = document.getElementById('approvalsMinRisk')?.value || state.approvalsFilter.minRisk || 'all';
+    if (state.activeSection === 'approvals') onSectionActivate('approvals');
+  },
+
+  setApprovalQuickFilter(minRisk, sortBy = 'risk', direction = 'desc') {
+    state.approvalsFilter.minRisk = String(minRisk || 'all');
+    state.approvalsFilter.sortBy = String(sortBy || 'risk');
+    state.approvalsFilter.direction = String(direction || 'desc');
+    const minRiskEl = document.getElementById('approvalsMinRisk');
+    const sortByEl = document.getElementById('approvalsSortBy');
+    const directionEl = document.getElementById('approvalsSortDirection');
+    if (minRiskEl) minRiskEl.value = state.approvalsFilter.minRisk;
+    if (sortByEl) sortByEl.value = state.approvalsFilter.sortBy;
+    if (directionEl) directionEl.value = state.approvalsFilter.direction;
     if (state.activeSection === 'approvals') onSectionActivate('approvals');
   },
 
@@ -1249,6 +1268,25 @@ const Dashboard = {
       if (state.activeSection === 'kanban') onSectionActivate('kanban');
     } catch (err) {
       showToast(`Batch approval failed: ${err.message}`, 'error');
+    }
+  },
+
+  async testRetryPolicy(connector) {
+    const normalized = String(connector || '').trim().toLowerCase();
+    if (!normalized) return;
+    const reason = (window.prompt(`Optional simulated failure reason for ${normalized}:`, 'HTTP 503 timeout') || '').trim();
+    try {
+      const result = await apiFetch(API.retryPolicyTest, {
+        method: 'POST',
+        body: JSON.stringify({ connector: normalized, reason }),
+      });
+      const lines = (result.attempts || []).map((entry) => {
+        const delay = Number(entry.delayMs || 0);
+        return `Attempt ${entry.attempt}: retryable=${entry.retryable ? 'yes' : 'no'}, delay=${Math.round(delay / 1000)}s`;
+      });
+      showToast(`${normalized} policy: ${lines.slice(0, 2).join(' | ')}${lines.length > 2 ? ' ...' : ''}`, 'info');
+    } catch (err) {
+      showToast(`Retry policy test failed: ${err.message}`, 'error');
     }
   },
 

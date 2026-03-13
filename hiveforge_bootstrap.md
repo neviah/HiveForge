@@ -583,3 +583,49 @@ Exit criteria:
 
 ---
 
+# **10. Operational Backlog (Updated March 2026)**
+
+This is the active short-list to drive HiveForge from advanced prototype to fully operational autonomous business runtime.
+
+## **Recently Completed**
+
+1. Capability-aware task assignment at heartbeat routing stage.
+2. Explicit approval workflow with risk scoring, single/batch approve/deny APIs, and dashboard approvals workspace.
+3. Connector retry engine with backoff and dead-letter queue support.
+4. Per-connector retry policies exposed in Settings and persisted in config.
+5. KPI goals, weekly planning, variance alerts, and KPI notification escalation (WhatsApp/Telegram with cooldown).
+
+## **Next Critical Milestones**
+
+1. **Execution Determinism Hardening**
+   - Add exactly-once semantics for recurring connector actions and stronger idempotency keys.
+   - Prevent duplicate side effects after restart/retry races.
+
+2. **Approval Governance Layer**
+   - Add policy packs for auto-approve/auto-deny thresholds (risk + cost + connector + role).
+   - Add immutable operator decision audit export for compliance review.
+
+3. **Business Operating Loops**
+   - Add template-level weekly objective generation with owner assignment and SLA tracking.
+   - Add recurring sales/support/finance loops with explicit KPI ownership.
+
+4. **Reliability and Recovery QA**
+   - Expand chaos tests for connector outages, delayed webhooks, and config corruption recovery.
+   - Add long-run soak test (24h+) for heartbeat stability and memory growth checks.
+
+5. **Production Safety Gate**
+   - Add preflight checklist endpoint that blocks production-mode actions when required controls are missing.
+   - Include credential scope validation, budget sanity, notification route health, and rollback readiness.
+
+## **Definition of Operational Readiness**
+
+HiveForge can be considered fully operational when:
+
+1. A business template runs continuously for multiple days with no coordinator deadlocks.
+2. External actions are idempotent, policy-gated, budget-safe, and fully auditable.
+3. KPI alerts are actionable (low false positives) and approvals are manageable at scale.
+4. Recovery from restart/failure preserves in-flight intent without duplicate real-world side effects.
+5. Pinokio compatibility, sandbox boundaries, and LM Studio-only constraints remain intact.
+
+---
+
