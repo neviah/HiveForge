@@ -129,6 +129,29 @@ const SERVICE_LABELS = {
   whatsapp:       'WhatsApp',
 };
 
+const SERVICE_TOKEN_GUIDES = {
+  netlify: {
+    where: 'User Settings -> Applications -> Personal access tokens.',
+    what: 'Paste the full personal access token.',
+  },
+  stripe: {
+    where: 'Developers -> API keys in your Stripe dashboard.',
+    what: 'Use a Secret key (starts with sk_live_ or sk_test_).',
+  },
+  google_ads: {
+    where: 'Google Ads manager/API credentials area.',
+    what: 'Paste your developer token or access token used by your connector flow.',
+  },
+  analytics: {
+    where: 'Google Cloud console under APIs & Services credentials.',
+    what: 'Use the access token or service credential expected by your Analytics connector setup.',
+  },
+  email_provider: {
+    where: 'Mailgun dashboard -> API Security -> API Keys.',
+    what: 'Use the private API key (starts with key-).',
+  },
+};
+
 // ─── State ───────────────────────────────────────────────────────────────────
 
 const state = {
@@ -961,8 +984,15 @@ const Dashboard = {
     if (!guide) return;
     const url   = CONNECTOR_WEBSITES[service];
     const label = SERVICE_LABELS[service];
+    const details = SERVICE_TOKEN_GUIDES[service];
     if (url && label) {
-      guide.innerHTML = `Need a token? <a href="${url}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);">Get your ${label} API token →</a>`;
+      const where = details?.where ? `Where: ${details.where}` : '';
+      const what  = details?.what ? `Paste: ${details.what}` : '';
+      guide.innerHTML = [
+        `Need a token? <a href="${url}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);">Get your ${label} API token →</a>`,
+        where,
+        what,
+      ].filter(Boolean).join('<br>');
       guide.style.display = '';
     } else {
       guide.style.display = 'none';
