@@ -7,6 +7,8 @@ const {
   assessApprovalRisk,
   connectorRetryPlan,
   connectorExecutionKey,
+  connectorMutationExecutionKey,
+  isMutatingConnectorOperation,
   markConnectorExecutionRecord,
   makeAnalyticsSnapshot,
   ensureCredentialStorage,
@@ -131,4 +133,22 @@ test('connector execution ledger upsert keeps latest status', () => {
 
   assert.equal(state.connectorExecutions[key].status, 'succeeded');
   assert.equal(state.connectorExecutions[key].attempts, 1);
+});
+
+test('manual connector mutation key is deterministic for equivalent payloads', () => {
+  const keyA = connectorMutationExecutionKey('netlify', 'trigger_deploy', {
+    siteId: 'site-123',
+    opts: { branch: 'main', force: true },
+  });
+  const keyB = connectorMutationExecutionKey('netlify', 'trigger_deploy', {
+    opts: { force: true, branch: 'main' },
+    siteId: 'site-123',
+  });
+  assert.equal(keyA, keyB);
+});
+
+test('mutating operation guard identifies write actions', () => {
+  assert.equal(isMutatingConnectorOperation('netlify', 'trigger_deploy'), true);
+  assert.equal(isMutatingConnectorOperation('netlify', 'list_deploys'), false);
+  assert.equal(isMutatingConnectorOperation('github', 'list_repos'), false);
 });

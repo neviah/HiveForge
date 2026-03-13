@@ -595,28 +595,29 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 4. Connector execution idempotency ledger for recurring actions (replay suppression + stale-running recovery guard).
 5. Per-connector retry policies exposed in Settings and persisted in config.
 6. KPI goals, weekly planning, variance alerts, and KPI notification escalation (WhatsApp/Telegram with cooldown).
+7. External connector idempotency propagation for mutating operations (provider headers + duplicate suppression for manual execute path).
 
 ## **Next Critical Milestones**
 
-1. **Execution Determinism Hardening**
-   - Add exactly-once semantics for recurring connector actions and stronger idempotency keys.
-   - Prevent duplicate side effects after restart/retry races.
-
-2. **Approval Governance Layer**
+1. **Approval Governance Layer**
    - Add policy packs for auto-approve/auto-deny thresholds (risk + cost + connector + role).
    - Add immutable operator decision audit export for compliance review.
 
-3. **Business Operating Loops**
+2. **Business Operating Loops**
    - Add template-level weekly objective generation with owner assignment and SLA tracking.
    - Add recurring sales/support/finance loops with explicit KPI ownership.
 
-4. **Reliability and Recovery QA**
+3. **Reliability and Recovery QA**
    - Expand chaos tests for connector outages, delayed webhooks, and config corruption recovery.
    - Add long-run soak test (24h+) for heartbeat stability and memory growth checks.
 
-5. **Production Safety Gate**
+4. **Production Safety Gate**
    - Add preflight checklist endpoint that blocks production-mode actions when required controls are missing.
    - Include credential scope validation, budget sanity, notification route health, and rollback readiness.
+
+5. **Provider-Specific Idempotency Expansion**
+   - Extend adapter-level idempotency token usage to future mutating connectors beyond Netlify.
+   - Add reconciliation checks for connectors that only support eventual consistency semantics.
 
 ## **Definition of Operational Readiness**
 

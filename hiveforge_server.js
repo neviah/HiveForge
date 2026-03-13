@@ -164,6 +164,9 @@ const CONNECTOR_REGISTRY = {
   analytics: { id: 'analytics', label: 'Analytics', credentialService: 'analytics' },
   email_provider: { id: 'email_provider', label: 'Email Provider', credentialService: 'email_provider' },
 };
+const MUTATING_CONNECTOR_OPERATIONS = {
+  netlify: new Set(['trigger_deploy']),
+};
 
 function nowIso() {
   return new Date().toISOString();
@@ -264,6 +267,21 @@ function connectorExecutionKey(task) {
     : {};
   const inputHash = crypto.createHash('sha256').update(canonicalJson(input)).digest('hex').slice(0, 16);
   return `${String(task && task.id ? task.id : 'task')}::${connector}::${operation}::${inputHash}`;
+}
+
+function connectorMutationExecutionKey(connectorId, operation, input = {}) {
+  const connector = String(connectorId || '').trim().toLowerCase();
+  const operationKey = String(operation || '').trim().toLowerCase();
+  const safeInput = input && typeof input === 'object' ? input : {};
+  const inputHash = crypto.createHash('sha256').update(canonicalJson(safeInput)).digest('hex').slice(0, 16);
+  return `${connector}::${operationKey}::${inputHash}`;
+}
+
+function isMutatingConnectorOperation(connectorId, operation) {
+  const connector = String(connectorId || '').trim().toLowerCase();
+  const operationKey = String(operation || '').trim().toLowerCase();
+  const allowed = MUTATING_CONNECTOR_OPERATIONS[connector];
+  return Boolean(allowed && allowed.has(operationKey));
 }
 
 function ensureConnectorExecutionState(projectState) {
@@ -3649,9 +3667,17 @@ async function executeNetlifyConnector(options = {}) {
         data: null,
       };
     }
+    const triggerHeaders = {
+      ...headers,
+    };
+    if (options.idempotencyKey) {
+      // Netlify does not guarantee this header today, but forwarding it keeps parity with providers that do.
+      triggerHeaders['Idempotency-Key'] = String(options.idempotencyKey);
+      triggerHeaders['X-Idempotency-Key'] = String(options.idempotencyKey);
+    }
     const resp = await fetchWithTimeout(
       `https://api.netlify.com/api/v1/sites/${encodeURIComponent(siteId)}/builds`,
-      { method: 'POST', headers },
+      { method: 'POST', headers: triggerHeaders },
       15000,
     );
     if (!resp.ok) {
@@ -3674,6 +3700,7 @@ async function executeNetlifyConnector(options = {}) {
         id: body?.id || null,
         state: body?.state || null,
         createdAt: body?.created_at || null,
+        idempotencyKey: options.idempotencyKey || null,
         deployUrl: `https://app.netlify.com/sites/${siteId}/deploys`,
       },
     };
@@ -5473,23 +5500,118 @@ async function main() {
           let auditReason = result.reason;
           let auditErrorCode = result.errorCode || null;
           let actualCost = 0;
+          const isMutating = isMutatingConnectorOperation(connector, operation);
+          const executionKey = (!dryRun && isMutating)
+            ? String(payload.idempotencyKey || '').trim() || connectorMutationExecutionKey(connector, operation, input)
+            : null;
+
+          if (result.ok && !dryRun && projectId && executionKey) {
+            const runtime = projectRuntimes.get(projectId);
+            if (runtime && runtime.state) {
+              ensureConnectorExecutionState(runtime.state);
+              const previousExecution = runtime.state.connectorExecutions[executionKey] || null;
+              if (previousExecution && previousExecution.status === 'succeeded') {
+                response.reason = previousExecution.message || 'idempotent_replay_success';
+                response.execution = {
+                  ok: true,
+                  operation,
+                  actualCost: 0,
+                  message: response.reason,
+                  data: previousExecution.result || null,
+                  idempotentReplay: true,
+                  executionKey,
+                };
+              } else if (previousExecution && previousExecution.status === 'running') {
+                const startedMs = Date.parse(previousExecution.startedAt || previousExecution.updatedAt || '');
+                if (Number.isFinite(startedMs) && (Date.now() - startedMs) < CONNECTOR_EXECUTION_STALE_MS) {
+                  response.reason = 'Duplicate mutating connector execution suppressed while prior run is still active.';
+                  response.execution = {
+                    ok: true,
+                    operation,
+                    actualCost: 0,
+                    message: response.reason,
+                    data: previousExecution.result || null,
+                    idempotentReplay: true,
+                    executionKey,
+                    pending: true,
+                  };
+                } else {
+                  markConnectorExecutionRecord(runtime.state, executionKey, {
+                    status: 'stale_running',
+                    staleAt: nowIso(),
+                    message: 'Marked stale after manual connector execution recovery timeout.',
+                  });
+                }
+              }
+            }
+          }
 
           if (result.ok && !dryRun) {
-            const execution = await executeLiveConnector(connector, { operation, input, projectId, estimatedCost });
-            response.execution = execution;
-            if (!execution.ok) {
-              response.ok = false;
-              response.decision = 'deny';
-              response.reason = execution.message;
-              response.errorCode = execution.errorCode;
-              auditDecision = 'deny';
-              auditReason = execution.message;
-              auditErrorCode = execution.errorCode;
+            if (!response.execution) {
+              if (projectId && executionKey) {
+                const runtime = projectRuntimes.get(projectId);
+                if (runtime && runtime.state) {
+                  markConnectorExecutionRecord(runtime.state, executionKey, {
+                    connector: String(connector || '').trim().toLowerCase(),
+                    operation: String(operation || '').trim().toLowerCase(),
+                    status: 'running',
+                    startedAt: nowIso(),
+                    attempts: 1,
+                    source: 'manual_execute',
+                    lastError: null,
+                  });
+                  persistProjectState(runtime.state);
+                }
+              }
+
+              const execution = await executeLiveConnector(connector, {
+                operation,
+                input,
+                projectId,
+                estimatedCost,
+                idempotencyKey: executionKey || undefined,
+              });
+              response.execution = execution;
+              if (!execution.ok) {
+                response.ok = false;
+                response.decision = 'deny';
+                response.reason = execution.message;
+                response.errorCode = execution.errorCode;
+                auditDecision = 'deny';
+                auditReason = execution.message;
+                auditErrorCode = execution.errorCode;
+                if (projectId && executionKey) {
+                  const runtime = projectRuntimes.get(projectId);
+                  if (runtime && runtime.state) {
+                    markConnectorExecutionRecord(runtime.state, executionKey, {
+                      status: 'failed',
+                      lastError: execution.message || execution.errorCode || 'execution_failed',
+                    });
+                    persistProjectState(runtime.state);
+                  }
+                }
+              } else {
+                actualCost = typeof execution.actualCost === 'number' && Number.isFinite(execution.actualCost)
+                  ? execution.actualCost
+                  : (typeof estimatedCost === 'number' ? estimatedCost : 0);
+                response.reason = execution.message || response.reason;
+                auditDecision = 'allow';
+                auditReason = response.reason;
+                if (projectId && executionKey) {
+                  const runtime = projectRuntimes.get(projectId);
+                  if (runtime && runtime.state) {
+                    markConnectorExecutionRecord(runtime.state, executionKey, {
+                      status: 'succeeded',
+                      message: response.reason,
+                      completedAt: nowIso(),
+                      actualCost,
+                      result: execution.data || null,
+                    });
+                    persistProjectState(runtime.state);
+                  }
+                }
+              }
             } else {
-              actualCost = typeof execution.actualCost === 'number' && Number.isFinite(execution.actualCost)
-                ? execution.actualCost
-                : (typeof estimatedCost === 'number' ? estimatedCost : 0);
-              response.reason = execution.message || response.reason;
               auditDecision = 'allow';
               auditReason = response.reason;
             }
@@ -5514,6 +5636,7 @@ async function main() {
             meta: {
               connector: result.connector,
               estimatedCost,
+              idempotencyKey: executionKey,
             },
           });
 
@@ -5995,6 +6118,8 @@ module.exports = {
   assessApprovalRisk,
   connectorRetryPlan,
   connectorExecutionKey,
+  connectorMutationExecutionKey,
+  isMutatingConnectorOperation,
   markConnectorExecutionRecord,
   makeAnalyticsSnapshot,
   ensureMessageBus,
