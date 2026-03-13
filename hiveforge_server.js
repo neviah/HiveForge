@@ -231,6 +231,66 @@ const CONNECTOR_REGISTRY = {
 };
 const MUTATING_CONNECTOR_OPERATIONS = {
   netlify: new Set(['trigger_deploy']),
+  github: new Set(['create_issue', 'create_pull_request', 'dispatch_workflow']),
+  stripe: new Set(['create_payment_intent', 'create_refund', 'create_invoice']),
+  email_provider: new Set(['send_email', 'send_campaign']),
+  google_ads: new Set(['create_campaign', 'update_campaign_budget']),
+};
+const CONNECTOR_IDEMPOTENCY_PROFILES = {
+  netlify: {
+    trigger_deploy: {
+      mode: 'forwarded_header',
+      reconciliation: 'deploy_visibility',
+    },
+  },
+  github: {
+    create_issue: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    create_pull_request: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    dispatch_workflow: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+  },
+  stripe: {
+    create_payment_intent: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    create_refund: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    create_invoice: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+  },
+  email_provider: {
+    send_email: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    send_campaign: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+  },
+  google_ads: {
+    create_campaign: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    update_campaign_budget: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+  },
 };
 
 function nowIso() {
@@ -347,6 +407,101 @@ function isMutatingConnectorOperation(connectorId, operation) {
   const operationKey = String(operation || '').trim().toLowerCase();
   const allowed = MUTATING_CONNECTOR_OPERATIONS[connector];
   return Boolean(allowed && allowed.has(operationKey));
+}
+
+function connectorIdempotencyProfile(connectorId, operation) {
+  const connector = String(connectorId || '').trim().toLowerCase();
+  const operationKey = String(operation || '').trim().toLowerCase();
+  const connectorProfiles = CONNECTOR_IDEMPOTENCY_PROFILES[connector] || {};
+  const selected = connectorProfiles[operationKey] || null;
+  if (!selected) {
+    return {
+      mode: isMutatingConnectorOperation(connector, operationKey) ? 'ledger_only' : 'not_required',
+      reconciliation: null,
+    };
+  }
+  return {
+    mode: String(selected.mode || 'ledger_only'),
+    reconciliation: selected.reconciliation || null,
+  };
+}
+
+function connectorIdempotencyMode(connectorId, operation) {
+  return connectorIdempotencyProfile(connectorId, operation).mode;
+}
+
+function shouldReconcileConnectorExecution(connectorId, operation) {
+  const profile = connectorIdempotencyProfile(connectorId, operation);
+  return Boolean(profile.reconciliation);
+}
+
+async function reconcileConnectorExecution(connectorId, operation, executionResult, context = {}) {
+  const connector = String(connectorId || '').trim().toLowerCase();
+  const operationKey = String(operation || '').trim().toLowerCase();
+  const profile = connectorIdempotencyProfile(connector, operationKey);
+
+  if (!profile.reconciliation) {
+    return {
+      checked: false,
+      ok: true,
+      pending: false,
+      mode: profile.mode,
+      reason: 'No reconciliation required for this connector operation.',
+    };
+  }
+
+  if (profile.reconciliation === 'deploy_visibility' && connector === 'netlify' && operationKey === 'trigger_deploy') {
+    const deployId = String(executionResult && executionResult.data && executionResult.data.id ? executionResult.data.id : '').trim();
+    const siteId = String(context && context.siteId ? context.siteId : '').trim();
+    if (!deployId || !siteId) {
+      return {
+        checked: true,
+        ok: false,
+        pending: true,
+        mode: profile.mode,
+        reason: 'Deploy visibility reconciliation pending: deployId/siteId not available yet.',
+      };
+    }
+    try {
+      const verify = await executeNetlifyConnector({ operation: 'list_deploys', siteId });
+      if (!verify.ok) {
+        return {
+          checked: true,
+          ok: false,
+          pending: true,
+        siteId: siteId,
+          reason: `Deploy visibility reconciliation pending: ${verify.message || 'list_deploys_failed'}`,
+        };
+      }
+      const deploys = Array.isArray(verify.data && verify.data.deploys) ? verify.data.deploys : [];
+      const found = deploys.some((entry) => String(entry && entry.id ? entry.id : '') === deployId);
+      return {
+        checked: true,
+        ok: found,
+        pending: !found,
+        mode: profile.mode,
+        reason: found
+          ? 'Deploy id verified in recent provider deploy history.'
+          : 'Deploy not yet visible in provider history; eventual consistency reconciliation pending.',
+      };
+    } catch (err) {
+      return {
+        checked: true,
+        ok: false,
+        pending: true,
+        mode: profile.mode,
+        reason: `Deploy visibility reconciliation pending due to connector error: ${redactSensitive(err.message)}`,
+      };
+    }
+  }
+
+  return {
+    checked: false,
+    ok: true,
+    pending: false,
+    mode: profile.mode,
+    reason: 'No reconciliation strategy registered for this connector operation.',
+  };
 }
 
 function ensureConnectorExecutionState(projectState) {
@@ -1655,6 +1810,11 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
     }
 
     const actualCost = Number.isFinite(Number(execution.actualCost)) ? Number(execution.actualCost) : Number(action.estimatedCost || 0);
+    const reconciliation = await reconcileConnectorExecution(action.connector, action.operation, execution, {
+      projectId: projectState.id,
+      siteId: String(action?.input?.siteId || ''),
+      executionKey,
+    });
     if (actualCost > 0 && policyResult.credentialService) {
       recordCredentialSpend(projectState.id, policyResult.credentialService, actualCost, nowIso());
     }
@@ -1666,6 +1826,7 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
       source,
       actualCost,
       executionKey,
+      reconciliation,
     });
     markConnectorExecutionRecord(projectState, executionKey, {
       status: 'succeeded',
@@ -1673,7 +1834,31 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
       completedAt: nowIso(),
       actualCost,
       result: execution.data || null,
+      reconciliation,
     });
+    if (reconciliation && reconciliation.checked && !reconciliation.ok) {
+      appendProjectLog(projectState, 'message', {
+        kind: 'connector_reconciliation_pending',
+        taskId: task.id,
+        connector: action.connector,
+        operation: action.operation,
+        executionKey,
+        reconciliation,
+      });
+      appendMessageBusEntry({
+        projectId: projectState.id,
+        from: 'coordinator',
+        to: 'reconciliation_engine',
+        kind: 'connector_reconciliation_pending',
+        payload: {
+          taskId: task.id,
+          connector: action.connector,
+          operation: action.operation,
+          executionKey,
+          reconciliation,
+        },
+      });
+    }
     persistProjectState(projectState);
   }).catch(async (err) => {
     const errMsg = redactSensitive(err.message);
@@ -5885,6 +6070,7 @@ async function main() {
         let payload = {};
         try { payload = parseJsonBodySafe(body); } catch (_) {}
         const siteId = String(payload.siteId || '').trim();
+        const idempotencyKey = String(payload.idempotencyKey || '').trim() || connectorMutationExecutionKey('netlify', 'trigger_deploy', { siteId });
         const projectId = String(payload.projectId || '').trim();
         if (!siteId) {
           writeJson(res, { ok: false, error: 'siteId is required.' }, 400);
@@ -5918,16 +6104,32 @@ async function main() {
           }
         }
         try {
-          const result = await executeNetlifyConnector({ operation: 'trigger_deploy', siteId });
+          const result = await executeNetlifyConnector({ operation: 'trigger_deploy', siteId, idempotencyKey });
+          const reconciliation = result.ok
+            ? await reconcileConnectorExecution('netlify', 'trigger_deploy', result, { siteId, projectId, idempotencyKey })
+            : null;
           if (result.ok) {
             await appendMessageBusEntry({
               kind: 'netlify_deploy_triggered',
-              projectId: null,
+              projectId: projectId || null,
               agentId: null,
-              payload: { siteId, deployId: result.data?.id, state: result.data?.state },
+              payload: {
+                siteId,
+                deployId: result.data?.id,
+                state: result.data?.state,
+                idempotencyKey,
+                reconciliation,
+              },
             });
           }
-          writeJson(res, result, result.ok ? 200 : 500);
+          writeJson(res, {
+            ...result,
+            idempotency: {
+              key: idempotencyKey,
+              mode: connectorIdempotencyMode('netlify', 'trigger_deploy'),
+            },
+            reconciliation,
+          }, result.ok ? 200 : 500);
         } catch (err) {
           writeJson(res, { ok: false, error: redactSensitive(err.message) }, 500);
         }
@@ -6160,7 +6362,9 @@ async function main() {
           let auditReason = result.reason;
           let auditErrorCode = result.errorCode || null;
           let actualCost = 0;
+          let reconciliation = null;
           const isMutating = isMutatingConnectorOperation(connector, operation);
+          const idempotencyMode = connectorIdempotencyMode(connector, operation);
           const executionKey = (!dryRun && isMutating)
             ? String(payload.idempotencyKey || '').trim() || connectorMutationExecutionKey(connector, operation, input)
             : null;
@@ -6206,6 +6410,7 @@ async function main() {
                   idempotentReplay: true,
                   executionKey,
                 };
+                reconciliation = previousExecution.reconciliation || null;
               } else if (previousExecution && previousExecution.status === 'running') {
                 const startedMs = Date.parse(previousExecution.startedAt || previousExecution.updatedAt || '');
                 if (Number.isFinite(startedMs) && (Date.now() - startedMs) < CONNECTOR_EXECUTION_STALE_MS) {
@@ -6282,6 +6487,14 @@ async function main() {
                 response.reason = execution.message || response.reason;
                 auditDecision = 'allow';
                 auditReason = response.reason;
+                if (isMutating) {
+                  reconciliation = await reconcileConnectorExecution(connector, operation, execution, {
+                    projectId,
+                    siteId: String(input && input.siteId ? input.siteId : ''),
+                    executionKey,
+                  });
+                  response.reconciliation = reconciliation;
+                }
                 if (projectId && executionKey) {
                   const runtime = projectRuntimes.get(projectId);
                   if (runtime && runtime.state) {
@@ -6291,7 +6504,29 @@ async function main() {
                       completedAt: nowIso(),
                       actualCost,
                       result: execution.data || null,
+                      reconciliation,
                     });
+                    if (reconciliation && reconciliation.checked && !reconciliation.ok) {
+                      appendProjectLog(runtime.state, 'message', {
+                        kind: 'connector_reconciliation_pending',
+                        connector,
+                        operation,
+                        executionKey,
+                        reconciliation,
+                      });
+                      appendMessageBusEntry({
+                        projectId,
+                        from: 'coordinator',
+                        to: 'reconciliation_engine',
+                        kind: 'connector_reconciliation_pending',
+                        payload: {
+                          connector,
+                          operation,
+                          executionKey,
+                          reconciliation,
+                        },
+                      });
+                    }
                     persistProjectState(runtime.state);
                   }
                 }
@@ -6322,6 +6557,8 @@ async function main() {
               connector: result.connector,
               estimatedCost,
               idempotencyKey: executionKey,
+              idempotencyMode,
+              reconciliation,
             },
           });
 
@@ -6807,6 +7044,9 @@ module.exports = {
   connectorExecutionKey,
   connectorMutationExecutionKey,
   isMutatingConnectorOperation,
+  connectorIdempotencyMode,
+  shouldReconcileConnectorExecution,
+  reconcileConnectorExecution,
   markConnectorExecutionRecord,
   appendApprovalDecisionAudit,
   readApprovalDecisionAudit,

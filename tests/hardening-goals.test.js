@@ -11,6 +11,9 @@ const {
   connectorExecutionKey,
   connectorMutationExecutionKey,
   isMutatingConnectorOperation,
+  connectorIdempotencyMode,
+  shouldReconcileConnectorExecution,
+  reconcileConnectorExecution,
   markConnectorExecutionRecord,
   appendApprovalDecisionAudit,
   readApprovalDecisionAudit,
@@ -156,6 +159,37 @@ test('mutating operation guard identifies write actions', () => {
   assert.equal(isMutatingConnectorOperation('netlify', 'trigger_deploy'), true);
   assert.equal(isMutatingConnectorOperation('netlify', 'list_deploys'), false);
   assert.equal(isMutatingConnectorOperation('github', 'list_repos'), false);
+  assert.equal(isMutatingConnectorOperation('github', 'create_issue'), true);
+  assert.equal(isMutatingConnectorOperation('stripe', 'create_payment_intent'), true);
+});
+
+test('provider idempotency mode maps supported write operations', () => {
+  assert.equal(connectorIdempotencyMode('netlify', 'trigger_deploy'), 'forwarded_header');
+  assert.equal(connectorIdempotencyMode('github', 'create_issue'), 'native_token');
+  assert.equal(connectorIdempotencyMode('stripe', 'create_refund'), 'native_token');
+  assert.equal(connectorIdempotencyMode('analytics', 'list_accounts'), 'not_required');
+  assert.equal(connectorIdempotencyMode('unknown_connector', 'create_anything'), 'not_required');
+});
+
+test('reconciliation policy flags eventual consistency operations', () => {
+  assert.equal(shouldReconcileConnectorExecution('netlify', 'trigger_deploy'), true);
+  assert.equal(shouldReconcileConnectorExecution('github', 'create_issue'), false);
+  assert.equal(shouldReconcileConnectorExecution('stripe', 'create_refund'), false);
+});
+
+test('netlify reconciliation returns pending when deploy identity is incomplete', async () => {
+  const result = await reconcileConnectorExecution('netlify', 'trigger_deploy', {
+    ok: true,
+    data: {
+      id: null,
+    },
+  }, {
+    siteId: 'site-123',
+  });
+
+  assert.equal(result.checked, true);
+  assert.equal(result.ok, false);
+  assert.equal(result.pending, true);
 });
 
 test('approval governance policy packs auto-deny critical approval context', () => {

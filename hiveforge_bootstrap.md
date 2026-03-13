@@ -600,12 +600,13 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 9. Template-level weekly objective generation with owner/SLA tracking and recurring sales/support/finance loops with KPI ownership.
 10. Reliability and recovery QA expansion with outage retry heuristics, delayed-webhook chaos coverage, config-corruption recovery tests, and heartbeat soak simulation coverage.
 11. Production Safety Gate with preflight checklist API and production-mode action blocking for missing controls (credential scope, budget sanity, notification route health, rollback readiness).
+12. Provider-specific idempotency expansion: mutating operation catalog across connectors, provider idempotency mode mapping, and eventual-consistency reconciliation checks.
 
 ## **Next Critical Milestones**
 
-1. **Provider-Specific Idempotency Expansion**
-   - Extend adapter-level idempotency token usage to future mutating connectors beyond Netlify.
-   - Add reconciliation checks for connectors that only support eventual consistency semantics.
+1. **Base System Milestones Complete**
+   - Core backlog milestones in this section are complete.
+   - Continue from Future Feature Candidates and extended connector coverage priorities.
 
 ## **Future Feature Candidates**
 
