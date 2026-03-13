@@ -17,6 +17,7 @@ const CREDENTIAL_AUDIT_LOG_PATH = path.join(CREDENTIALS_ROOT, 'audit.log.ndjson'
 const CREDENTIAL_BUDGET_COUNTERS_PATH = path.join(CREDENTIALS_ROOT, 'budget_counters.json');
 const AGENTS_RUNTIME_ROOT = path.join(SANDBOX_ROOT, 'agents');
 const MESSAGE_BUS_PATH = path.join(AGENTS_RUNTIME_ROOT, 'messages.db');
+const PRODUCTION_CERTIFICATION_SCRIPT_PATH = path.join(__dirname, 'scripts', 'production_certification.js');
 const MAX_TASK_HISTORY = 100;
 const MAX_EVENTS_PER_TASK = 500;
 const DEFAULT_RUNTIME_SETTINGS = {
@@ -1744,6 +1745,50 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 6000) {
   }
 }
 
+function runProductionCertification(baseUrl) {
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const child = spawn(process.execPath, [PRODUCTION_CERTIFICATION_SCRIPT_PATH], {
+      cwd: __dirname,
+      env: {
+        ...process.env,
+        HIVEFORGE_BASE_URL: baseUrl,
+      },
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on('error', (err) => {
+      resolve({
+        ok: false,
+        exitCode: -1,
+        durationMs: Date.now() - startedAt,
+        stdout,
+        stderr: `${stderr}${err.message}\n`,
+      });
+    });
+
+    child.on('close', (code) => {
+      resolve({
+        ok: code === 0,
+        exitCode: code,
+        durationMs: Date.now() - startedAt,
+        stdout,
+        stderr,
+      });
+    });
+  });
+}
+
 async function testGithubIntegration() {
   const status = integrationStatus().github;
   const githubCfg = (appConfig && appConfig.integrations && appConfig.integrations.github) || {};
@@ -3263,6 +3308,23 @@ async function main() {
         llm: {
           endpoint: appState.llm.endpoint,
         },
+      });
+      return;
+    }
+
+    if (pathname === '/api/production_certification' && req.method === 'POST') {
+      const port = Number(process.env.PORT || 3000);
+      const baseUrl = `http://127.0.0.1:${port}`;
+      runProductionCertification(baseUrl).then((result) => {
+        writeJson(res, result, result.ok ? 200 : 500);
+      }).catch((err) => {
+        writeJson(res, {
+          ok: false,
+          exitCode: -1,
+          durationMs: 0,
+          stdout: '',
+          stderr: redactSensitive(err.message),
+        }, 500);
       });
       return;
     }

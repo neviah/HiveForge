@@ -521,6 +521,16 @@
         </div>
 
         <div class="hf-card" style="max-width:760px;margin-top:1rem;">
+          <h3 style="margin-top:0;">Production Certification</h3>
+          <p style="color:var(--muted);margin-top:0;">Run the live Sprint D certification flow against this HiveForge instance. It creates a temporary project, verifies the core runbook, then cleans up.</p>
+          <div class="hf-btn-row" style="margin-bottom:0.7rem;">
+            <button class="hf-btn" onclick="Dashboard.runProductionCertification()">Run Production Certification</button>
+            <span id="productionCertificationStatus" class="hf-status" style="display:none;"></span>
+          </div>
+          <pre id="productionCertificationOutput" class="hf-log-stream" style="max-height:220px;white-space:pre-wrap;color:var(--muted);">No certification run yet.</pre>
+        </div>
+
+        <div class="hf-card" style="max-width:760px;margin-top:1rem;">
           <h3 style="margin-top:0;">Project Automation</h3>
           <p style="color:var(--muted);margin-top:0;">Control recurring autonomous work for the active project.</p>
           <div id="projectAutomationEmpty" style="color:var(--muted);">Select an active project to manage recurring automation.</div>

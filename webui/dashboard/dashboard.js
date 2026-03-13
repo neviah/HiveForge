@@ -23,6 +23,7 @@ const API = {
   control:     '/api/control',
   settings:    '/api/settings',
   settingsReset: '/api/settings/reset',
+  productionCertification: '/api/production_certification',
   projectSettings: '/api/project_settings',
   credentialPolicy: '/api/credential_policy',
   credentialBudget: '/api/credential_budget',
@@ -1233,6 +1234,28 @@ const Dashboard = {
     } catch (err) {
       showStatus(status, `Failed: ${err.message}`, 'error');
       showToast(`Could not reset settings: ${err.message}`, 'error');
+    }
+  },
+
+  async runProductionCertification() {
+    const status = document.getElementById('productionCertificationStatus');
+    const output = document.getElementById('productionCertificationOutput');
+    if (output) output.textContent = 'Running production certification...';
+    showStatus(status, 'Running…', 'running');
+    try {
+      const result = await apiFetch(API.productionCertification, { method: 'POST' });
+      const stdout = String(result.stdout || '').trim();
+      const stderr = String(result.stderr || '').trim();
+      if (output) {
+        output.textContent = [stdout, stderr ? `STDERR:\n${stderr}` : ''].filter(Boolean).join('\n\n') || 'Certification completed with no output.';
+      }
+      showStatus(status, 'Passed.', 'ok');
+      showToast('Production certification passed.', 'ok');
+    } catch (err) {
+      const message = String(err.message || 'Certification failed.');
+      if (output) output.textContent = message;
+      showStatus(status, 'Failed.', 'error');
+      showToast('Production certification failed. See output in Settings.', 'error');
     }
   },
 
