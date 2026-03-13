@@ -487,6 +487,15 @@
           <p>Tune runtime behavior for local hardware speed. Changes persist to sandbox config.</p>
         </div>
 
+        <div class="hf-btn-row" style="margin-bottom:0.9rem;gap:0.4rem;flex-wrap:wrap;">
+          <button class="hf-btn secondary hf-btn sm" data-settings-tab-btn="runtime" onclick="Dashboard.setSettingsTab('runtime')">Runtime</button>
+          <button class="hf-btn secondary hf-btn sm" data-settings-tab-btn="notifications" onclick="Dashboard.setSettingsTab('notifications')">Notifications</button>
+          <button class="hf-btn secondary hf-btn sm" data-settings-tab-btn="automation" onclick="Dashboard.setSettingsTab('automation')">Automation</button>
+          <button class="hf-btn secondary hf-btn sm" data-settings-tab-btn="deploy-policy" onclick="Dashboard.setSettingsTab('deploy-policy')">Deploy &amp; Policy</button>
+        </div>
+
+        <div data-settings-tab="runtime">
+
         <div class="hf-card" style="max-width:760px;">
           <h3 style="margin-top:0;">Runtime</h3>
           <div class="hf-grid-2" style="margin-bottom:0.8rem;">
@@ -532,6 +541,10 @@
           <pre id="productionCertificationOutput" class="hf-log-stream" style="max-height:220px;white-space:pre-wrap;color:var(--muted);">No certification run yet.</pre>
         </div>
 
+        </div>
+
+        <div data-settings-tab="notifications" style="display:none;">
+
         <div class="hf-card" style="max-width:760px;margin-top:1rem;">
           <h3 style="margin-top:0;">Notification Escalation</h3>
           <p style="color:var(--muted);margin-top:0;">Configure where coordinator permission requests and escalation notices are sent.</p>
@@ -563,6 +576,10 @@
           </div>
         </div>
 
+        </div>
+
+        <div data-settings-tab="automation" style="display:none;">
+
         <div class="hf-card" style="max-width:760px;margin-top:1rem;">
           <h3 style="margin-top:0;">Project Automation</h3>
           <p style="color:var(--muted);margin-top:0;">Control recurring autonomous work for the active project.</p>
@@ -581,6 +598,10 @@
             </div>
           </div>
         </div>
+
+        </div>
+
+        <div data-settings-tab="deploy-policy" style="display:none;">
 
         <div class="hf-card" style="max-width:760px;margin-top:1rem;">
           <h3 style="margin-top:0;">Netlify Deployments</h3>
@@ -649,6 +670,8 @@
             </div>
           </div>
           <pre id="connectorCheckOutput" class="hf-log-stream" style="max-height:200px;white-space:pre-wrap;color:var(--muted);">No connector check has been run yet.</pre>
+        </div>
+
         </div>
       </section>
 

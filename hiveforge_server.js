@@ -463,6 +463,7 @@ function createInitialTasks(template) {
     lastProgressAt: null,
     executionTaskRunId: null,
     inprogressCycles: 0,
+    pendingApproval: null,
     createdAt,
     completedAt: null,
     startedAt: null,
@@ -594,6 +595,7 @@ function enqueueRecurringTasks(projectState, ts, source = 'interval') {
       lastProgressAt: null,
       executionTaskRunId: null,
       inprogressCycles: 0,
+      pendingApproval: null,
       createdAt: ts,
       completedAt: null,
       startedAt: null,
@@ -822,6 +824,16 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
           reason: policyResult.reason,
           checks: policyResult.checks,
         });
+        markTaskAwaitingApproval(projectState, task, policyResult.reason, {
+          connector: action.connector,
+          operation: action.operation,
+          actorRole,
+          source,
+          requiresPermission: true,
+          checks: policyResult.checks,
+        });
+        persistProjectState(projectState);
+        return;
       }
       finalizeAutoActionTask(projectState, task, false, policyResult.reason, {
         connector: action.connector,
@@ -947,11 +959,106 @@ function nextRunnableTask(projectState) {
   }) || null;
 }
 
-function pickWorkerAgent(projectState) {
+function normalizeConnectorId(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function taskCapabilityRequirements(task) {
+  const title = String(task && task.title ? task.title : '').toLowerCase();
+  const phase = String(task && task.phase ? task.phase : '').toLowerCase();
+  const req = {
+    requiredRole: String(task && task.requiredRole ? task.requiredRole : '').trim() || null,
+    connector: null,
+    canDeploy: false,
+    canSpend: false,
+  };
+
+  if (task && task.autoAction && task.autoAction.type === 'connector') {
+    req.connector = normalizeConnectorId(task.autoAction.connector);
+    req.requiredRole = req.requiredRole || String(task.autoAction.actorRole || '').trim() || null;
+    req.canDeploy = req.connector === 'netlify' && String(task.autoAction.operation || '').toLowerCase() === 'trigger_deploy';
+    req.canSpend = Number(task.autoAction.estimatedCost || 0) > 0;
+    return req;
+  }
+
+  const looksLikeDeploy = phase.includes('deploy') || phase.includes('release') || title.includes('deploy') || title.includes('release') || title.includes('launch');
+  if (looksLikeDeploy) req.canDeploy = true;
+  return req;
+}
+
+function roleCapabilitiesFor(projectState, role) {
+  const roleName = String(role || '').trim();
+  const caps = projectState && projectState.roleCapabilities && typeof projectState.roleCapabilities === 'object'
+    ? projectState.roleCapabilities[roleName]
+    : null;
+  return caps || { canDeploy: false, canSpend: false, allowedConnectors: [] };
+}
+
+function agentCanHandleTask(projectState, agent, task) {
+  if (!agent || agent.isCoordinator || !task) return false;
+  const req = taskCapabilityRequirements(task);
+  const agentRole = String(agent.role || '').trim();
+  const caps = roleCapabilitiesFor(projectState, agentRole);
+
+  if (req.requiredRole && agentRole.toLowerCase() !== String(req.requiredRole).toLowerCase()) {
+    return false;
+  }
+  if (req.connector) {
+    const allowed = Array.isArray(caps.allowedConnectors)
+      ? caps.allowedConnectors.map((entry) => normalizeConnectorId(entry))
+      : [];
+    if (!allowed.includes(req.connector)) {
+      return false;
+    }
+  }
+  if (req.canDeploy && !caps.canDeploy) {
+    return false;
+  }
+  if (req.canSpend && !caps.canSpend) {
+    return false;
+  }
+  return true;
+}
+
+function pickWorkerAgent(projectState, task = null) {
   const candidates = projectState.agents.filter((agent) => !agent.isCoordinator);
   if (!candidates.length) return null;
-  const index = projectState.heartbeat?.cycleCount ? projectState.heartbeat.cycleCount % candidates.length : 0;
-  return candidates[index];
+  const eligible = task ? candidates.filter((agent) => agentCanHandleTask(projectState, agent, task)) : candidates;
+  if (!eligible.length) return null;
+  const index = projectState.heartbeat?.cycleCount ? projectState.heartbeat.cycleCount % eligible.length : 0;
+  return eligible[index];
+}
+
+function markTaskAwaitingApproval(projectState, task, reason, detail = {}) {
+  const at = nowIso();
+  task.status = 'review';
+  task.executionState = 'awaiting_approval';
+  task.lastError = String(reason || 'approval_required');
+  task.lastProgressAt = at;
+  task.pendingApproval = {
+    requestedAt: at,
+    reason: String(reason || 'approval_required'),
+    detail,
+  };
+  appendProjectLog(projectState, 'task', {
+    kind: 'task_awaiting_approval',
+    taskId: task.id,
+    reason,
+    detail,
+  });
+  appendMessageBusEntry({
+    projectId: projectState.id,
+    from: 'coordinator',
+    to: 'operator',
+    kind: 'task_awaiting_approval',
+    payload: {
+      taskId: task.id,
+      title: task.title,
+      reason,
+      detail,
+    },
+  });
+  emitProjectEvent(projectState.id, 'task_update', task);
 }
 
 function markAgentLog(agent, message) {
@@ -1524,7 +1631,7 @@ function runProjectHeartbeat(projectState, source = 'interval') {
     // ── Start next available task ────────────────────────────────────────
     const nextTask = nextRunnableTask(projectState);
     if (nextTask) {
-      const assignee = pickWorkerAgent(projectState);
+      const assignee = pickWorkerAgent(projectState, nextTask);
       if (assignee) {
         nextTask.status = 'inprogress';
         nextTask.assignee = assignee.id;
@@ -1578,6 +1685,25 @@ function runProjectHeartbeat(projectState, source = 'interval') {
             return;
           }
         }
+      } else {
+        const req = taskCapabilityRequirements(nextTask);
+        const summaryBits = [];
+        if (req.requiredRole) summaryBits.push(`role=${req.requiredRole}`);
+        if (req.connector) summaryBits.push(`connector=${req.connector}`);
+        if (req.canDeploy) summaryBits.push('requires_deploy=true');
+        if (req.canSpend) summaryBits.push('requires_spend=true');
+        const reason = summaryBits.length
+          ? `No eligible agent for capability requirements (${summaryBits.join(', ')}).`
+          : 'No eligible agent for task capability requirements.';
+        markTaskAwaitingApproval(projectState, nextTask, reason, {
+          requirement: req,
+          source,
+        });
+        notifyOperator(projectState, `Approval needed: ${nextTask.title}`, {
+          taskId: nextTask.id,
+          reason,
+          requirement: req,
+        }).catch(() => {});
       }
     } else {
       // No runnable backlog tasks and no inprogress — check if everything is done
@@ -1664,6 +1790,7 @@ function recoverProjectStateAfterRestart(state) {
     if (typeof t.lastProgressAt === 'undefined') t.lastProgressAt = null;
     if (typeof t.executionTaskRunId === 'undefined') t.executionTaskRunId = null;
     if (typeof t.recurringKey === 'undefined') t.recurringKey = null;
+    if (typeof t.pendingApproval === 'undefined') t.pendingApproval = null;
   });
   if (typeof state.operatingMode !== 'string') {
     state.operatingMode = templateOperatingMode(state.template, null);
@@ -3929,6 +4056,7 @@ async function main() {
           lastError: null,
           lastProgressAt: null,
           executionTaskRunId: null,
+          pendingApproval: null,
           createdAt: nowIso(),
           completedAt: null,
           startedAt: null,
@@ -3938,6 +4066,102 @@ async function main() {
         appendProjectLog(runtime.state, 'task', { kind: 'task_created', taskId: task.id, title: task.title });
         persistProjectState(runtime.state);
         writeJson(res, task, 201);
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
+    if (pathname === '/api/task_approval' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = parseJsonBodySafe(body);
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+
+        const projectId = String(payload.projectId || '').trim();
+        const taskId = String(payload.taskId || '').trim();
+        const decision = String(payload.decision || '').trim().toLowerCase();
+        const note = String(payload.note || '').trim();
+        const runtime = projectRuntimes.get(projectId);
+        if (!runtime) {
+          writeJson(res, { error: 'Project not found' }, 404);
+          return;
+        }
+        if (!taskId || (decision !== 'approve' && decision !== 'deny')) {
+          writeJson(res, { error: 'taskId and decision (approve|deny) are required' }, 400);
+          return;
+        }
+
+        const task = runtime.state.tasks.find((entry) => entry.id === taskId);
+        if (!task) {
+          writeJson(res, { error: 'Task not found' }, 404);
+          return;
+        }
+        if (!(task.status === 'review' && task.executionState === 'awaiting_approval')) {
+          writeJson(res, { error: 'Task is not awaiting approval' }, 400);
+          return;
+        }
+
+        const decidedAt = nowIso();
+        const priorPending = task.pendingApproval || {};
+        task.pendingApproval = {
+          ...priorPending,
+          decision,
+          decidedAt,
+          note: note || null,
+        };
+
+        if (decision === 'approve') {
+          if (task.autoAction && task.autoAction.type === 'connector') {
+            task.autoAction.requiresPermission = false;
+          }
+          task.status = 'backlog';
+          task.executionState = 'queued';
+          task.lastError = null;
+          task.lastProgressAt = decidedAt;
+          task.assignee = null;
+          task.startedAt = null;
+          task.inprogressCycles = 0;
+          appendProjectLog(runtime.state, 'task', {
+            kind: 'task_approval_granted',
+            taskId: task.id,
+            note,
+          });
+          appendMessageBusEntry({
+            projectId,
+            from: 'operator',
+            to: 'coordinator',
+            kind: 'task_approval_granted',
+            payload: { taskId: task.id, note: note || null },
+          });
+        } else {
+          task.status = 'done';
+          task.executionState = 'failed';
+          task.lastError = note || 'approval_denied';
+          task.lastFailedAt = decidedAt;
+          task.lastProgressAt = decidedAt;
+          task.completedAt = decidedAt;
+          appendProjectLog(runtime.state, 'task', {
+            kind: 'task_approval_denied',
+            taskId: task.id,
+            note,
+          });
+          appendMessageBusEntry({
+            projectId,
+            from: 'operator',
+            to: 'coordinator',
+            kind: 'task_approval_denied',
+            payload: { taskId: task.id, note: note || null },
+          });
+        }
+
+        emitProjectEvent(projectId, 'task_update', task);
+        persistProjectState(runtime.state);
+        writeJson(res, { ok: true, task });
       }).catch((err) => {
         writeJson(res, { error: err.message }, 400);
       });

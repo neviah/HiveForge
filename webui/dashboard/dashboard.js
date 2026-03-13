@@ -25,6 +25,7 @@ const API = {
   settingsReset: '/api/settings/reset',
   productionCertification: '/api/production_certification',
   projectSettings: '/api/project_settings',
+  taskApproval: '/api/task_approval',
   credentialPolicy: '/api/credential_policy',
   credentialBudget: '/api/credential_budget',
   credentialAudit: '/api/credential_audit',
@@ -177,6 +178,7 @@ const state = {
   messageBusPoller: null,
   messageBusFilter: { kind: '', actor: '', q: '' },
   marketplaceFilter: { division: 'All', query: '' },
+  activeSettingsTab: 'runtime',
   sseSource:      null,
   _pendingAddAgentId: null,
 };
@@ -490,21 +492,39 @@ function renderKanban(tasks) {
     const count = document.getElementById(`kanban-count-${col}`);
     if (!el) continue;
     count.textContent = items.length;
-    el.innerHTML = items.map(t => `
+    el.innerHTML = items.map((t) => {
+      const canApprove = t.status === 'review' && t.executionState === 'awaiting_approval';
+      const approvalReason = t.pendingApproval?.reason || t.lastError || '';
+      return `
       <div class="hf-kanban-card">
         <div style="font-weight:600;font-size:0.88rem;">${esc(t.title)}</div>
         <div style="font-size:0.78rem;color:var(--muted);margin-top:0.2rem;">${esc(t.assignee ?? 'Unassigned')}</div>
         <div style="font-size:0.75rem;color:var(--muted);margin-top:0.2rem;">Execution: ${esc(t.executionState ?? (t.status === 'done' ? 'done' : 'queued'))}</div>
+        ${approvalReason ? `<div style="font-size:0.73rem;color:#ef4444;margin-top:0.2rem;">Needs approval: ${esc(approvalReason)}</div>` : ''}
         ${t.startedAt ? `<div style="font-size:0.74rem;color:var(--muted);margin-top:0.2rem;">Started: ${esc(new Date(t.startedAt).toLocaleTimeString())}</div>` : ''}
         ${t.lastProgressAt ? `<div style="font-size:0.74rem;color:var(--muted);margin-top:0.2rem;">Last progress: ${esc(new Date(t.lastProgressAt).toLocaleTimeString())}</div>` : ''}
         ${Number(t.retryCount || 0) > 0 ? `<div style="font-size:0.74rem;color:#b45309;margin-top:0.2rem;">Retries: ${Number(t.retryCount || 0)}</div>` : ''}
-        ${t.blockedBy ? `<div style="font-size:0.75rem;color:#e87;margin-top:0.2rem;">⛔ Blocked by: ${esc(t.blockedBy)}</div>` : ''}
-      </div>`
-      + (t.lastError && Number(t.retryCount || 0) > 0 ? `<div style="font-size:0.73rem;color:#ef4444;margin-top:0.2rem;">Last error: ${esc(t.lastError)}</div>` : '')
-      + (t.lastFailedAt && Number(t.retryCount || 0) > 0 ? `<div style="font-size:0.73rem;color:var(--muted);margin-top:0.1rem;">Failed at: ${esc(new Date(t.lastFailedAt).toLocaleTimeString())}</div>` : '')
-      + (t.completedAt && t.status === 'done' ? `<div style="font-size:0.73rem;color:var(--muted);margin-top:0.1rem;">Completed: ${esc(new Date(t.completedAt).toLocaleTimeString())}</div>` : '')
-    ).join('') || `<div style="color:var(--muted);font-size:0.82rem;padding:0.5rem;">Empty</div>`;
+        ${t.blockedBy ? `<div style="font-size:0.75rem;color:#e87;margin-top:0.2rem;">Blocked by: ${esc(t.blockedBy)}</div>` : ''}
+        ${t.lastError && Number(t.retryCount || 0) > 0 ? `<div style="font-size:0.73rem;color:#ef4444;margin-top:0.2rem;">Last error: ${esc(t.lastError)}</div>` : ''}
+        ${t.lastFailedAt && Number(t.retryCount || 0) > 0 ? `<div style="font-size:0.73rem;color:var(--muted);margin-top:0.1rem;">Failed at: ${esc(new Date(t.lastFailedAt).toLocaleTimeString())}</div>` : ''}
+        ${t.completedAt && t.status === 'done' ? `<div style="font-size:0.73rem;color:var(--muted);margin-top:0.1rem;">Completed: ${esc(new Date(t.completedAt).toLocaleTimeString())}</div>` : ''}
+        ${canApprove ? `<div style="display:flex;gap:0.4rem;margin-top:0.5rem;"><button class="hf-btn" style="padding:0.3rem 0.55rem;font-size:0.72rem;" onclick="Dashboard.decideTaskApproval('${esc(t.id)}','approve')">Approve</button><button class="hf-btn secondary" style="padding:0.3rem 0.55rem;font-size:0.72rem;" onclick="Dashboard.decideTaskApproval('${esc(t.id)}','deny')">Deny</button></div>` : ''}
+      </div>`;
+    }).join('') || `<div style="color:var(--muted);font-size:0.82rem;padding:0.5rem;">Empty</div>`;
   }
+}
+
+function setSettingsTab(tabId) {
+  const wanted = String(tabId || 'runtime').trim() || 'runtime';
+  state.activeSettingsTab = wanted;
+  document.querySelectorAll('[data-settings-tab-btn]').forEach((btn) => {
+    const isActive = btn.getAttribute('data-settings-tab-btn') === wanted;
+    btn.classList.toggle('active', isActive);
+  });
+  document.querySelectorAll('[data-settings-tab]').forEach((panel) => {
+    const isActive = panel.getAttribute('data-settings-tab') === wanted;
+    panel.style.display = isActive ? 'block' : 'none';
+  });
 }
 
 function renderMessageBus(entries) {
@@ -920,6 +940,7 @@ async function onSectionActivate(id) {
     case 'settings': {
       renderSettings(await fetchSettings());
       renderProjectAutomation(pid ? await fetchProjectSettings(pid) : null);
+      setSettingsTab(state.activeSettingsTab || 'runtime');
       setText('connectorCheckOutput', 'No connector check has been run yet.');
       break;
     }
@@ -946,6 +967,10 @@ async function checkLLMHealth() {
 const Dashboard = {
 
   nav(id) { activateSection(id); },
+
+  setSettingsTab(tabId) {
+    setSettingsTab(tabId);
+  },
 
   selectProject(id) {
     state.activeProject = state.projects.find(p => p.id === id) ?? { id };
@@ -1419,6 +1444,35 @@ const Dashboard = {
     } catch (err) {
       if (list) list.innerHTML = `<div style="color:var(--error,#d9534f);">Error: ${esc(err.message)}</div>`;
       showStatus(status, 'Failed.', 'error');
+    }
+  },
+
+  async decideTaskApproval(taskId, decision) {
+    if (!state.activeProject) {
+      showToast('No active project selected.', 'error');
+      return;
+    }
+    const normalized = String(decision || '').toLowerCase();
+    if (normalized !== 'approve' && normalized !== 'deny') return;
+    const note = normalized === 'deny'
+      ? (window.prompt('Optional deny reason:', '') || '').trim()
+      : '';
+    try {
+      await apiFetch(API.taskApproval, {
+        method: 'POST',
+        body: JSON.stringify({
+          projectId: state.activeProject.id,
+          taskId,
+          decision: normalized,
+          note,
+        }),
+      });
+      showToast(`Task ${normalized}d.`, 'ok');
+      if (state.activeSection === 'kanban') {
+        renderKanban(state.tasks = await fetchTasks(state.activeProject.id));
+      }
+    } catch (err) {
+      showToast(`Task approval failed: ${err.message}`, 'error');
     }
   },
 
