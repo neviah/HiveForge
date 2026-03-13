@@ -2115,6 +2115,95 @@ async function executeNetlifyConnector(options = {}) {
     };
   }
 
+  if (operation === 'trigger_deploy') {
+    const siteId = String(options.siteId || '').trim();
+    if (!siteId) {
+      return {
+        ok: false,
+        errorCode: 'VALIDATION_ERROR',
+        message: 'siteId is required for trigger_deploy.',
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    const resp = await fetchWithTimeout(
+      `https://api.netlify.com/api/v1/sites/${encodeURIComponent(siteId)}/builds`,
+      { method: 'POST', headers },
+      15000,
+    );
+    if (!resp.ok) {
+      return {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: `Netlify trigger_deploy failed with HTTP ${resp.status}.`,
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    const body = await resp.json().catch(() => ({}));
+    return {
+      ok: true,
+      message: `Deploy triggered for site ${siteId}.`,
+      operation,
+      actualCost: 0,
+      data: {
+        id: body?.id || null,
+        state: body?.state || null,
+        createdAt: body?.created_at || null,
+        deployUrl: `https://app.netlify.com/sites/${siteId}/deploys`,
+      },
+    };
+  }
+
+  if (operation === 'list_deploys') {
+    const siteId = String(options.siteId || '').trim();
+    if (!siteId) {
+      return {
+        ok: false,
+        errorCode: 'VALIDATION_ERROR',
+        message: 'siteId is required for list_deploys.',
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    const resp = await fetchWithTimeout(
+      `https://api.netlify.com/api/v1/sites/${encodeURIComponent(siteId)}/deploys?per_page=10`,
+      { headers },
+      10000,
+    );
+    if (!resp.ok) {
+      return {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: `Netlify list_deploys failed with HTTP ${resp.status}.`,
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    const rawDeploys = await resp.json().catch(() => []);
+    const deploys = (Array.isArray(rawDeploys) ? rawDeploys : []).slice(0, 10).map((d) => ({
+      id: d?.id || null,
+      state: d?.state || null,
+      createdAt: d?.created_at || null,
+      publishedAt: d?.published_at || null,
+      branch: d?.branch || null,
+      commitRef: d?.commit_ref ? String(d.commit_ref).slice(0, 7) : null,
+      errorMessage: d?.error_message || null,
+      deployUrl: d?.deploy_url || null,
+    }));
+    return {
+      ok: true,
+      message: `Fetched ${deploys.length} recent deploy${deploys.length === 1 ? '' : 's'} for site ${siteId}.`,
+      operation,
+      actualCost: 0,
+      data: { deploys },
+    };
+  }
+
   return {
     ok: false,
     errorCode: 'VALIDATION_ERROR',
@@ -3259,6 +3348,7 @@ async function main() {
         llm: {
           endpoint: appState.llm.endpoint,
         },
+        lastCertification: (appConfig && appConfig.lastCertification) || null,
       });
       return;
     }
@@ -3316,6 +3406,12 @@ async function main() {
       const port = Number(process.env.PORT || 3000);
       const baseUrl = `http://127.0.0.1:${port}`;
       runProductionCertification(baseUrl).then((result) => {
+        appConfig.lastCertification = {
+          at: new Date().toISOString(),
+          passed: result.ok,
+          durationMs: result.durationMs,
+        };
+        persistAppConfig();
         writeJson(res, result, result.ok ? 200 : 500);
       }).catch((err) => {
         writeJson(res, {
@@ -3325,6 +3421,47 @@ async function main() {
           stdout: '',
           stderr: redactSensitive(err.message),
         }, 500);
+      });
+      return;
+    }
+
+    if (pathname === '/api/netlify/deploy' && req.method === 'POST') {
+      readRequestBody(req).then(async (body) => {
+        let payload = {};
+        try { payload = parseJsonBodySafe(body); } catch (_) {}
+        const siteId = String(payload.siteId || '').trim();
+        if (!siteId) {
+          writeJson(res, { ok: false, error: 'siteId is required.' }, 400);
+          return;
+        }
+        try {
+          const result = await executeNetlifyConnector({ operation: 'trigger_deploy', siteId });
+          if (result.ok) {
+            await appendMessageBusEntry({
+              kind: 'netlify_deploy_triggered',
+              projectId: null,
+              agentId: null,
+              payload: { siteId, deployId: result.data?.id, state: result.data?.state },
+            });
+          }
+          writeJson(res, result, result.ok ? 200 : 500);
+        } catch (err) {
+          writeJson(res, { ok: false, error: redactSensitive(err.message) }, 500);
+        }
+      }).catch(() => writeJson(res, { ok: false, error: 'Invalid request body.' }, 400));
+      return;
+    }
+
+    if (pathname === '/api/netlify/deploys' && req.method === 'GET') {
+      const siteId = String(urlObj.searchParams.get('siteId') || '').trim();
+      if (!siteId) {
+        writeJson(res, { ok: false, error: 'siteId query parameter is required.' }, 400);
+        return;
+      }
+      executeNetlifyConnector({ operation: 'list_deploys', siteId }).then((result) => {
+        writeJson(res, result, result.ok ? 200 : 500);
+      }).catch((err) => {
+        writeJson(res, { ok: false, error: redactSensitive(err.message) }, 500);
       });
       return;
     }

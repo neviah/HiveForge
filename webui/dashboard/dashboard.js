@@ -29,6 +29,8 @@ const API = {
   credentialBudget: '/api/credential_budget',
   credentialAudit: '/api/credential_audit',
   connectorsExecute: '/api/connectors/execute',
+  netlifyDeploy: '/api/netlify/deploy',
+  netlifyDeploys: '/api/netlify/deploys',
 };
 
 const SECTION_TITLES = {
@@ -297,6 +299,18 @@ function renderSettings(data) {
   document.getElementById('settingsMaxAutoFixes').value = String(Number(runtime.maxAutoFixes) || 5);
   document.getElementById('settingsCountManualHeartbeat').checked = Boolean(runtime.countManualHeartbeatForStall);
   document.getElementById('settingsLlmEndpoint').value = llm.endpoint || '';
+  const badge = document.getElementById('lastCertBadge');
+  if (badge) {
+    if (data?.lastCertification) {
+      const lc = data.lastCertification;
+      const when = new Date(lc.at).toLocaleString();
+      badge.textContent = lc.passed ? `✓ Last passed ${when}` : `✗ Last failed ${when}`;
+      badge.style.color = lc.passed ? 'var(--ok, #5cb85c)' : 'var(--error, #d9534f)';
+      badge.style.display = 'inline';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
 }
 
 function renderProjectAutomation(data) {
@@ -1251,11 +1265,108 @@ const Dashboard = {
       }
       showStatus(status, 'Passed.', 'ok');
       showToast('Production certification passed.', 'ok');
+      const badge = document.getElementById('lastCertBadge');
+      if (badge) {
+        badge.textContent = `✓ Last passed ${new Date().toLocaleString()}`;
+        badge.style.color = 'var(--ok, #5cb85c)';
+        badge.style.display = 'inline';
+      }
     } catch (err) {
       const message = String(err.message || 'Certification failed.');
       if (output) output.textContent = message;
       showStatus(status, 'Failed.', 'error');
       showToast('Production certification failed. See output in Settings.', 'error');
+      const badge = document.getElementById('lastCertBadge');
+      if (badge) {
+        badge.textContent = `✗ Last failed ${new Date().toLocaleString()}`;
+        badge.style.color = 'var(--error, #d9534f)';
+        badge.style.display = 'inline';
+      }
+    }
+  },
+
+  copyCertOutput() {
+    const output = document.getElementById('productionCertificationOutput');
+    const text = output ? output.textContent : '';
+    if (!text || text === 'No certification run yet.') {
+      showToast('No certification output to copy.', 'info');
+      return;
+    }
+    navigator.clipboard.writeText(text).then(() => {
+      showToast('Certification output copied to clipboard.', 'ok');
+    }).catch(() => {
+      showToast('Could not copy to clipboard.', 'error');
+    });
+  },
+
+  async triggerNetlifyDeploy() {
+    const siteIdInput = document.getElementById('netlifyDeploySiteId');
+    const status = document.getElementById('netlifyDeployStatus');
+    const output = document.getElementById('netlifyDeployOutput');
+    const siteId = siteIdInput ? siteIdInput.value.trim() : '';
+    if (!siteId) {
+      showToast('Enter a Netlify site ID first.', 'error');
+      return;
+    }
+    showStatus(status, 'Triggering deploy…', 'running');
+    if (output) { output.style.display = 'block'; output.textContent = 'Triggering deploy...'; }
+    try {
+      const result = await apiFetch(API.netlifyDeploy, {
+        method: 'POST',
+        body: JSON.stringify({ siteId }),
+      });
+      if (output) {
+        output.textContent = result.ok
+          ? `Deploy triggered.\nDeploy ID: ${result.data?.id || 'n/a'}\nState: ${result.data?.state || 'n/a'}\nURL: ${result.data?.deployUrl || ''}`
+          : `Error: ${result.message || result.error || 'Unknown error'}`;
+      }
+      showStatus(status, result.ok ? 'Triggered.' : 'Failed.', result.ok ? 'ok' : 'error');
+      if (result.ok) {
+        showToast(`Deploy triggered for site ${siteId}.`, 'ok');
+        setTimeout(() => this.loadNetlifyDeploys(siteId), 3000);
+      } else {
+        showToast(`Deploy trigger failed: ${result.message || result.error || ''}`, 'error');
+      }
+    } catch (err) {
+      if (output) output.textContent = `Error: ${err.message}`;
+      showStatus(status, 'Failed.', 'error');
+      showToast(`Deploy trigger error: ${err.message}`, 'error');
+    }
+  },
+
+  async loadNetlifyDeploys(siteIdOverride) {
+    const siteIdInput = document.getElementById('netlifyDeploySiteId');
+    const status = document.getElementById('netlifyDeployStatus');
+    const list = document.getElementById('netlifyDeployList');
+    const siteId = siteIdOverride || (siteIdInput ? siteIdInput.value.trim() : '');
+    if (!siteId) {
+      showToast('Enter a Netlify site ID first.', 'error');
+      return;
+    }
+    showStatus(status, 'Loading deploys…', 'running');
+    try {
+      const result = await apiFetch(`${API.netlifyDeploys}?siteId=${encodeURIComponent(siteId)}`);
+      const deploys = result?.data?.deploys || [];
+      if (list) {
+        if (!deploys.length) {
+          list.innerHTML = '<div style="color:var(--muted);">No deploys found.</div>';
+        } else {
+          list.innerHTML = deploys.map((d) => {
+            const stateColor = d.state === 'ready' ? 'var(--ok, #5cb85c)' : d.state === 'error' ? 'var(--error, #d9534f)' : 'var(--muted)';
+            const when = d.createdAt ? new Date(d.createdAt).toLocaleString() : 'n/a';
+            return `<div style="padding:0.35rem 0;border-bottom:1px solid var(--border);">
+              <span style="color:${stateColor};font-weight:600;">${esc(d.state || '?')}</span>
+              <span style="font-size:0.8rem;color:var(--muted);margin-left:0.5rem;">${esc(when)}</span>
+              ${d.branch ? `<span style="font-size:0.78rem;color:var(--muted);margin-left:0.5rem;">${esc(d.branch)}${d.commitRef ? `@${esc(d.commitRef)}` : ''}</span>` : ''}
+              ${d.errorMessage ? `<div style="font-size:0.76rem;color:var(--error,#d9534f);">${esc(d.errorMessage)}</div>` : ''}
+            </div>`;
+          }).join('');
+        }
+      }
+      showStatus(status, `${deploys.length} deploy${deploys.length === 1 ? '' : 's'}.`, 'ok');
+    } catch (err) {
+      if (list) list.innerHTML = `<div style="color:var(--error,#d9534f);">Error: ${esc(err.message)}</div>`;
+      showStatus(status, 'Failed.', 'error');
     }
   },
 

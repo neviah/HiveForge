@@ -523,10 +523,12 @@
         <div class="hf-card" style="max-width:760px;margin-top:1rem;">
           <h3 style="margin-top:0;">Production Certification</h3>
           <p style="color:var(--muted);margin-top:0;">Run the live Sprint D certification flow against this HiveForge instance. It creates a temporary project, verifies the core runbook, then cleans up.</p>
-          <div class="hf-btn-row" style="margin-bottom:0.7rem;">
+          <div class="hf-btn-row" style="margin-bottom:0.4rem;">
             <button class="hf-btn" onclick="Dashboard.runProductionCertification()">Run Production Certification</button>
+            <button class="hf-btn secondary" onclick="Dashboard.copyCertOutput()">Copy Output</button>
             <span id="productionCertificationStatus" class="hf-status" style="display:none;"></span>
           </div>
+          <div style="margin-bottom:0.6rem;font-size:0.82rem;"><span id="lastCertBadge" style="display:none;"></span></div>
           <pre id="productionCertificationOutput" class="hf-log-stream" style="max-height:220px;white-space:pre-wrap;color:var(--muted);">No certification run yet.</pre>
         </div>
 
@@ -547,6 +549,26 @@
               <span id="projectAutomationStatus" class="hf-status" style="display:none;"></span>
             </div>
           </div>
+        </div>
+
+        <div class="hf-card" style="max-width:760px;margin-top:1rem;">
+          <h3 style="margin-top:0;">Netlify Deployments</h3>
+          <p style="color:var(--muted);margin-top:0;">Trigger and monitor deploys for a Netlify site using your stored Netlify credential.</p>
+          <div style="margin-bottom:0.7rem;">
+            <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Site ID</label>
+            <div style="display:flex;gap:0.5rem;align-items:center;">
+              <input id="netlifyDeploySiteId" type="text" style="flex:1;" placeholder="e.g. a1b2c3d4-…" />
+              <button class="hf-btn" onclick="Dashboard.triggerNetlifyDeploy()">Trigger Deploy</button>
+              <button class="hf-btn secondary" onclick="Dashboard.loadNetlifyDeploys()">Refresh List</button>
+            </div>
+            <div style="font-size:0.78rem;color:var(--muted);margin-top:0.3rem;">Find your site ID in Netlify &rarr; Site settings &rarr; Site information.</div>
+          </div>
+          <div class="hf-btn-row" style="margin-bottom:0.5rem;">
+            <span id="netlifyDeployStatus" class="hf-status" style="display:none;"></span>
+          </div>
+          <pre id="netlifyDeployOutput" class="hf-log-stream" style="max-height:80px;white-space:pre-wrap;color:var(--muted);margin-bottom:0.7rem;display:none;"></pre>
+          <div style="font-size:0.82rem;color:var(--muted);margin-bottom:0.35rem;">Recent deploys</div>
+          <div id="netlifyDeployList" class="hf-log-stream" style="max-height:200px;">Enter a site ID and click Refresh List.</div>
         </div>
 
         <div class="hf-card" style="max-width:760px;margin-top:1rem;">
