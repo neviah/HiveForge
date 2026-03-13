@@ -533,6 +533,37 @@
         </div>
 
         <div class="hf-card" style="max-width:760px;margin-top:1rem;">
+          <h3 style="margin-top:0;">Notification Escalation</h3>
+          <p style="color:var(--muted);margin-top:0;">Configure where coordinator permission requests and escalation notices are sent.</p>
+          <div class="hf-grid-2" style="margin-bottom:0.7rem;">
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">WhatsApp Notify Number</label>
+              <input id="settingsWhatsAppNotifyTo" type="text" style="width:100%;" placeholder="e.g. 15551234567" />
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Telegram Chat ID (Fallback)</label>
+              <input id="settingsTelegramChatId" type="text" style="width:100%;" placeholder="e.g. 123456789" />
+            </div>
+          </div>
+          <div class="hf-grid-2" style="margin-bottom:0.7rem;">
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Preferred Channel</label>
+              <select id="settingsNotifyChannel" style="width:100%;">
+                <option value="whatsapp">WhatsApp</option>
+                <option value="telegram">Telegram</option>
+              </select>
+            </div>
+            <div style="display:flex;align-items:flex-end;">
+              <div id="settingsNotifyHint" style="font-size:0.82rem;color:var(--muted);"></div>
+            </div>
+          </div>
+          <div class="hf-btn-row" style="margin-bottom:0;">
+            <button class="hf-btn secondary" onclick="Dashboard.sendTestNotification()">Send Test Escalation</button>
+            <span id="settingsNotifyStatus" class="hf-status" style="display:none;"></span>
+          </div>
+        </div>
+
+        <div class="hf-card" style="max-width:760px;margin-top:1rem;">
           <h3 style="margin-top:0;">Project Automation</h3>
           <p style="color:var(--muted);margin-top:0;">Control recurring autonomous work for the active project.</p>
           <div id="projectAutomationEmpty" style="color:var(--muted);">Select an active project to manage recurring automation.</div>

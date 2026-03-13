@@ -2265,6 +2265,25 @@ function integrationStatus() {
   };
 }
 
+function notificationSettingsSummary() {
+  const integrations = (appConfig && appConfig.integrations) || {};
+  const whatsapp = integrations.whatsapp || {};
+  const telegram = integrations.telegram || {};
+  return {
+    preferredChannel: String((appConfig && appConfig.notifications && appConfig.notifications.preferredChannel) || 'whatsapp').toLowerCase() === 'telegram'
+      ? 'telegram'
+      : 'whatsapp',
+    whatsapp: {
+      notifyTo: String(whatsapp.notifyTo || ''),
+      enabled: Boolean(whatsapp.accessToken && whatsapp.phoneNumberId && whatsapp.notifyTo),
+    },
+    telegram: {
+      chatId: String(telegram.chatId || ''),
+      enabled: Boolean(telegram.botToken && telegram.chatId),
+    },
+  };
+}
+
 function writeJson(res, payload, statusCode = 200) {
   res.writeHead(statusCode, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(payload));
@@ -2566,11 +2585,14 @@ async function sendTelegramNotification(message) {
 async function notifyOperator(projectState, summary, detail = {}) {
   const projectName = projectState && projectState.name ? projectState.name : 'Unknown Project';
   const msg = `[HiveForge Coordinator] ${projectName}: ${summary}`;
-  const wa = await sendWhatsAppNotification(msg);
-  let sent = wa;
-  if (!wa.ok) {
-    const tg = await sendTelegramNotification(msg);
-    sent = tg;
+  const preferred = String((appConfig && appConfig.notifications && appConfig.notifications.preferredChannel) || 'whatsapp').trim().toLowerCase();
+  let sent = { ok: false, provider: preferred, reason: 'not_sent' };
+  if (preferred === 'telegram') {
+    sent = await sendTelegramNotification(msg);
+    if (!sent.ok) sent = await sendWhatsAppNotification(msg);
+  } else {
+    sent = await sendWhatsAppNotification(msg);
+    if (!sent.ok) sent = await sendTelegramNotification(msg);
   }
 
   if (projectState) {
@@ -4063,6 +4085,7 @@ async function main() {
           endpoint: appState.llm.endpoint,
         },
         lastCertification: (appConfig && appConfig.lastCertification) || null,
+        notifications: notificationSettingsSummary(),
       });
       return;
     }
@@ -4079,6 +4102,7 @@ async function main() {
 
         const runtimePatch = payload.runtime && typeof payload.runtime === 'object' ? payload.runtime : {};
         const nextEndpoint = payload.llm && typeof payload.llm === 'object' ? String(payload.llm.endpoint || '').trim() : '';
+        const notificationPatch = payload.notifications && typeof payload.notifications === 'object' ? payload.notifications : {};
 
         applyRuntimeSettingsUpdate(runtimePatch);
 
@@ -4089,6 +4113,28 @@ async function main() {
           persistAppConfig();
         }
 
+        if (notificationPatch && typeof notificationPatch === 'object') {
+          appConfig.integrations = appConfig.integrations || {};
+          appConfig.integrations.whatsapp = appConfig.integrations.whatsapp || {};
+          appConfig.integrations.telegram = appConfig.integrations.telegram || {};
+
+          const nextNotifyTo = String(notificationPatch.whatsappNotifyTo || '').trim();
+          const nextTelegramChatId = String(notificationPatch.telegramChatId || '').trim();
+          const nextChannel = String(notificationPatch.preferredChannel || '').trim().toLowerCase();
+
+          if (nextNotifyTo || notificationPatch.whatsappNotifyTo === '') {
+            appConfig.integrations.whatsapp.notifyTo = nextNotifyTo;
+          }
+          if (nextTelegramChatId || notificationPatch.telegramChatId === '') {
+            appConfig.integrations.telegram.chatId = nextTelegramChatId;
+          }
+          if (nextChannel === 'whatsapp' || nextChannel === 'telegram') {
+            appConfig.notifications = appConfig.notifications || {};
+            appConfig.notifications.preferredChannel = nextChannel;
+          }
+          persistAppConfig();
+        }
+
         writeJson(res, {
           ok: true,
           runtime: runtimeSettings(),
@@ -4096,6 +4142,7 @@ async function main() {
           llm: {
             endpoint: appState.llm.endpoint,
           },
+          notifications: notificationSettingsSummary(),
         });
       }).catch((err) => {
         writeJson(res, { error: err.message }, 400);
@@ -4112,6 +4159,7 @@ async function main() {
         llm: {
           endpoint: appState.llm.endpoint,
         },
+        notifications: notificationSettingsSummary(),
       });
       return;
     }
@@ -4741,6 +4789,43 @@ async function main() {
             ok: false,
             message: `Integration test failed: ${redactSensitive(err.message)}`,
             testedAt: new Date().toISOString()
+          }, 500);
+        });
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
+    if (pathname === '/api/notifications/test' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = parseJsonBodySafe(body);
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+        const projectId = String(payload.projectId || '').trim();
+        const runtime = projectId ? projectRuntimes.get(projectId) : null;
+        const projectState = runtime ? runtime.state : null;
+        const summary = String(payload.summary || 'Coordinator test notification').trim();
+        notifyOperator(projectState, summary, {
+          test: true,
+          requestedBy: 'dashboard',
+          projectId: projectId || null,
+        }).then((result) => {
+          writeJson(res, {
+            ok: Boolean(result.ok),
+            provider: result.provider,
+            reason: result.reason || null,
+            notifications: notificationSettingsSummary(),
+          }, result.ok ? 200 : 409);
+        }).catch((err) => {
+          writeJson(res, {
+            ok: false,
+            provider: null,
+            reason: redactSensitive(err.message),
           }, 500);
         });
       }).catch((err) => {

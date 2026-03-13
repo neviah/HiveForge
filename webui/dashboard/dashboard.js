@@ -31,6 +31,7 @@ const API = {
   connectorsExecute: '/api/connectors/execute',
   netlifyDeploy: '/api/netlify/deploy',
   netlifyDeploys: '/api/netlify/deploys',
+  notificationTest: '/api/notifications/test',
 };
 
 const SECTION_TITLES = {
@@ -294,11 +295,24 @@ async function fetchCredentialAudit(projectId, limit = 80) {
 function renderSettings(data) {
   const runtime = data?.runtime || {};
   const llm = data?.llm || {};
+  const notifications = data?.notifications || {};
   document.getElementById('settingsHeartbeatSeconds').value = String(Math.round((Number(runtime.heartbeatIntervalMs) || 30000) / 1000));
   document.getElementById('settingsStallMinutes').value = String(Math.round((Number(runtime.stallTimeoutMs) || 600000) / 60000));
   document.getElementById('settingsMaxAutoFixes').value = String(Number(runtime.maxAutoFixes) || 5);
   document.getElementById('settingsCountManualHeartbeat').checked = Boolean(runtime.countManualHeartbeatForStall);
   document.getElementById('settingsLlmEndpoint').value = llm.endpoint || '';
+  const notifyToInput = document.getElementById('settingsWhatsAppNotifyTo');
+  const telegramChatInput = document.getElementById('settingsTelegramChatId');
+  const channelInput = document.getElementById('settingsNotifyChannel');
+  if (notifyToInput) notifyToInput.value = notifications?.whatsapp?.notifyTo || '';
+  if (telegramChatInput) telegramChatInput.value = notifications?.telegram?.chatId || '';
+  if (channelInput) channelInput.value = notifications?.preferredChannel === 'telegram' ? 'telegram' : 'whatsapp';
+  const hint = document.getElementById('settingsNotifyHint');
+  if (hint) {
+    const wa = notifications?.whatsapp?.enabled;
+    const tg = notifications?.telegram?.enabled;
+    hint.textContent = `WhatsApp ${wa ? 'ready' : 'not ready'} · Telegram ${tg ? 'ready' : 'not ready'}`;
+  }
   const badge = document.getElementById('lastCertBadge');
   if (badge) {
     if (data?.lastCertification) {
@@ -1210,6 +1224,9 @@ const Dashboard = {
     const maxAutoFixes = Number(document.getElementById('settingsMaxAutoFixes').value);
     const countManualHeartbeatForStall = document.getElementById('settingsCountManualHeartbeat').checked;
     const llmEndpoint = document.getElementById('settingsLlmEndpoint').value.trim();
+    const whatsappNotifyTo = document.getElementById('settingsWhatsAppNotifyTo')?.value.trim() || '';
+    const telegramChatId = document.getElementById('settingsTelegramChatId')?.value.trim() || '';
+    const preferredChannel = document.getElementById('settingsNotifyChannel')?.value || 'whatsapp';
 
     showStatus(status, 'Saving…', 'running');
     try {
@@ -1223,6 +1240,11 @@ const Dashboard = {
         llm: {
           endpoint: llmEndpoint,
         },
+        notifications: {
+          whatsappNotifyTo,
+          telegramChatId,
+          preferredChannel,
+        },
       };
       const updated = await apiFetch(API.settings, {
         method: 'POST',
@@ -1234,6 +1256,36 @@ const Dashboard = {
     } catch (err) {
       showStatus(status, `Failed: ${err.message}`, 'error');
       showToast(`Could not save settings: ${err.message}`, 'error');
+    }
+  },
+
+  async sendTestNotification() {
+    const status = document.getElementById('settingsNotifyStatus');
+    showStatus(status, 'Sending test…', 'running');
+    try {
+      const result = await apiFetch(API.notificationTest, {
+        method: 'POST',
+        body: JSON.stringify({
+          projectId: state.activeProject?.id || null,
+          summary: 'Test escalation from Settings',
+        }),
+      });
+      if (result.ok) {
+        showStatus(status, `Sent via ${result.provider}.`, 'ok');
+        showToast(`Test notification sent via ${result.provider}.`, 'ok');
+      } else {
+        showStatus(status, `Not sent (${result.reason || 'not configured'}).`, 'error');
+        showToast(`Test notification failed: ${result.reason || 'not configured'}`, 'error');
+      }
+      const hint = document.getElementById('settingsNotifyHint');
+      if (hint && result.notifications) {
+        const wa = result.notifications?.whatsapp?.enabled;
+        const tg = result.notifications?.telegram?.enabled;
+        hint.textContent = `WhatsApp ${wa ? 'ready' : 'not ready'} · Telegram ${tg ? 'ready' : 'not ready'}`;
+      }
+    } catch (err) {
+      showStatus(status, `Failed: ${err.message}`, 'error');
+      showToast(`Could not send test notification: ${err.message}`, 'error');
     }
   },
 
