@@ -54,6 +54,20 @@
       "type": "array",
       "items": {"type": "string"}
     },
+    "role_capabilities": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "can_deploy": {"type": "boolean"},
+          "can_spend": {"type": "boolean"},
+          "allowed_connectors": {
+            "type": "array",
+            "items": {"type": "string"}
+          }
+        }
+      }
+    },
     "recurring_loops": {
       "type": "array",
       "items": {
@@ -65,6 +79,17 @@
           "phase": {"type": "string"},
           "owner_role": {"type": "string"},
           "every_ms": {"type": "integer", "minimum": 60000},
+          "action": {
+            "type": "object",
+            "properties": {
+              "type": {"type": "string"},
+              "connector": {"type": "string"},
+              "operation": {"type": "string"},
+              "estimated_cost": {"type": "number", "minimum": 0},
+              "requires_permission": {"type": "boolean"},
+              "input": {"type": "object"}
+            }
+          },
           "enabled": {"type": "boolean"}
         }
       }

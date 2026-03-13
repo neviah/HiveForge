@@ -76,6 +76,32 @@
                             "SEO Specialist",
                             "Analytics Reporter"
                         ],
+    "role_capabilities":  {
+                              "Growth Hacker + Content Creator":  {
+                                                                  "can_deploy":  false,
+                                                                  "can_spend":  true,
+                                                                  "allowed_connectors":  [
+                                                                                             "google_ads",
+                                                                                             "analytics"
+                                                                                         ]
+                                                              },
+                              "Support Responder":  {
+                                                       "can_deploy":  false,
+                                                       "can_spend":  false,
+                                                       "allowed_connectors":  [
+                                                                                  "email_provider"
+                                                                              ]
+                                                   },
+                              "Finance Tracker":  {
+                                                     "can_deploy":  false,
+                                                     "can_spend":  true,
+                                                     "allowed_connectors":  [
+                                                                                "analytics",
+                                                                                "stripe",
+                                                                                "google_ads"
+                                                                            ]
+                                                 }
+                          },
     "operating_mode":  "continuous_business",
     "recurring_loops":  [
                             {

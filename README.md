@@ -15,6 +15,15 @@ HiveForge is a Business-only Openclaw-fork on Steroids, fully sandboxed, LM Stud
 - With HiveForge running locally, execute `node scripts/production_certification.js` to run the Sprint D certification flow against the live HTTP API.
 - Override the target server with `HIVEFORGE_BASE_URL=http://127.0.0.1:3000 node scripts/production_certification.js` if needed.
 
+## Coordinator Permission Notifications
+- The coordinator can escalate permission requests and automation failures to an operator.
+- Preferred channel is WhatsApp (Graph API), with Telegram as fallback.
+- Configure in `sandbox/config.json`:
+	- `integrations.whatsapp.accessToken`
+	- `integrations.whatsapp.phoneNumberId`
+	- `integrations.whatsapp.notifyTo`
+	- optional fallback: `integrations.telegram.botToken` and `integrations.telegram.chatId`
+
 ## Update
 - `node update.js` refreshes bundled OpenClaw and dependencies without deleting the sandbox.
 

@@ -78,3 +78,46 @@ test('overspend blocking: projected monthly cost over cap is denied', async () =
   assert.equal(typeof snapshot.monthlySpent, 'number');
   assert.equal(snapshot.monthlySpent >= 4, true);
 });
+
+test('role capability gate: non-deploy role cannot trigger netlify deploy', async () => {
+  const projectId = uniqueProjectId('role-deny-deploy');
+  const result = await executeConnectorPolicy('netlify', {
+    dryRun: true,
+    projectId,
+    actorRole: 'Reality Checker',
+    operation: 'trigger_deploy',
+    roleCapabilities: {
+      'Reality Checker': {
+        canDeploy: false,
+        canSpend: false,
+        allowedConnectors: ['analytics'],
+      },
+    },
+  });
+
+  assert.equal(result.ok, false);
+  const roleDeploy = (result.checks || []).find((entry) => entry.type === 'role_deploy');
+  assert.ok(roleDeploy, 'expected role_deploy check to be present');
+  assert.equal(roleDeploy.ok, false);
+});
+
+test('role capability gate: deploy role can run netlify connector', async () => {
+  const projectId = uniqueProjectId('role-allow-deploy');
+  const result = await executeConnectorPolicy('netlify', {
+    dryRun: true,
+    projectId,
+    actorRole: 'DevOps Automator',
+    operation: 'list_sites',
+    roleCapabilities: {
+      'DevOps Automator': {
+        canDeploy: true,
+        canSpend: true,
+        allowedConnectors: ['netlify', 'github'],
+      },
+    },
+  });
+
+  const roleCapability = (result.checks || []).find((entry) => entry.type === 'role_capability');
+  assert.ok(roleCapability, 'expected role_capability check to be present');
+  assert.equal(roleCapability.ok, true);
+});

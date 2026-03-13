@@ -75,6 +75,15 @@ const DEFAULT_AUTO_STAFFING_POLICY = {
   backlogPerAgentThreshold: 2,
   maxOptionalAdds: 3,
 };
+const DEFAULT_ROLE_CAPABILITIES = {
+  'DevOps Automator': { canDeploy: true, canSpend: true, allowedConnectors: ['netlify', 'github'] },
+  'Backend Architect': { canDeploy: false, canSpend: false, allowedConnectors: ['github'] },
+  'Senior Project Manager': { canDeploy: false, canSpend: false, allowedConnectors: [] },
+  'Reality Checker': { canDeploy: false, canSpend: false, allowedConnectors: ['analytics'] },
+  'Growth Hacker + Content Creator': { canDeploy: false, canSpend: true, allowedConnectors: ['google_ads', 'analytics'] },
+  'Support Responder': { canDeploy: false, canSpend: false, allowedConnectors: ['email_provider'] },
+  'Finance Tracker': { canDeploy: false, canSpend: true, allowedConnectors: ['analytics', 'stripe', 'google_ads'] },
+};
 const OPTIONAL_AGENT_PERSONALITY_PATHS = {
   'Security Engineer': ['../agency-agents/engineering/engineering-security-engineer.md'],
   'Reality Checker': ['../agency-agents/testing/testing-reality-checker.md'],
@@ -298,6 +307,16 @@ function normalizeRecurringLoopSpec(spec, idx = 0) {
     phase: String(spec && spec.phase ? spec.phase : 'maintenance'),
     ownerRole: String(spec && spec.owner_role ? spec.owner_role : ''),
     everyMs: clampInt(spec && spec.every_ms, 60 * 60 * 1000, 60 * 1000, 7 * 24 * 60 * 60 * 1000),
+    action: spec && spec.action && typeof spec.action === 'object'
+      ? {
+          type: String(spec.action.type || '').trim().toLowerCase(),
+          connector: String(spec.action.connector || '').trim().toLowerCase(),
+          operation: String(spec.action.operation || '').trim(),
+          estimatedCost: Number.isFinite(Number(spec.action.estimated_cost)) ? Number(spec.action.estimated_cost) : 0,
+          input: spec.action.input && typeof spec.action.input === 'object' ? spec.action.input : {},
+          requiresPermission: Boolean(spec.action.requires_permission),
+        }
+      : null,
   };
 }
 
@@ -341,6 +360,42 @@ function templateAutoStaffingPolicy(templateData = null, subordinateCount = 0) {
     maxOptionalAdds,
     maxAgents,
   };
+}
+
+function templateRoleCapabilities(templateData = null, agents = []) {
+  const capabilities = {};
+  agents.forEach((agent) => {
+    if (agent.isCoordinator) return;
+    const key = String(agent.role || '').trim();
+    if (!key) return;
+    const defaults = DEFAULT_ROLE_CAPABILITIES[key] || { canDeploy: false, canSpend: false, allowedConnectors: [] };
+    capabilities[key] = {
+      canDeploy: Boolean(defaults.canDeploy),
+      canSpend: Boolean(defaults.canSpend),
+      allowedConnectors: Array.isArray(defaults.allowedConnectors) ? [...defaults.allowedConnectors] : [],
+    };
+  });
+  const overrides = templateData && typeof templateData.role_capabilities === 'object'
+    ? templateData.role_capabilities
+    : {};
+  Object.entries(overrides).forEach(([role, cfg]) => {
+    if (!cfg || typeof cfg !== 'object') return;
+    const base = capabilities[role] || { canDeploy: false, canSpend: false, allowedConnectors: [] };
+    capabilities[role] = {
+      canDeploy: typeof cfg.can_deploy === 'boolean' ? cfg.can_deploy : base.canDeploy,
+      canSpend: typeof cfg.can_spend === 'boolean' ? cfg.can_spend : base.canSpend,
+      allowedConnectors: Array.isArray(cfg.allowed_connectors)
+        ? cfg.allowed_connectors.map((v) => String(v || '').trim().toLowerCase()).filter(Boolean)
+        : base.allowedConnectors,
+    };
+  });
+  return capabilities;
+}
+
+function findRuntimeAgentByRole(projectState, role) {
+  const wanted = String(role || '').trim().toLowerCase();
+  if (!wanted) return null;
+  return projectState.agents.find((agent) => !agent.isCoordinator && String(agent.role || '').trim().toLowerCase() === wanted) || null;
 }
 
 function optionalAgentPersonalityPaths(role) {
@@ -521,6 +576,17 @@ function enqueueRecurringTasks(projectState, ts, source = 'interval') {
       blockedBy: null,
       dependencies: [],
       recurringKey: spec.key,
+      autoAction: spec.action && spec.action.type === 'connector'
+        ? {
+            type: 'connector',
+            connector: spec.action.connector,
+            operation: spec.action.operation,
+            input: spec.action.input || {},
+            estimatedCost: Number(spec.action.estimatedCost || 0),
+            actorRole: spec.ownerRole || null,
+            requiresPermission: Boolean(spec.action.requiresPermission),
+          }
+        : null,
       executionState: 'queued',
       retryCount: 0,
       lastFailedAt: null,
@@ -554,6 +620,12 @@ function enqueueRecurringTasks(projectState, ts, source = 'interval') {
         taskId: task.id,
         recurringKey: spec.key,
         title: spec.title,
+        autoAction: task.autoAction ? {
+          type: task.autoAction.type,
+          connector: task.autoAction.connector,
+          operation: task.autoAction.operation,
+          actorRole: task.autoAction.actorRole,
+        } : null,
       },
     });
     emitProjectEvent(projectState.id, 'task_update', task);
@@ -669,6 +741,173 @@ function evaluateAutoStaffing(projectState, ts) {
   return newAgent;
 }
 
+function pickRunnableAutoActionTask(projectState) {
+  const done = projectDoneTaskIds(projectState);
+  return projectState.tasks.find((task) => {
+    if (task.status !== 'backlog') return false;
+    if (!task.autoAction || task.autoAction.type !== 'connector') return false;
+    const deps = Array.isArray(task.dependencies) ? task.dependencies : [];
+    return deps.every((depId) => done.has(depId));
+  }) || null;
+}
+
+function finalizeAutoActionTask(projectState, task, ok, reason, detail = {}) {
+  task.status = 'done';
+  task.completedAt = nowIso();
+  task.executionState = ok ? 'done' : 'failed';
+  task.lastError = ok ? null : String(reason || 'auto_action_failed');
+  task.lastProgressAt = nowIso();
+  appendProjectLog(projectState, ok ? 'task' : 'error', {
+    kind: ok ? 'recurring_auto_action_completed' : 'recurring_auto_action_failed',
+    taskId: task.id,
+    recurringKey: task.recurringKey,
+    reason,
+    detail,
+  });
+  appendMessageBusEntry({
+    projectId: projectState.id,
+    from: 'coordinator',
+    to: 'automation_engine',
+    kind: ok ? 'recurring_auto_action_completed' : 'recurring_auto_action_failed',
+    payload: {
+      taskId: task.id,
+      recurringKey: task.recurringKey,
+      reason,
+      detail,
+    },
+  });
+  emitProjectEvent(projectState.id, 'task_update', task);
+}
+
+function executeRecurringAutoAction(projectState, task, source = 'interval') {
+  const runtime = projectRuntimes.get(projectState.id);
+  if (!runtime || runtime.execution || runtime.recurringAction) {
+    return false;
+  }
+  const action = task.autoAction;
+  if (!action || action.type !== 'connector') {
+    return false;
+  }
+
+  const actorRole = String(action.actorRole || '').trim();
+  const actor = actorRole ? findRuntimeAgentByRole(projectState, actorRole) : null;
+  task.status = 'inprogress';
+  task.assignee = actor ? actor.id : null;
+  task.startedAt = nowIso();
+  task.executionState = 'running';
+  task.lastProgressAt = task.startedAt;
+  emitProjectEvent(projectState.id, 'task_update', task);
+
+  runtime.recurringAction = {
+    taskId: task.id,
+    startedAt: task.startedAt,
+    connector: action.connector,
+    operation: action.operation,
+    actorRole,
+  };
+
+  executeConnectorPolicy(action.connector, {
+    dryRun: false,
+    projectId: projectState.id,
+    estimatedCost: Number(action.estimatedCost || 0),
+    actorRole,
+    operation: action.operation,
+  }).then(async (policyResult) => {
+    if (!policyResult.ok) {
+      const needsPermission = Boolean(action.requiresPermission);
+      if (needsPermission) {
+        await notifyOperator(projectState, `Permission needed for ${action.connector}:${action.operation}`, {
+          taskId: task.id,
+          actorRole,
+          reason: policyResult.reason,
+          checks: policyResult.checks,
+        });
+      }
+      finalizeAutoActionTask(projectState, task, false, policyResult.reason, {
+        connector: action.connector,
+        operation: action.operation,
+        actorRole,
+        source,
+        requiresPermission: needsPermission,
+      });
+      persistProjectState(projectState);
+      return;
+    }
+
+    const execution = await executeLiveConnector(action.connector, {
+      operation: action.operation,
+      input: action.input || {},
+      projectId: projectState.id,
+      estimatedCost: Number(action.estimatedCost || 0),
+    });
+
+    if (!execution.ok) {
+      finalizeAutoActionTask(projectState, task, false, execution.message || execution.errorCode || 'execution_failed', {
+        connector: action.connector,
+        operation: action.operation,
+        actorRole,
+        source,
+      });
+      persistProjectState(projectState);
+      return;
+    }
+
+    const actualCost = Number.isFinite(Number(execution.actualCost)) ? Number(execution.actualCost) : Number(action.estimatedCost || 0);
+    if (actualCost > 0 && policyResult.credentialService) {
+      recordCredentialSpend(projectState.id, policyResult.credentialService, actualCost, nowIso());
+    }
+
+    finalizeAutoActionTask(projectState, task, true, execution.message || 'ok', {
+      connector: action.connector,
+      operation: action.operation,
+      actorRole,
+      source,
+      actualCost,
+    });
+    persistProjectState(projectState);
+  }).catch(async (err) => {
+    await notifyOperator(projectState, `Auto action error on ${action.connector}:${action.operation}`, {
+      taskId: task.id,
+      actorRole,
+      reason: redactSensitive(err.message),
+    });
+    finalizeAutoActionTask(projectState, task, false, redactSensitive(err.message), {
+      connector: action.connector,
+      operation: action.operation,
+      actorRole,
+      source,
+    });
+    persistProjectState(projectState);
+  }).finally(() => {
+    const rt = projectRuntimes.get(projectState.id);
+    if (rt) rt.recurringAction = null;
+  });
+
+  appendProjectLog(projectState, 'task', {
+    kind: 'recurring_auto_action_started',
+    taskId: task.id,
+    connector: action.connector,
+    operation: action.operation,
+    actorRole,
+  });
+  appendMessageBusEntry({
+    projectId: projectState.id,
+    from: 'coordinator',
+    to: actor ? actor.id : 'automation_engine',
+    kind: 'recurring_auto_action_started',
+    payload: {
+      taskId: task.id,
+      connector: action.connector,
+      operation: action.operation,
+      actorRole,
+      source,
+    },
+  });
+
+  persistProjectState(projectState);
+  return true;
+}
+
 function summarizeProject(projectState) {
   const inProgress = projectState.tasks.find((task) => task.status === 'inprogress');
   return {
@@ -767,19 +1006,28 @@ function appendMessageBusEntry({ projectId, from, to, kind, payload = {} }) {
     payload,
   };
   if (sqliteMessageBus) {
-    const stmt = sqliteMessageBus.prepare(`
-      INSERT INTO message_bus (id, ts, project_id, from_actor, to_actor, kind, payload_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
-    stmt.run(
-      entry.id,
-      entry.ts,
-      entry.projectId,
-      entry.from,
-      entry.to,
-      entry.kind,
-      JSON.stringify(entry.payload || {})
-    );
+    try {
+      const stmt = sqliteMessageBus.prepare(`
+        INSERT INTO message_bus (id, ts, project_id, from_actor, to_actor, kind, payload_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      stmt.run(
+        entry.id,
+        entry.ts,
+        entry.projectId,
+        entry.from,
+        entry.to,
+        entry.kind,
+        JSON.stringify(entry.payload || {})
+      );
+    } catch (err) {
+      // SQLite may return ERR_SQLITE_ERROR/"database is locked" under parallel
+      // test workers. Message-bus durability is best-effort in that edge case.
+      const msg = String(err && err.message ? err.message : '').toLowerCase();
+      if (!msg.includes('database is locked')) {
+        throw err;
+      }
+    }
     return entry;
   }
 
@@ -1260,6 +1508,19 @@ function runProjectHeartbeat(projectState, source = 'interval') {
       }
     }
   } else {
+    const autoActionTask = pickRunnableAutoActionTask(projectState);
+    if (autoActionTask) {
+      const startedAutoAction = executeRecurringAutoAction(projectState, autoActionTask, source);
+      if (startedAutoAction) {
+        appendProjectLog(projectState, 'message', {
+          kind: 'heartbeat',
+          message: `Heartbeat cycle ${projectState.heartbeat.cycleCount} (${source})`,
+        });
+        persistProjectState(projectState);
+        return;
+      }
+    }
+
     // ── Start next available task ────────────────────────────────────────
     const nextTask = nextRunnableTask(projectState);
     if (nextTask) {
@@ -1411,6 +1672,18 @@ function recoverProjectStateAfterRestart(state) {
   }
   ensureRecurringState(state);
   ensureStaffingState(state);
+  if (!state.roleCapabilities || typeof state.roleCapabilities !== 'object') {
+    state.roleCapabilities = {};
+    state.agents.forEach((agent) => {
+      if (agent.isCoordinator) return;
+      const defaults = DEFAULT_ROLE_CAPABILITIES[String(agent.role || '').trim()] || { canDeploy: false, canSpend: false, allowedConnectors: [] };
+      state.roleCapabilities[String(agent.role || '').trim()] = {
+        canDeploy: Boolean(defaults.canDeploy),
+        canSpend: Boolean(defaults.canSpend),
+        allowedConnectors: Array.isArray(defaults.allowedConnectors) ? [...defaults.allowedConnectors] : [],
+      };
+    });
+  }
 
   const requeuedTaskIds = [];
   state.tasks.forEach((t) => {
@@ -1452,7 +1725,7 @@ function loadProjectsFromDisk() {
     if (!entry.isDirectory()) return;
     const state = safeJsonRead(path.join(PROJECTS_ROOT, entry.name, 'state.json'), null);
     if (!state || !state.id) return;
-    const runtime = { state, timer: null, execution: null };
+    const runtime = { state, timer: null, execution: null, recurringAction: null };
     projectRuntimes.set(state.id, runtime);
     recoverProjectStateAfterRestart(state);
 
@@ -1506,6 +1779,7 @@ function createProjectFromTemplate({ name, template, goal }) {
       optionalPool: Array.isArray(tpl.optional_agents) ? tpl.optional_agents.map((entry) => String(entry || '').trim()).filter(Boolean) : [],
       lastScaledAt: null,
     },
+    roleCapabilities: templateRoleCapabilities(tpl, initialAgents),
     agents: initialAgents,
     tasks: createInitialTasks(tpl),
     logs: [],
@@ -1524,7 +1798,7 @@ function createProjectFromTemplate({ name, template, goal }) {
     goal: state.goal
   });
 
-  const runtime = { state, timer: null, execution: null };
+  const runtime = { state, timer: null, execution: null, recurringAction: null };
   projectRuntimes.set(id, runtime);
 
   ensureDir(projectDir(id));
@@ -2238,6 +2512,92 @@ async function testWhatsappIntegration() {
   };
 }
 
+async function sendWhatsAppNotification(message) {
+  const whatsappCfg = (appConfig && appConfig.integrations && appConfig.integrations.whatsapp) || {};
+  if (!whatsappCfg.accessToken || !whatsappCfg.phoneNumberId || !whatsappCfg.notifyTo) {
+    return { ok: false, provider: 'whatsapp', reason: 'notifyTo/accessToken/phoneNumberId not configured' };
+  }
+  try {
+    const resp = await fetchWithTimeout(`https://graph.facebook.com/v21.0/${whatsappCfg.phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${whatsappCfg.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to: String(whatsappCfg.notifyTo),
+        type: 'text',
+        text: { body: String(message || '').slice(0, 1024) },
+      }),
+    }, 10000);
+    if (!resp.ok) {
+      return { ok: false, provider: 'whatsapp', reason: `HTTP ${resp.status}` };
+    }
+    return { ok: true, provider: 'whatsapp' };
+  } catch (err) {
+    return { ok: false, provider: 'whatsapp', reason: redactSensitive(err.message) };
+  }
+}
+
+async function sendTelegramNotification(message) {
+  const telegramCfg = (appConfig && appConfig.integrations && appConfig.integrations.telegram) || {};
+  if (!telegramCfg.botToken || !telegramCfg.chatId) {
+    return { ok: false, provider: 'telegram', reason: 'botToken/chatId not configured' };
+  }
+  try {
+    const resp = await fetchWithTimeout(`https://api.telegram.org/bot${telegramCfg.botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: telegramCfg.chatId,
+        text: String(message || '').slice(0, 3500),
+      }),
+    }, 10000);
+    if (!resp.ok) {
+      return { ok: false, provider: 'telegram', reason: `HTTP ${resp.status}` };
+    }
+    return { ok: true, provider: 'telegram' };
+  } catch (err) {
+    return { ok: false, provider: 'telegram', reason: redactSensitive(err.message) };
+  }
+}
+
+async function notifyOperator(projectState, summary, detail = {}) {
+  const projectName = projectState && projectState.name ? projectState.name : 'Unknown Project';
+  const msg = `[HiveForge Coordinator] ${projectName}: ${summary}`;
+  const wa = await sendWhatsAppNotification(msg);
+  let sent = wa;
+  if (!wa.ok) {
+    const tg = await sendTelegramNotification(msg);
+    sent = tg;
+  }
+
+  if (projectState) {
+    appendProjectLog(projectState, 'message', {
+      kind: 'operator_notification',
+      summary,
+      channel: sent.provider,
+      delivered: Boolean(sent.ok),
+      detail,
+    });
+    appendMessageBusEntry({
+      projectId: projectState.id,
+      from: 'coordinator',
+      to: 'operator',
+      kind: 'operator_notification',
+      payload: {
+        summary,
+        channel: sent.provider,
+        delivered: Boolean(sent.ok),
+        reason: sent.reason || null,
+        detail,
+      },
+    });
+  }
+  return sent;
+}
+
 async function testIntegration(provider) {
   if (provider === 'github') return testGithubIntegration();
   if (provider === 'telegram') return testTelegramIntegration();
@@ -2322,6 +2682,56 @@ async function executeConnectorPolicy(connectorId, options = {}) {
           target: connector.credentialService,
           ok: true,
           message: `Current spend: daily $${Number(budgetEntry.dailySpent || 0).toFixed(2)}, monthly $${Number(budgetEntry.monthlySpent || 0).toFixed(2)}.`
+        });
+      }
+    }
+  }
+
+  if (options.projectId && options.actorRole) {
+    const runtime = projectRuntimes.get(options.projectId);
+    const roleCapabilities = (options.roleCapabilities && typeof options.roleCapabilities === 'object')
+      ? options.roleCapabilities
+      : (runtime && runtime.state && runtime.state.roleCapabilities
+        ? runtime.state.roleCapabilities
+        : {});
+    const roleName = String(options.actorRole || '').trim();
+    const caps = roleCapabilities[roleName] || null;
+    if (!caps) {
+      checks.push({
+        type: 'role_capability',
+        target: roleName,
+        ok: false,
+        message: `Role ${roleName} has no capability contract for ${connector.id}.`,
+      });
+    } else {
+      const allowedConnectors = Array.isArray(caps.allowedConnectors) ? caps.allowedConnectors : [];
+      const connectorAllowed = allowedConnectors.includes(connector.id);
+      checks.push({
+        type: 'role_capability',
+        target: roleName,
+        ok: connectorAllowed,
+        message: connectorAllowed
+          ? `Role ${roleName} is allowed to use ${connector.id}.`
+          : `Role ${roleName} is not allowed to use ${connector.id}.`,
+      });
+      if (options.estimatedCost > 0) {
+        checks.push({
+          type: 'role_budget',
+          target: roleName,
+          ok: Boolean(caps.canSpend),
+          message: caps.canSpend
+            ? `Role ${roleName} can execute costed actions.`
+            : `Role ${roleName} cannot execute costed actions.`,
+        });
+      }
+      if (connector.id === 'netlify' && String(options.operation || '').toLowerCase() === 'trigger_deploy') {
+        checks.push({
+          type: 'role_deploy',
+          target: roleName,
+          ok: Boolean(caps.canDeploy),
+          message: caps.canDeploy
+            ? `Role ${roleName} can trigger deploy operations.`
+            : `Role ${roleName} cannot trigger deploy operations.`,
         });
       }
     }
@@ -3946,13 +4356,15 @@ async function main() {
         const estimatedCost = typeof payload.estimatedCost === 'number' ? payload.estimatedCost : null;
         const operation = String(payload.operation || '').trim();
         const input = payload.input && typeof payload.input === 'object' ? payload.input : {};
+        const actorRole = String(payload.actorRole || '').trim();
+        const requiresPermission = Boolean(payload.requiresPermission);
 
         if (!connector) {
           writeJson(res, { error: 'connector is required' }, 400);
           return;
         }
 
-        executeConnectorPolicy(connector, { dryRun, projectId, estimatedCost }).then(async (result) => {
+        executeConnectorPolicy(connector, { dryRun, projectId, estimatedCost, actorRole, operation }).then(async (result) => {
           let response = { ...result, operation, execution: null };
           let auditDecision = result.decision;
           let auditReason = result.reason;
@@ -4005,6 +4417,13 @@ async function main() {
           if (projectId) {
             const runtime = projectRuntimes.get(projectId);
             if (runtime) {
+              if (!response.ok && requiresPermission) {
+                await notifyOperator(runtime.state, `Permission requested for ${connector}:${operation || 'n/a'}`, {
+                  actorRole: actorRole || null,
+                  reason: response.reason,
+                  checks: response.checks,
+                });
+              }
               appendProjectLog(runtime.state, response.ok ? 'policy_allow' : 'policy_deny', {
                 kind: 'connector_policy_decision',
                 connector: response.connector,
@@ -4012,6 +4431,7 @@ async function main() {
                 decision: response.decision,
                 approved: response.ok,
                 dryRun: response.dryRun,
+                actorRole: actorRole || null,
                 reason: response.reason,
                 checks: response.checks,
                 actualCost,
@@ -4027,6 +4447,7 @@ async function main() {
                   decision: response.decision,
                   approved: response.ok,
                   dryRun: response.dryRun,
+                  actorRole: actorRole || null,
                   reason: response.reason,
                   actualCost,
                 },
