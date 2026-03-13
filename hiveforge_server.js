@@ -275,6 +275,8 @@ function createInitialTasks(template) {
     dependencies: dependencyGraph[task.id] || [],
     executionState: 'queued',
     retryCount: 0,
+    lastFailedAt: null,
+    lastError: null,
     lastProgressAt: null,
     executionTaskRunId: null,
     inprogressCycles: 0,
@@ -368,6 +370,8 @@ function enqueueRecurringTasks(projectState, ts, source = 'interval') {
       recurringKey: spec.key,
       executionState: 'queued',
       retryCount: 0,
+      lastFailedAt: null,
+      lastError: null,
       lastProgressAt: null,
       executionTaskRunId: null,
       inprogressCycles: 0,
@@ -695,6 +699,7 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
     task.executionState = 'done';
     task.inprogressCycles = 0;
     task.executionTaskRunId = null;
+    task.lastError = null;
 
     if (worker) {
       worker.status = 'idle';
@@ -812,30 +817,74 @@ function startProjectTaskExecution(projectState, task, assignee) {
     child,
     startedAt: nowIso(),
     lastProgressAt: nowIso(),
+    progressChunks: 0,
   };
   task.executionTaskRunId = taskRun.id;
   task.executionState = 'running';
   task.lastProgressAt = runtime.execution.lastProgressAt;
+  appendMessageBusEntry({
+    projectId: projectState.id,
+    from: 'coordinator',
+    to: assignee.id,
+    kind: 'task_started',
+    payload: {
+      taskId: task.id,
+      taskRunId: taskRun.id,
+      title: task.title,
+    },
+  });
 
-  child.stdout.on('data', () => {
+  child.stdout.on('data', (chunk) => {
     const rt = projectRuntimes.get(projectState.id);
     if (rt && rt.execution && rt.execution.taskRunId === taskRun.id) {
       rt.execution.lastProgressAt = nowIso();
+      rt.execution.progressChunks = Number(rt.execution.progressChunks || 0) + 1;
       const active = rt.state.tasks.find((t) => t.id === task.id);
       if (active) {
         active.lastProgressAt = rt.execution.lastProgressAt;
         emitProjectEvent(projectState.id, 'task_update', active);
       }
+      if (rt.execution.progressChunks === 1 || rt.execution.progressChunks % 5 === 0) {
+        appendMessageBusEntry({
+          projectId: projectState.id,
+          from: assignee.id,
+          to: 'coordinator',
+          kind: 'task_progress',
+          payload: {
+            taskId: task.id,
+            taskRunId: taskRun.id,
+            stream: 'stdout',
+            chunkSize: String(chunk || '').length,
+            progressChunks: rt.execution.progressChunks,
+          },
+        });
+      }
     }
   });
-  child.stderr.on('data', () => {
+  child.stderr.on('data', (chunk) => {
     const rt = projectRuntimes.get(projectState.id);
     if (rt && rt.execution && rt.execution.taskRunId === taskRun.id) {
       rt.execution.lastProgressAt = nowIso();
+      rt.execution.progressChunks = Number(rt.execution.progressChunks || 0) + 1;
       const active = rt.state.tasks.find((t) => t.id === task.id);
       if (active) {
         active.lastProgressAt = rt.execution.lastProgressAt;
         emitProjectEvent(projectState.id, 'task_update', active);
+      }
+      if (rt.execution.progressChunks === 1 || rt.execution.progressChunks % 5 === 0) {
+        appendMessageBusEntry({
+          projectId: projectState.id,
+          from: assignee.id,
+          to: 'coordinator',
+          kind: 'task_progress',
+          payload: {
+            taskId: task.id,
+            taskRunId: taskRun.id,
+            stream: 'stderr',
+            chunkSize: String(chunk || '').length,
+            progressChunks: rt.execution.progressChunks,
+          },
+        });
       }
     }
   });
@@ -1070,6 +1119,8 @@ function loadProjectsFromDisk() {
     state.tasks.forEach((t) => {
       if (!t.executionState) t.executionState = t.status === 'done' ? 'done' : (t.status === 'inprogress' ? 'running' : 'queued');
       if (typeof t.retryCount !== 'number') t.retryCount = 0;
+      if (typeof t.lastFailedAt === 'undefined') t.lastFailedAt = null;
+      if (typeof t.lastError === 'undefined') t.lastError = null;
       if (typeof t.lastProgressAt === 'undefined') t.lastProgressAt = null;
       if (typeof t.executionTaskRunId === 'undefined') t.executionTaskRunId = null;
       if (typeof t.recurringKey === 'undefined') t.recurringKey = null;
@@ -1078,11 +1129,12 @@ function loadProjectsFromDisk() {
     // Recovery: process restart cannot resume child process mid-run, so requeue active tasks.
     state.tasks.forEach((t) => {
       if (t.status === 'inprogress') {
+        const previousAssignee = t.assignee;
         requeueTaskToBacklog(t, 'process_restart', false);
         appendMessageBusEntry({
           projectId: state.id,
           from: 'coordinator',
-          to: t.assignee || 'unknown',
+          to: previousAssignee || 'unknown',
           kind: 'task_requeued_on_restart',
           payload: { taskId: t.id, title: t.title, reason: 'process_restart' },
         });
@@ -2713,6 +2765,8 @@ async function main() {
           dependencies: [],
           executionState: 'queued',
           retryCount: 0,
+          lastFailedAt: null,
+          lastError: null,
           lastProgressAt: null,
           executionTaskRunId: null,
           createdAt: nowIso(),
