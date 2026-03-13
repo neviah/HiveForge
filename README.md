@@ -11,6 +11,10 @@ HiveForge is a Business-only Openclaw-fork on Steroids, fully sandboxed, LM Stud
 ## Start
 - `node start.js` serves the web UI and streams tasks to the sandboxed agent.
 
+## Production Certification
+- With HiveForge running locally, execute `node scripts/production_certification.js` to run the Sprint D certification flow against the live HTTP API.
+- Override the target server with `HIVEFORGE_BASE_URL=http://127.0.0.1:3000 node scripts/production_certification.js` if needed.
+
 ## Update
 - `node update.js` refreshes bundled OpenClaw and dependencies without deleting the sandbox.
 
