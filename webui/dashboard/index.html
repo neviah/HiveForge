@@ -39,6 +39,9 @@
       <button class="hf-nav-btn" data-section="kanban">
         <span class="hf-nav-icon">📋</span> Task Pipeline
       </button>
+      <button class="hf-nav-btn" data-section="approvals">
+        <span class="hf-nav-icon">✅</span> Approvals
+      </button>
       <button class="hf-nav-btn" data-section="workspace">
         <span class="hf-nav-icon">🗂️</span> Workspace
       </button>
@@ -206,6 +209,45 @@
             <div id="kanban-done"></div>
           </div>
         </div>
+      </section>
+
+      <section id="approvals" class="hf-section">
+        <div class="hf-section-header">
+          <h2>Approvals</h2>
+          <p>Risk-scored approval queue from coordinator escalation events.</p>
+        </div>
+        <div class="hf-btn-row" style="margin-bottom:0.8rem;">
+          <select id="approvalsSortBy" style="width:180px;" onchange="Dashboard.setApprovalSort()">
+            <option value="risk">Sort by Risk</option>
+            <option value="requestedAt">Sort by Requested Time</option>
+            <option value="title">Sort by Title</option>
+          </select>
+          <select id="approvalsSortDirection" style="width:130px;" onchange="Dashboard.setApprovalSort()">
+            <option value="desc">Descending</option>
+            <option value="asc">Ascending</option>
+          </select>
+          <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.toggleAllApprovals(true)">Select All</button>
+          <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.toggleAllApprovals(false)">Clear</button>
+          <button class="hf-btn hf-btn sm" onclick="Dashboard.decideSelectedApprovals('approve')">Approve Selected</button>
+          <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.decideSelectedApprovals('deny')">Deny Selected</button>
+          <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.refreshApprovals()">Refresh</button>
+        </div>
+        <div class="hf-grid-3" style="margin-bottom:0.9rem;">
+          <div class="hf-card">
+            <div class="hf-card-label">Pending Approvals</div>
+            <div class="hf-card-value" id="approvalsCount">0</div>
+          </div>
+          <div class="hf-card">
+            <div class="hf-card-label">Selected</div>
+            <div class="hf-card-value" id="approvalsSelectedCount">0</div>
+          </div>
+          <div class="hf-card">
+            <div class="hf-card-label">Queue State</div>
+            <div class="hf-card-value" id="approvalsQueueState">Active</div>
+          </div>
+        </div>
+        <div id="approvalsEmpty" style="color:var(--muted);">No pending approvals for this project.</div>
+        <div id="approvalsList" style="display:none;"></div>
       </section>
 
       <!-- ── 4.4 Workspace Explorer ─────────────────────── -->
@@ -627,6 +669,18 @@
               <div id="settingsNotifyHint" style="font-size:0.82rem;color:var(--muted);"></div>
             </div>
           </div>
+          <div class="hf-grid-2" style="margin-bottom:0.7rem;">
+            <div>
+              <label style="display:flex;align-items:center;gap:0.5rem;font-weight:600;">
+                <input id="settingsKpiAlertsEnabled" type="checkbox" checked />
+                <span>Send KPI Variance Alerts</span>
+              </label>
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">KPI Alert Cooldown (minutes)</label>
+              <input id="settingsKpiAlertCooldown" type="number" min="1" max="10080" step="1" style="width:100%;" value="120" />
+            </div>
+          </div>
           <div class="hf-btn-row" style="margin-bottom:0;">
             <button class="hf-btn secondary" onclick="Dashboard.sendTestNotification()">Send Test Escalation</button>
             <span id="settingsNotifyStatus" class="hf-status" style="display:none;"></span>
@@ -659,6 +713,21 @@
         </div>
 
         <div data-settings-tab="deploy-policy" style="display:none;">
+
+        <div class="hf-card" style="max-width:760px;margin-top:1rem;">
+          <h3 style="margin-top:0;">Connector Retry Policies</h3>
+          <p style="color:var(--muted);margin-top:0;">Per-connector retry attempts and backoff delays for recurring connector actions.</p>
+          <div style="display:grid;grid-template-columns:1fr 280px;gap:0.5rem;font-size:0.75rem;color:var(--muted);padding-bottom:0.35rem;border-bottom:1px solid var(--border);">
+            <div>Connector</div>
+            <div style="display:grid;grid-template-columns:repeat(3,minmax(90px,1fr));gap:0.4rem;">
+              <span>Attempts</span>
+              <span>Base (s)</span>
+              <span>Max (s)</span>
+            </div>
+          </div>
+          <div id="settingsRetryPolicyList" style="margin-top:0.4rem;"></div>
+          <div style="font-size:0.76rem;color:var(--muted);margin-top:0.6rem;">These values are saved with other Settings when you click Save Settings in the Runtime tab.</div>
+        </div>
 
         <div class="hf-card" style="max-width:760px;margin-top:1rem;">
           <h3 style="margin-top:0;">Netlify Deployments</h3>

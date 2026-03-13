@@ -31,6 +31,17 @@ const AUTO_ACTION_RETRY_POLICY = {
   baseDelayMs: 30 * 1000,
   maxDelayMs: 30 * 60 * 1000,
 };
+const DEFAULT_CONNECTOR_RETRY_POLICIES = {
+  default: { maxAttempts: 3, baseDelayMs: 30 * 1000, maxDelayMs: 30 * 60 * 1000 },
+  github: { maxAttempts: 2, baseDelayMs: 20 * 1000, maxDelayMs: 10 * 60 * 1000 },
+  netlify: { maxAttempts: 3, baseDelayMs: 30 * 1000, maxDelayMs: 30 * 60 * 1000 },
+  google_ads: { maxAttempts: 4, baseDelayMs: 45 * 1000, maxDelayMs: 45 * 60 * 1000 },
+  analytics: { maxAttempts: 3, baseDelayMs: 20 * 1000, maxDelayMs: 20 * 60 * 1000 },
+  stripe: { maxAttempts: 2, baseDelayMs: 60 * 1000, maxDelayMs: 60 * 60 * 1000 },
+  email_provider: { maxAttempts: 3, baseDelayMs: 30 * 1000, maxDelayMs: 20 * 60 * 1000 },
+  telegram: { maxAttempts: 3, baseDelayMs: 15 * 1000, maxDelayMs: 10 * 60 * 1000 },
+  whatsapp: { maxAttempts: 3, baseDelayMs: 15 * 1000, maxDelayMs: 10 * 60 * 1000 },
+};
 const DEFAULT_KPI_GOALS = {
   weeklyTasksDoneTarget: 15,
   maxBacklog: 10,
@@ -168,6 +179,54 @@ function clampNumber(value, fallback, min, max) {
   return Math.max(min, Math.min(max, n));
 }
 
+function normalizeRetryPolicyEntry(entry = {}, fallback = DEFAULT_CONNECTOR_RETRY_POLICIES.default) {
+  return {
+    maxAttempts: clampInt(entry.maxAttempts, fallback.maxAttempts, 1, 20),
+    baseDelayMs: clampInt(entry.baseDelayMs, fallback.baseDelayMs, 1000, 12 * 60 * 60 * 1000),
+    maxDelayMs: clampInt(entry.maxDelayMs, fallback.maxDelayMs, 1000, 24 * 60 * 60 * 1000),
+  };
+}
+
+function retryPoliciesSummary() {
+  const configured = (appConfig && appConfig.retryPolicies && typeof appConfig.retryPolicies === 'object')
+    ? appConfig.retryPolicies
+    : {};
+  const merged = {};
+  Object.entries(DEFAULT_CONNECTOR_RETRY_POLICIES).forEach(([key, fallback]) => {
+    const cfg = configured[key] && typeof configured[key] === 'object' ? configured[key] : {};
+    merged[key] = normalizeRetryPolicyEntry(cfg, fallback);
+  });
+
+  Object.entries(configured).forEach(([key, cfg]) => {
+    const normalizedKey = String(key || '').trim().toLowerCase();
+    if (!normalizedKey || merged[normalizedKey]) return;
+    if (!cfg || typeof cfg !== 'object') return;
+    merged[normalizedKey] = normalizeRetryPolicyEntry(cfg, DEFAULT_CONNECTOR_RETRY_POLICIES.default);
+  });
+
+  return merged;
+}
+
+function retryPolicyForConnector(connectorId) {
+  const key = String(connectorId || '').trim().toLowerCase();
+  const all = retryPoliciesSummary();
+  return all[key] || all.default || normalizeRetryPolicyEntry();
+}
+
+function applyRetryPoliciesUpdate(partial = {}) {
+  if (!partial || typeof partial !== 'object') return;
+  appConfig.retryPolicies = appConfig.retryPolicies && typeof appConfig.retryPolicies === 'object'
+    ? appConfig.retryPolicies
+    : {};
+  Object.entries(partial).forEach(([key, value]) => {
+    const normalizedKey = String(key || '').trim().toLowerCase();
+    if (!normalizedKey || !value || typeof value !== 'object') return;
+    const fallback = DEFAULT_CONNECTOR_RETRY_POLICIES[normalizedKey] || DEFAULT_CONNECTOR_RETRY_POLICIES.default;
+    appConfig.retryPolicies[normalizedKey] = normalizeRetryPolicyEntry(value, fallback);
+  });
+  persistAppConfig();
+}
+
 function startOfUtcWeekIso(ts = nowIso()) {
   const dt = new Date(ts);
   if (Number.isNaN(dt.getTime())) return nowIso();
@@ -211,7 +270,13 @@ function ensureKpiGoalState(projectState) {
   if (!goals.weeklyPlan.weekStart) goals.weeklyPlan.weekStart = startOfUtcWeekIso();
 }
 
-function connectorRetryPlan(attemptNumber, reason, detail = {}) {
+function connectorRetryPlan(connectorId, attemptNumber, reason, detail = {}) {
+  if (typeof connectorId === 'number') {
+    detail = reason || {};
+    reason = attemptNumber;
+    attemptNumber = connectorId;
+    connectorId = 'default';
+  }
   const reasonText = String(reason || detail?.errorCode || '').toLowerCase();
   const retryable = (
     reasonText.includes('timeout')
@@ -227,10 +292,11 @@ function connectorRetryPlan(attemptNumber, reason, detail = {}) {
     || reasonText.includes('execution_failed')
   );
   const nextAttempt = Math.max(1, Number(attemptNumber || 1));
-  const rawDelay = AUTO_ACTION_RETRY_POLICY.baseDelayMs * Math.pow(2, Math.max(0, nextAttempt - 1));
+  const policy = retryPolicyForConnector(connectorId);
+  const rawDelay = policy.baseDelayMs * Math.pow(2, Math.max(0, nextAttempt - 1));
   return {
     retryable,
-    delayMs: Math.min(AUTO_ACTION_RETRY_POLICY.maxDelayMs, rawDelay),
+    delayMs: Math.min(policy.maxDelayMs, rawDelay),
   };
 }
 
@@ -301,6 +367,50 @@ function computeKpiVarianceAndAlerts(projectState) {
     alerts.push(`${projectState.deadLetters.length} task(s) are in dead-letter queue.`);
   }
   return { goals, actual, variance, alerts };
+}
+
+function evaluateAndNotifyKpiAlerts(projectState, ts = nowIso()) {
+  const settings = notificationSettingsSummary();
+  const kpiAlertsEnabled = settings.kpiAlerts && settings.kpiAlerts.enabled !== false;
+  if (!kpiAlertsEnabled) return;
+
+  const insight = computeKpiVarianceAndAlerts(projectState);
+  const alerts = Array.isArray(insight.alerts) ? insight.alerts : [];
+  const signature = alerts.join(' | ');
+  if (!projectState.kpiAlerting || typeof projectState.kpiAlerting !== 'object') {
+    projectState.kpiAlerting = {
+      lastSentAt: null,
+      lastSignature: null,
+    };
+  }
+
+  if (!alerts.length) {
+    projectState.kpiAlerting.lastSignature = null;
+    return;
+  }
+
+  const nowMs = Date.parse(ts);
+  const lastSentMs = Date.parse(projectState.kpiAlerting.lastSentAt || '');
+  const cooldownMs = clampInt(settings.kpiAlerts.cooldownMinutes, 120, 1, 7 * 24 * 60) * 60 * 1000;
+  const signatureChanged = projectState.kpiAlerting.lastSignature !== signature;
+  const cooldownElapsed = Number.isNaN(lastSentMs) || nowMs - lastSentMs >= cooldownMs;
+  if (!signatureChanged && !cooldownElapsed) return;
+
+  const summary = `KPI alerts triggered (${alerts.length}): ${alerts.join(' ')}`;
+  notifyOperator(projectState, summary, {
+    alertCount: alerts.length,
+    alerts,
+    variance: insight.variance,
+    actual: insight.actual,
+    goals: {
+      weeklyTasksDoneTarget: insight.goals.weeklyTasksDoneTarget,
+      maxBacklog: insight.goals.maxBacklog,
+      maxMonthlySpend: insight.goals.maxMonthlySpend,
+    },
+  }).catch(() => {});
+
+  projectState.kpiAlerting.lastSentAt = ts;
+  projectState.kpiAlerting.lastSignature = signature;
 }
 
 function runtimeSettings() {
@@ -989,8 +1099,10 @@ function sendTaskToDeadLetter(projectState, task, reason, detail = {}) {
 
 function scheduleAutoActionRetry(projectState, task, reason, detail = {}) {
   const nextRetryCount = Number(task.retryCount || 0) + 1;
-  const retryPlan = connectorRetryPlan(nextRetryCount, reason, detail);
-  if (!retryPlan.retryable || nextRetryCount > AUTO_ACTION_RETRY_POLICY.maxAttempts) {
+  const connectorId = String(task && task.autoAction && task.autoAction.connector ? task.autoAction.connector : '').trim().toLowerCase();
+  const retryPlan = connectorRetryPlan(connectorId, nextRetryCount, reason, detail);
+  const policy = retryPolicyForConnector(connectorId);
+  if (!retryPlan.retryable || nextRetryCount > policy.maxAttempts) {
     sendTaskToDeadLetter(projectState, task, reason, detail);
     return false;
   }
@@ -1321,6 +1433,64 @@ function markTaskAwaitingApproval(projectState, task, reason, detail = {}) {
     },
   });
   emitProjectEvent(projectState.id, 'task_update', task);
+}
+
+function applyTaskApprovalDecision(projectState, task, decision, note = '', actor = 'operator') {
+  const decidedAt = nowIso();
+  const priorPending = task.pendingApproval || {};
+  task.pendingApproval = {
+    ...priorPending,
+    decision,
+    decidedAt,
+    note: note || null,
+  };
+
+  if (decision === 'approve') {
+    if (task.autoAction && task.autoAction.type === 'connector') {
+      task.autoAction.requiresPermission = false;
+    }
+    task.status = 'backlog';
+    task.executionState = 'queued';
+    task.lastError = null;
+    task.lastProgressAt = decidedAt;
+    task.assignee = null;
+    task.startedAt = null;
+    task.inprogressCycles = 0;
+    appendProjectLog(projectState, 'task', {
+      kind: 'task_approval_granted',
+      taskId: task.id,
+      note,
+    });
+    appendMessageBusEntry({
+      projectId: projectState.id,
+      from: actor,
+      to: 'coordinator',
+      kind: 'task_approval_granted',
+      payload: { taskId: task.id, note: note || null },
+    });
+  } else {
+    task.status = 'done';
+    task.executionState = 'failed';
+    task.lastError = note || 'approval_denied';
+    task.lastFailedAt = decidedAt;
+    task.lastProgressAt = decidedAt;
+    task.completedAt = decidedAt;
+    appendProjectLog(projectState, 'task', {
+      kind: 'task_approval_denied',
+      taskId: task.id,
+      note,
+    });
+    appendMessageBusEntry({
+      projectId: projectState.id,
+      from: actor,
+      to: 'coordinator',
+      kind: 'task_approval_denied',
+      payload: { taskId: task.id, note: note || null },
+    });
+  }
+
+  emitProjectEvent(projectState.id, 'task_update', task);
+  return task;
 }
 
 function markAgentLog(agent, message) {
@@ -1843,6 +2013,7 @@ function runProjectHeartbeat(projectState, source = 'interval') {
   projectState.heartbeat.status = 'alive';
   projectState.heartbeat.cycleCount = (projectState.heartbeat.cycleCount || 0) + 1;
   refreshWeeklyKpiPlan(projectState, beatTs);
+  evaluateAndNotifyKpiAlerts(projectState, beatTs);
   enqueueRecurringTasks(projectState, beatTs, source);
   evaluateAutoStaffing(projectState, beatTs);
 
@@ -2068,6 +2239,9 @@ function recoverProjectStateAfterRestart(state) {
   ensureStaffingState(state);
   ensureKpiGoalState(state);
   ensureDeadLetterState(state);
+  if (!state.kpiAlerting || typeof state.kpiAlerting !== 'object') {
+    state.kpiAlerting = { lastSentAt: null, lastSignature: null };
+  }
   if (!state.roleCapabilities || typeof state.roleCapabilities !== 'object') {
     state.roleCapabilities = {};
     state.agents.forEach((agent) => {
@@ -2186,6 +2360,10 @@ function createProjectFromTemplate({ name, template, goal }) {
       },
     },
     deadLetters: [],
+    kpiAlerting: {
+      lastSentAt: null,
+      lastSignature: null,
+    },
     agents: initialAgents,
     tasks: createInitialTasks(tpl),
     logs: [],
@@ -2737,6 +2915,19 @@ function notificationSettingsSummary() {
     telegram: {
       chatId: String(telegram.chatId || ''),
       enabled: Boolean(telegram.botToken && telegram.chatId),
+    },
+    kpiAlerts: {
+      enabled: appConfig && appConfig.notifications && appConfig.notifications.kpiAlerts
+        ? Boolean(appConfig.notifications.kpiAlerts.enabled)
+        : true,
+      cooldownMinutes: clampInt(
+        appConfig && appConfig.notifications && appConfig.notifications.kpiAlerts
+          ? appConfig.notifications.kpiAlerts.cooldownMinutes
+          : 120,
+        120,
+        1,
+        7 * 24 * 60,
+      ),
     },
   };
 }
@@ -4404,6 +4595,46 @@ async function main() {
       return;
     }
 
+    if (pathname === '/api/approvals' && req.method === 'GET') {
+      const projectId = String(urlObj.searchParams.get('projectId') || '').trim();
+      const sortBy = String(urlObj.searchParams.get('sortBy') || 'risk').trim().toLowerCase();
+      const direction = String(urlObj.searchParams.get('direction') || 'desc').trim().toLowerCase() === 'asc' ? 'asc' : 'desc';
+      const runtime = projectId ? projectRuntimes.get(projectId) : null;
+      if (!runtime) {
+        writeJson(res, { error: 'Project not found' }, 404);
+        return;
+      }
+      const approvals = runtime.state.tasks
+        .filter((task) => task.status === 'review' && task.executionState === 'awaiting_approval')
+        .map((task) => ({
+          taskId: task.id,
+          title: task.title,
+          phase: task.phase,
+          assignee: task.assignee,
+          requestedAt: task.pendingApproval && task.pendingApproval.requestedAt ? task.pendingApproval.requestedAt : task.lastProgressAt,
+          reason: task.pendingApproval && task.pendingApproval.reason ? task.pendingApproval.reason : task.lastError,
+          risk: task.pendingApproval && task.pendingApproval.risk ? task.pendingApproval.risk : { score: 0, level: 'low', requiresHuman: true },
+          detail: task.pendingApproval && task.pendingApproval.detail ? task.pendingApproval.detail : {},
+        }));
+
+      approvals.sort((a, b) => {
+        let cmp = 0;
+        if (sortBy === 'requestedat') {
+          const av = Date.parse(a.requestedAt || '');
+          const bv = Date.parse(b.requestedAt || '');
+          cmp = (Number.isFinite(av) ? av : 0) - (Number.isFinite(bv) ? bv : 0);
+        } else if (sortBy === 'title') {
+          cmp = String(a.title || '').localeCompare(String(b.title || ''));
+        } else {
+          cmp = Number(a.risk && a.risk.score || 0) - Number(b.risk && b.risk.score || 0);
+        }
+        return direction === 'asc' ? cmp : -cmp;
+      });
+
+      writeJson(res, { projectId, sortBy, direction, items: approvals });
+      return;
+    }
+
     if (pathname === '/api/task_approval' && req.method === 'POST') {
       readRequestBody(req).then((body) => {
         let payload = {};
@@ -4438,62 +4669,63 @@ async function main() {
           return;
         }
 
-        const decidedAt = nowIso();
-        const priorPending = task.pendingApproval || {};
-        task.pendingApproval = {
-          ...priorPending,
-          decision,
-          decidedAt,
-          note: note || null,
-        };
-
-        if (decision === 'approve') {
-          if (task.autoAction && task.autoAction.type === 'connector') {
-            task.autoAction.requiresPermission = false;
-          }
-          task.status = 'backlog';
-          task.executionState = 'queued';
-          task.lastError = null;
-          task.lastProgressAt = decidedAt;
-          task.assignee = null;
-          task.startedAt = null;
-          task.inprogressCycles = 0;
-          appendProjectLog(runtime.state, 'task', {
-            kind: 'task_approval_granted',
-            taskId: task.id,
-            note,
-          });
-          appendMessageBusEntry({
-            projectId,
-            from: 'operator',
-            to: 'coordinator',
-            kind: 'task_approval_granted',
-            payload: { taskId: task.id, note: note || null },
-          });
-        } else {
-          task.status = 'done';
-          task.executionState = 'failed';
-          task.lastError = note || 'approval_denied';
-          task.lastFailedAt = decidedAt;
-          task.lastProgressAt = decidedAt;
-          task.completedAt = decidedAt;
-          appendProjectLog(runtime.state, 'task', {
-            kind: 'task_approval_denied',
-            taskId: task.id,
-            note,
-          });
-          appendMessageBusEntry({
-            projectId,
-            from: 'operator',
-            to: 'coordinator',
-            kind: 'task_approval_denied',
-            payload: { taskId: task.id, note: note || null },
-          });
-        }
-
-        emitProjectEvent(projectId, 'task_update', task);
+        applyTaskApprovalDecision(runtime.state, task, decision, note, 'operator');
         persistProjectState(runtime.state);
         writeJson(res, { ok: true, task });
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
+    if (pathname === '/api/task_approval/batch' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = parseJsonBodySafe(body);
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+
+        const projectId = String(payload.projectId || '').trim();
+        const decision = String(payload.decision || '').trim().toLowerCase();
+        const note = String(payload.note || '').trim();
+        const taskIds = Array.isArray(payload.taskIds) ? payload.taskIds.map((entry) => String(entry || '').trim()).filter(Boolean) : [];
+        const runtime = projectId ? projectRuntimes.get(projectId) : null;
+        if (!runtime) {
+          writeJson(res, { error: 'Project not found' }, 404);
+          return;
+        }
+        if (!taskIds.length || (decision !== 'approve' && decision !== 'deny')) {
+          writeJson(res, { error: 'taskIds[] and decision (approve|deny) are required' }, 400);
+          return;
+        }
+
+        const results = [];
+        taskIds.forEach((taskId) => {
+          const task = runtime.state.tasks.find((entry) => entry.id === taskId);
+          if (!task) {
+            results.push({ taskId, ok: false, error: 'Task not found' });
+            return;
+          }
+          if (!(task.status === 'review' && task.executionState === 'awaiting_approval')) {
+            results.push({ taskId, ok: false, error: 'Task is not awaiting approval' });
+            return;
+          }
+          applyTaskApprovalDecision(runtime.state, task, decision, note, 'operator_batch');
+          results.push({ taskId, ok: true, task });
+        });
+
+        persistProjectState(runtime.state);
+        writeJson(res, {
+          ok: true,
+          projectId,
+          decision,
+          results,
+          successCount: results.filter((entry) => entry.ok).length,
+          failureCount: results.filter((entry) => !entry.ok).length,
+        });
       }).catch((err) => {
         writeJson(res, { error: err.message }, 400);
       });
@@ -4709,6 +4941,7 @@ async function main() {
       writeJson(res, {
         runtime: runtimeSettings(),
         defaults: DEFAULT_RUNTIME_SETTINGS,
+        retryPolicies: retryPoliciesSummary(),
         llm: {
           endpoint: appState.llm.endpoint,
         },
@@ -4729,6 +4962,7 @@ async function main() {
         }
 
         const runtimePatch = payload.runtime && typeof payload.runtime === 'object' ? payload.runtime : {};
+        const retryPolicyPatch = payload.retryPolicies && typeof payload.retryPolicies === 'object' ? payload.retryPolicies : {};
         const nextEndpoint = payload.llm && typeof payload.llm === 'object' ? String(payload.llm.endpoint || '').trim() : '';
         const notificationPatch = payload.notifications && typeof payload.notifications === 'object' ? payload.notifications : {};
 
@@ -4745,10 +4979,16 @@ async function main() {
           appConfig.integrations = appConfig.integrations || {};
           appConfig.integrations.whatsapp = appConfig.integrations.whatsapp || {};
           appConfig.integrations.telegram = appConfig.integrations.telegram || {};
+          appConfig.notifications = appConfig.notifications || {};
+          appConfig.notifications.kpiAlerts = appConfig.notifications.kpiAlerts || {};
 
           const nextNotifyTo = String(notificationPatch.whatsappNotifyTo || '').trim();
           const nextTelegramChatId = String(notificationPatch.telegramChatId || '').trim();
           const nextChannel = String(notificationPatch.preferredChannel || '').trim().toLowerCase();
+          const nextKpiAlertsEnabled = typeof notificationPatch.kpiAlertsEnabled === 'boolean'
+            ? notificationPatch.kpiAlertsEnabled
+            : null;
+          const nextKpiAlertCooldownMinutes = notificationPatch.kpiAlertCooldownMinutes;
 
           if (nextNotifyTo || notificationPatch.whatsappNotifyTo === '') {
             appConfig.integrations.whatsapp.notifyTo = nextNotifyTo;
@@ -4757,16 +4997,26 @@ async function main() {
             appConfig.integrations.telegram.chatId = nextTelegramChatId;
           }
           if (nextChannel === 'whatsapp' || nextChannel === 'telegram') {
-            appConfig.notifications = appConfig.notifications || {};
             appConfig.notifications.preferredChannel = nextChannel;
           }
+          if (nextKpiAlertsEnabled !== null) {
+            appConfig.notifications.kpiAlerts.enabled = nextKpiAlertsEnabled;
+          }
+          if (typeof nextKpiAlertCooldownMinutes !== 'undefined') {
+            appConfig.notifications.kpiAlerts.cooldownMinutes = clampInt(nextKpiAlertCooldownMinutes, 120, 1, 7 * 24 * 60);
+          }
           persistAppConfig();
+        }
+
+        if (retryPolicyPatch && typeof retryPolicyPatch === 'object') {
+          applyRetryPoliciesUpdate(retryPolicyPatch);
         }
 
         writeJson(res, {
           ok: true,
           runtime: runtimeSettings(),
           defaults: DEFAULT_RUNTIME_SETTINGS,
+          retryPolicies: retryPoliciesSummary(),
           llm: {
             endpoint: appState.llm.endpoint,
           },
@@ -4784,6 +5034,7 @@ async function main() {
         ok: true,
         runtime: runtimeSettings(),
         defaults: DEFAULT_RUNTIME_SETTINGS,
+        retryPolicies: retryPoliciesSummary(),
         llm: {
           endpoint: appState.llm.endpoint,
         },

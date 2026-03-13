@@ -18,6 +18,7 @@ const API = {
   integrations:'/api/integrations',
   analytics:   '/api/analytics',
   kpiGoals:    '/api/kpi_goals',
+  approvals:   '/api/approvals',
   logs:        '/api/logs',
   messageBus:  '/api/message_bus',
   marketplace: '/api/marketplace',
@@ -27,6 +28,7 @@ const API = {
   productionCertification: '/api/production_certification',
   projectSettings: '/api/project_settings',
   taskApproval: '/api/task_approval',
+  taskApprovalBatch: '/api/task_approval/batch',
   credentialPolicy: '/api/credential_policy',
   credentialBudget: '/api/credential_budget',
   credentialAudit: '/api/credential_audit',
@@ -41,6 +43,7 @@ const SECTION_TITLES = {
   'new-project': 'New Project',
   agents:      'Agent Activity Monitor',
   kanban:      'Task Pipeline',
+  approvals:   'Approvals',
   workspace:   'Workspace Explorer',
   heartbeat:   'Heartbeat Monitor',
   logs:        'Logs & Timeline',
@@ -179,6 +182,8 @@ const state = {
   messageBusPoller: null,
   messageBusFilter: { kind: '', actor: '', q: '' },
   marketplaceFilter: { division: 'All', query: '' },
+  approvalsFilter: { sortBy: 'risk', direction: 'desc' },
+  selectedApprovalTaskIds: new Set(),
   activeSettingsTab: 'runtime',
   sseSource:      null,
   _pendingAddAgentId: null,
@@ -285,6 +290,14 @@ async function fetchProjectSettings(projectId) {
   return apiFetch(`${API.projectSettings}?projectId=${encodeURIComponent(projectId)}`);
 }
 
+async function fetchApprovals(projectId, sortBy = 'risk', direction = 'desc') {
+  const qp = new URLSearchParams();
+  qp.set('projectId', String(projectId || ''));
+  qp.set('sortBy', String(sortBy || 'risk'));
+  qp.set('direction', String(direction || 'desc'));
+  return apiFetch(`${API.approvals}?${qp.toString()}`);
+}
+
 async function runConnectorCheck(connector, projectId, dryRun = true, operation = '', estimatedCost = null) {
   return apiFetch(API.connectorsExecute, {
     method: 'POST',
@@ -316,9 +329,13 @@ function renderSettings(data) {
   const notifyToInput = document.getElementById('settingsWhatsAppNotifyTo');
   const telegramChatInput = document.getElementById('settingsTelegramChatId');
   const channelInput = document.getElementById('settingsNotifyChannel');
+  const kpiAlertsInput = document.getElementById('settingsKpiAlertsEnabled');
+  const kpiCooldownInput = document.getElementById('settingsKpiAlertCooldown');
   if (notifyToInput) notifyToInput.value = notifications?.whatsapp?.notifyTo || '';
   if (telegramChatInput) telegramChatInput.value = notifications?.telegram?.chatId || '';
   if (channelInput) channelInput.value = notifications?.preferredChannel === 'telegram' ? 'telegram' : 'whatsapp';
+  if (kpiAlertsInput) kpiAlertsInput.checked = notifications?.kpiAlerts?.enabled !== false;
+  if (kpiCooldownInput) kpiCooldownInput.value = String(Number(notifications?.kpiAlerts?.cooldownMinutes) || 120);
   const hint = document.getElementById('settingsNotifyHint');
   if (hint) {
     const wa = notifications?.whatsapp?.enabled;
@@ -337,6 +354,45 @@ function renderSettings(data) {
       badge.style.display = 'none';
     }
   }
+  renderRetryPolicySettings(data?.retryPolicies || {});
+}
+
+function renderRetryPolicySettings(retryPolicies = {}) {
+  const list = document.getElementById('settingsRetryPolicyList');
+  if (!list) return;
+  const entries = Object.entries(retryPolicies || {});
+  list.innerHTML = entries.length
+    ? entries.map(([connector, cfg]) => `
+      <div class="hf-grid-2" style="padding:0.45rem 0;border-bottom:1px solid var(--border);">
+        <div>
+          <div style="font-weight:600;">${esc(connector)}</div>
+          <div style="font-size:0.76rem;color:var(--muted);">Connector retry policy</div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(90px,1fr));gap:0.4rem;">
+          <input class="settings-retry-max-attempts" data-connector="${esc(connector)}" type="number" min="1" max="20" step="1" value="${esc(String(Number(cfg.maxAttempts) || 3))}" title="Max Attempts" />
+          <input class="settings-retry-base-delay" data-connector="${esc(connector)}" type="number" min="1" max="43200" step="1" value="${esc(String(Math.round((Number(cfg.baseDelayMs) || 30000) / 1000)))}" title="Base Delay Seconds" />
+          <input class="settings-retry-max-delay" data-connector="${esc(connector)}" type="number" min="1" max="86400" step="1" value="${esc(String(Math.round((Number(cfg.maxDelayMs) || 1800000) / 1000)))}" title="Max Delay Seconds" />
+        </div>
+      </div>
+    `).join('')
+    : '<div style="color:var(--muted);">No retry policies found.</div>';
+}
+
+function collectRetryPolicyPayload() {
+  const out = {};
+  const maxInputs = document.querySelectorAll('.settings-retry-max-attempts');
+  maxInputs.forEach((input) => {
+    const connector = String(input.getAttribute('data-connector') || '').trim().toLowerCase();
+    if (!connector) return;
+    const baseInput = document.querySelector(`.settings-retry-base-delay[data-connector="${connector}"]`);
+    const maxDelayInput = document.querySelector(`.settings-retry-max-delay[data-connector="${connector}"]`);
+    out[connector] = {
+      maxAttempts: Number(input.value || 3),
+      baseDelayMs: Math.round(Number(baseInput?.value || 30) * 1000),
+      maxDelayMs: Math.round(Number(maxDelayInput?.value || 1800) * 1000),
+    };
+  });
+  return out;
 }
 
 function renderProjectAutomation(data) {
@@ -381,7 +437,10 @@ function handleSSEEvent(type, data) {
   // Append to logs
   appendLogEntry({ type, data, ts: new Date().toISOString() });
   // Trigger targeted refresh for the relevant panel
-  if (type === 'task')           renderKanban(state.tasks = patchTask(state.tasks, data));
+  if (type === 'task') {
+    renderKanban(state.tasks = patchTask(state.tasks, data));
+    if (state.activeSection === 'approvals') onSectionActivate('approvals');
+  }
   if (type === 'heartbeat')      renderHeartbeatCard(data);
   if (type === 'message')        renderAgentCard(data);
   if (type === 'project_status') {
@@ -522,6 +581,52 @@ function renderKanban(tasks) {
       </div>`;
     }).join('') || `<div style="color:var(--muted);font-size:0.82rem;padding:0.5rem;">Empty</div>`;
   }
+}
+
+function renderApprovals(payload) {
+  const list = document.getElementById('approvalsList');
+  const empty = document.getElementById('approvalsEmpty');
+  const count = document.getElementById('approvalsCount');
+  const queueState = document.getElementById('approvalsQueueState');
+  if (!list || !empty || !count) return;
+
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  count.textContent = String(items.length);
+  if (queueState) queueState.textContent = items.length ? 'Needs Review' : 'Idle';
+  empty.style.display = items.length ? 'none' : 'block';
+  list.style.display = items.length ? 'block' : 'none';
+
+  if (!items.length) {
+    list.innerHTML = '';
+    return;
+  }
+
+  const selected = state.selectedApprovalTaskIds;
+  list.innerHTML = items.map((item) => {
+    const risk = item.risk || { level: 'low', score: 0 };
+    const riskColor = risk.level === 'high' ? 'var(--error, #d9534f)' : risk.level === 'medium' ? '#b45309' : 'var(--ok, #5cb85c)';
+    const checked = selected.has(item.taskId) ? 'checked' : '';
+    const requestedAt = item.requestedAt ? new Date(item.requestedAt).toLocaleString() : 'unknown';
+    return `
+      <div class="hf-card" style="max-width:980px;margin-bottom:0.7rem;">
+        <div style="display:flex;align-items:flex-start;gap:0.6rem;">
+          <input type="checkbox" data-task-id="${esc(item.taskId)}" ${checked} onchange="Dashboard.toggleApprovalSelection('${esc(item.taskId)}', this.checked)" style="margin-top:0.2rem;" />
+          <div style="flex:1;">
+            <div style="display:flex;justify-content:space-between;gap:0.6rem;align-items:center;">
+              <strong>${esc(item.title || item.taskId)}</strong>
+              <span style="font-size:0.8rem;color:${riskColor};font-weight:600;">${esc(String(risk.level || 'low').toUpperCase())} (${esc(String(Number(risk.score) || 0))})</span>
+            </div>
+            <div style="font-size:0.78rem;color:var(--muted);margin-top:0.2rem;">Task: ${esc(item.taskId)} · Phase: ${esc(item.phase || 'general')} · Requested: ${esc(requestedAt)}</div>
+            <div style="font-size:0.79rem;color:var(--text);margin-top:0.35rem;">${esc(item.reason || 'Approval required')}</div>
+            <div class="hf-btn-row" style="margin-top:0.45rem;margin-bottom:0;">
+              <button class="hf-btn hf-btn sm" onclick="Dashboard.decideTaskApproval('${esc(item.taskId)}','approve')">Approve</button>
+              <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.decideTaskApproval('${esc(item.taskId)}','deny')">Deny</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 function setSettingsTab(tabId) {
@@ -956,6 +1061,17 @@ async function onSectionActivate(id) {
     case 'projects':    renderProjects(state.projects); break;
     case 'agents':      if (pid) renderAgents(state.agents = await fetchAgents(pid)); break;
     case 'kanban':      if (pid) renderKanban(state.tasks = await fetchTasks(pid)); break;
+    case 'approvals': {
+      if (pid) {
+        const { sortBy, direction } = state.approvalsFilter;
+        const sortByEl = document.getElementById('approvalsSortBy');
+        const directionEl = document.getElementById('approvalsSortDirection');
+        if (sortByEl) sortByEl.value = sortBy;
+        if (directionEl) directionEl.value = direction;
+        renderApprovals(await fetchApprovals(pid, sortBy, direction));
+      }
+      break;
+    }
     case 'heartbeat':   if (pid) renderHeartbeatCard(await fetchHeartbeat(pid)); break;
     case 'credentials': {
       {
@@ -1053,6 +1169,7 @@ const Dashboard = {
 
   refreshProjects() { onSectionActivate('projects'); },
   refreshAgents()   { onSectionActivate('agents');   },
+  refreshApprovals(){ onSectionActivate('approvals');},
   refreshHeartbeat(){ onSectionActivate('heartbeat');},
   refreshLogs()     { onSectionActivate('logs');     },
   refreshMessageBus(){ onSectionActivate('message-bus'); },
@@ -1070,6 +1187,69 @@ const Dashboard = {
   filterMarketplace() {
     state.marketplaceFilter.query = document.getElementById('marketplaceSearch').value;
     renderMarketplace(state.marketplaceFilter);
+  },
+
+  setApprovalSort() {
+    state.approvalsFilter.sortBy = document.getElementById('approvalsSortBy')?.value || 'risk';
+    state.approvalsFilter.direction = document.getElementById('approvalsSortDirection')?.value || 'desc';
+    if (state.activeSection === 'approvals') onSectionActivate('approvals');
+  },
+
+  toggleApprovalSelection(taskId, checked) {
+    if (!taskId) return;
+    if (checked) state.selectedApprovalTaskIds.add(taskId);
+    else state.selectedApprovalTaskIds.delete(taskId);
+    const selectedCount = document.getElementById('approvalsSelectedCount');
+    if (selectedCount) selectedCount.textContent = String(state.selectedApprovalTaskIds.size);
+  },
+
+  toggleAllApprovals(checked) {
+    const boxes = document.querySelectorAll('#approvalsList input[type="checkbox"]');
+    boxes.forEach((box) => {
+      box.checked = Boolean(checked);
+      const taskId = String(box.getAttribute('data-task-id') || '').trim();
+      if (!taskId) return;
+      if (checked) state.selectedApprovalTaskIds.add(taskId);
+      else state.selectedApprovalTaskIds.delete(taskId);
+    });
+    const selectedCount = document.getElementById('approvalsSelectedCount');
+    if (selectedCount) selectedCount.textContent = String(state.selectedApprovalTaskIds.size);
+  },
+
+  async decideSelectedApprovals(decision) {
+    if (!state.activeProject) {
+      showToast('No active project selected.', 'error');
+      return;
+    }
+    const taskIds = Array.from(state.selectedApprovalTaskIds);
+    if (!taskIds.length) {
+      showToast('Select at least one approval item.', 'info');
+      return;
+    }
+    const normalized = String(decision || '').toLowerCase();
+    if (normalized !== 'approve' && normalized !== 'deny') return;
+    const note = normalized === 'deny'
+      ? (window.prompt('Optional deny reason for selected tasks:', '') || '').trim()
+      : '';
+    try {
+      const result = await apiFetch(API.taskApprovalBatch, {
+        method: 'POST',
+        body: JSON.stringify({
+          projectId: state.activeProject.id,
+          taskIds,
+          decision: normalized,
+          note,
+        }),
+      });
+      state.selectedApprovalTaskIds.clear();
+      const selectedCount = document.getElementById('approvalsSelectedCount');
+      if (selectedCount) selectedCount.textContent = '0';
+      showToast(`Batch ${normalized} complete: ${result.successCount} ok, ${result.failureCount} failed.`, result.failureCount ? 'info' : 'ok');
+      if (state.activeSection === 'approvals') onSectionActivate('approvals');
+      if (state.activeSection === 'kanban') onSectionActivate('kanban');
+    } catch (err) {
+      showToast(`Batch approval failed: ${err.message}`, 'error');
+    }
   },
 
   setDivision(div) {
@@ -1298,6 +1478,9 @@ const Dashboard = {
     const whatsappNotifyTo = document.getElementById('settingsWhatsAppNotifyTo')?.value.trim() || '';
     const telegramChatId = document.getElementById('settingsTelegramChatId')?.value.trim() || '';
     const preferredChannel = document.getElementById('settingsNotifyChannel')?.value || 'whatsapp';
+    const kpiAlertsEnabled = Boolean(document.getElementById('settingsKpiAlertsEnabled')?.checked);
+    const kpiAlertCooldownMinutes = Number(document.getElementById('settingsKpiAlertCooldown')?.value || 120);
+    const retryPolicies = collectRetryPolicyPayload();
 
     showStatus(status, 'Saving…', 'running');
     try {
@@ -1311,10 +1494,13 @@ const Dashboard = {
         llm: {
           endpoint: llmEndpoint,
         },
+        retryPolicies,
         notifications: {
           whatsappNotifyTo,
           telegramChatId,
           preferredChannel,
+          kpiAlertsEnabled,
+          kpiAlertCooldownMinutes,
         },
       };
       const updated = await apiFetch(API.settings, {
@@ -1540,7 +1726,13 @@ const Dashboard = {
           note,
         }),
       });
+      state.selectedApprovalTaskIds.delete(taskId);
+      const selectedCount = document.getElementById('approvalsSelectedCount');
+      if (selectedCount) selectedCount.textContent = String(state.selectedApprovalTaskIds.size);
       showToast(`Task ${normalized}d.`, 'ok');
+      if (state.activeSection === 'approvals') {
+        onSectionActivate('approvals');
+      }
       if (state.activeSection === 'kanban') {
         renderKanban(state.tasks = await fetchTasks(state.activeProject.id));
       }
