@@ -168,7 +168,9 @@
                                                                                           "kdp"
                                                                                       ],
                                                              "distribution_strategy":  "broadcast",
-                                                             "required_successes":  2
+                                                             "required_successes":  2,
+                                                             "rollback_on_failure":  true,
+                                                             "verify_after_publish":  true
                                                          },
                                                "requires_permission":  false
                                            },

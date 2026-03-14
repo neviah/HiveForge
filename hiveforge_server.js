@@ -355,57 +355,57 @@ const CONNECTOR_IDEMPOTENCY_PROFILES = {
   kdp: {
     publish_book: {
       mode: 'native_token',
-      reconciliation: null,
+      reconciliation: 'publication_state',
     },
     update_publication: {
       mode: 'native_token',
-      reconciliation: null,
+      reconciliation: 'publication_state',
     },
     unpublish_publication: {
       mode: 'native_token',
-      reconciliation: null,
+      reconciliation: 'publication_state',
     },
   },
   gumroad: {
     publish_product: {
       mode: 'native_token',
-      reconciliation: null,
+      reconciliation: 'publication_state',
     },
     update_product: {
       mode: 'native_token',
-      reconciliation: null,
+      reconciliation: 'publication_state',
     },
     unpublish_product: {
       mode: 'native_token',
-      reconciliation: null,
+      reconciliation: 'publication_state',
     },
   },
   substack: {
     publish_post: {
       mode: 'native_token',
-      reconciliation: null,
+      reconciliation: 'publication_state',
     },
     update_post: {
       mode: 'native_token',
-      reconciliation: null,
+      reconciliation: 'publication_state',
     },
     unpublish_post: {
       mode: 'native_token',
-      reconciliation: null,
+      reconciliation: 'publication_state',
     },
   },
   custom_cms: {
     publish_book: {
       mode: 'native_token',
-      reconciliation: null,
+      reconciliation: 'publication_state',
     },
     update_publication: {
       mode: 'native_token',
-      reconciliation: null,
+      reconciliation: 'publication_state',
     },
     unpublish_publication: {
       mode: 'native_token',
-      reconciliation: null,
+      reconciliation: 'publication_state',
     },
   },
 };
@@ -610,6 +610,88 @@ async function reconcileConnectorExecution(connectorId, operation, executionResu
         reason: `Deploy visibility reconciliation pending due to connector error: ${redactSensitive(err.message)}`,
       };
     }
+  }
+
+  if (profile.reconciliation === 'publication_state') {
+    const baseData = executionResult && executionResult.data && typeof executionResult.data === 'object'
+      ? executionResult.data
+      : {};
+    const targetEntries = Array.isArray(baseData.targets) ? baseData.targets : [];
+
+    const hasVerificationEvidence = (payload) => {
+      if (!payload || typeof payload !== 'object') return false;
+      const candidate = payload.data && typeof payload.data === 'object' ? payload.data : payload;
+      const evidence = [
+        candidate.publicationId,
+        candidate.postId,
+        candidate.productId,
+        candidate.id,
+        candidate.slug,
+        candidate.url,
+        candidate.permalink,
+        candidate.canonicalUrl,
+      ];
+      return evidence.some((value) => String(value || '').trim().length > 0);
+    };
+
+    if (targetEntries.length > 0) {
+      const checks = targetEntries.map((entry) => {
+        const ok = Boolean(entry && entry.ok);
+        const verified = ok ? hasVerificationEvidence(entry) : false;
+        const pending = ok && !verified;
+        return {
+          target: String(entry && (entry.target || entry.connector) || '').trim().toLowerCase() || 'unknown',
+          ok,
+          verified,
+          pending,
+          rollbacked: Boolean(entry && entry.rollbacked),
+        };
+      });
+      const successfulChecks = checks.filter((entry) => entry.ok && !entry.rollbacked);
+      const pendingChecks = successfulChecks.filter((entry) => entry.pending);
+      const failedChecks = checks.filter((entry) => !entry.ok);
+      const rollback = baseData.rollback && typeof baseData.rollback === 'object' ? baseData.rollback : null;
+      const rollbackApplied = Boolean(rollback && rollback.attemptedCount > 0);
+      const overallOk = pendingChecks.length === 0 && failedChecks.length === 0;
+      return {
+        checked: true,
+        ok: overallOk,
+        pending: pendingChecks.length > 0,
+        mode: profile.mode,
+        reason: overallOk
+          ? `Publication state verified for ${successfulChecks.length} target(s).`
+          : (pendingChecks.length > 0
+            ? `Publication verification pending for ${pendingChecks.length} target(s).`
+            : `Publication reconciliation detected ${failedChecks.length} failed target(s).`),
+        strategy: String(baseData.strategy || '').trim().toLowerCase() || null,
+        targetChecks: checks,
+        rollbackApplied,
+      };
+    }
+
+    const singleOk = Boolean(executionResult && executionResult.ok);
+    const verified = singleOk ? hasVerificationEvidence(baseData) : false;
+    return {
+      checked: true,
+      ok: singleOk && verified,
+      pending: singleOk && !verified,
+      mode: profile.mode,
+      reason: singleOk && verified
+        ? 'Publication state verified from connector response payload.'
+        : (singleOk
+          ? 'Publication verification pending: response payload missing publication identifiers.'
+          : 'Publication connector execution did not succeed.'),
+      targetChecks: [
+        {
+          target: connector,
+          ok: singleOk,
+          verified,
+          pending: singleOk && !verified,
+          rollbacked: false,
+        },
+      ],
+      rollbackApplied: false,
+    };
   }
 
   return {
@@ -5774,6 +5856,10 @@ function stripPublicationPlanConfig(input = {}) {
   delete next.required_successes;
   delete next.fallbackOrder;
   delete next.fallback_order;
+  delete next.rollbackOnFailure;
+  delete next.rollback_on_failure;
+  delete next.verifyAfterPublish;
+  delete next.verify_after_publish;
   return next;
 }
 
@@ -5794,6 +5880,12 @@ function buildPublicationDistributionPlan(connectorId, operation, input = {}) {
 
   const strategyRaw = String((input && typeof input === 'object' ? (input.distributionStrategy ?? input.distribution_strategy) : '') || 'broadcast').trim().toLowerCase();
   const strategy = strategyRaw === 'fallback' ? 'fallback' : 'broadcast';
+  const rollbackOnFailure = Boolean(input && typeof input === 'object'
+    ? (input.rollbackOnFailure ?? input.rollback_on_failure ?? true)
+    : true);
+  const verifyAfterPublish = Boolean(input && typeof input === 'object'
+    ? (input.verifyAfterPublish ?? input.verify_after_publish ?? true)
+    : true);
   const requiredSuccessesDefault = strategy === 'fallback' ? 1 : targets.length;
   const requiredSuccesses = clampInt(
     input && typeof input === 'object' ? (input.requiredSuccesses ?? input.required_successes) : requiredSuccessesDefault,
@@ -5826,6 +5918,8 @@ function buildPublicationDistributionPlan(connectorId, operation, input = {}) {
     baseConnector: connector,
     baseOperation: String(operation || '').trim().toLowerCase(),
     strategy,
+    rollbackOnFailure,
+    verifyAfterPublish,
     requiredSuccesses,
     targets,
     steps,
@@ -5835,6 +5929,7 @@ function buildPublicationDistributionPlan(connectorId, operation, input = {}) {
 async function executePublicationDistributionPlan(plan, options = {}) {
   const steps = Array.isArray(plan && plan.steps) ? plan.steps : [];
   const executeStep = typeof options.executeStep === 'function' ? options.executeStep : null;
+  const executeRollbackStep = typeof options.executeRollbackStep === 'function' ? options.executeRollbackStep : null;
   if (!steps.length || !executeStep) {
     return {
       ok: false,
@@ -5886,6 +5981,60 @@ async function executePublicationDistributionPlan(plan, options = {}) {
   }
 
   const ok = successCount >= Number(plan.requiredSuccesses || 1);
+  const successfulTargets = results.filter((entry) => entry.ok);
+  let rollback = {
+    attemptedCount: 0,
+    successCount: 0,
+    failedCount: 0,
+    items: [],
+    required: false,
+  };
+  if (!ok && plan.kind === 'publish' && plan.rollbackOnFailure && successfulTargets.length > 0 && executeRollbackStep) {
+    rollback.required = true;
+    for (const entry of successfulTargets.slice().reverse()) {
+      const rollbackOperation = publicationOperationForTarget(entry.connector, 'unpublish');
+      if (!rollbackOperation) continue;
+      let rollbackResult;
+      try {
+        rollbackResult = await executeRollbackStep({
+          target: entry.target,
+          connector: entry.connector,
+          operation: rollbackOperation,
+          input: {
+            ...(entry.data && typeof entry.data === 'object' ? entry.data : {}),
+            rollbackReason: 'publication_distribution_failure',
+            failedStrategy: plan.strategy,
+          },
+        });
+      } catch (err) {
+        rollbackResult = {
+          ok: false,
+          errorCode: 'CONNECTOR_FAILURE',
+          message: redactSensitive(err && err.message ? err.message : 'publication_rollback_failed'),
+          data: null,
+        };
+      }
+      rollback.attemptedCount += 1;
+      if (rollbackResult && rollbackResult.ok) {
+        rollback.successCount += 1;
+      } else {
+        rollback.failedCount += 1;
+      }
+      rollback.items.push({
+        target: entry.target,
+        connector: entry.connector,
+        operation: rollbackOperation,
+        ok: Boolean(rollbackResult && rollbackResult.ok),
+        errorCode: rollbackResult && rollbackResult.errorCode ? String(rollbackResult.errorCode) : null,
+        message: rollbackResult && rollbackResult.message ? String(rollbackResult.message) : null,
+      });
+      const matched = results.find((candidate) => candidate.target === entry.target && candidate.connector === entry.connector);
+      if (matched) {
+        matched.rollbacked = true;
+      }
+    }
+  }
+
   return {
     ok,
     errorCode: ok ? null : 'CONNECTOR_FAILURE',
@@ -5897,9 +6046,12 @@ async function executePublicationDistributionPlan(plan, options = {}) {
     data: {
       kind: plan.kind,
       strategy: plan.strategy,
+      rollbackOnFailure: plan.rollbackOnFailure,
+      verifyAfterPublish: plan.verifyAfterPublish,
       requiredSuccesses: plan.requiredSuccesses,
       successCount,
       attemptedCount: results.length,
+      rollback,
       targets: results,
     },
   };
@@ -5917,6 +6069,13 @@ async function executeLiveConnector(connectorId, options = {}) {
           operation: step.operation,
           input: step.input,
           idempotencyKey: `${String(options.idempotencyKey || 'publication_plan')}::${step.connector}::${step.operation}::${step.index}`,
+          _skipPublicationPlan: true,
+        }),
+        executeRollbackStep: async (step) => executeLiveConnector(step.connector, {
+          ...options,
+          operation: step.operation,
+          input: step.input,
+          idempotencyKey: `${String(options.idempotencyKey || 'publication_plan')}::rollback::${step.connector}::${step.operation}`,
           _skipPublicationPlan: true,
         }),
       });

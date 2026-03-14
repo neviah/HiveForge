@@ -619,7 +619,7 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 
 ## **Future Feature Candidates**
 
-1. Per-target release state reconciliation, rollback orchestration, and post-publish verification across publication endpoints.
+1. Automated release drift detection and self-healing replay plans for publication endpoints when post-publish verification degrades over time.
 
 ## **Definition of Operational Readiness**
 

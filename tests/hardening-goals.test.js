@@ -249,6 +249,50 @@ test('publication distribution fallback stops after first success', async () => 
   assert.equal(result.data.attemptedCount, 2);
 });
 
+test('publication distribution broadcast triggers rollback when threshold is not met', async () => {
+  const plan = buildPublicationDistributionPlan('custom_cms', 'publish_book', {
+    distribution_targets: ['custom_cms', 'substack', 'gumroad'],
+    distribution_strategy: 'broadcast',
+    required_successes: 2,
+    rollback_on_failure: true,
+  });
+
+  const rollbackCalls = [];
+  const result = await executePublicationDistributionPlan(plan, {
+    executeStep: async (step) => {
+      if (step.connector === 'custom_cms') {
+        return {
+          ok: true,
+          message: 'custom ok',
+          actualCost: 0,
+          data: { publicationId: 'pub_1' },
+        };
+      }
+      return {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: `${step.connector} failed`,
+        actualCost: 0,
+        data: null,
+      };
+    },
+    executeRollbackStep: async (step) => {
+      rollbackCalls.push(`${step.connector}:${step.operation}`);
+      return {
+        ok: true,
+        message: 'rollback ok',
+        actualCost: 0,
+        data: { unpublished: true },
+      };
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.data.rollback.required, true);
+  assert.equal(result.data.rollback.attemptedCount, 1);
+  assert.deepEqual(rollbackCalls, ['custom_cms:unpublish_publication']);
+});
+
 test('support routing guardrails block low-confidence autonomous replies', () => {
   const routing = evaluateSupportAutonomyRouting({
     connector: 'support_ticket',
@@ -379,8 +423,38 @@ test('finance settlement exception runbook processing stores and escalates high 
 
 test('reconciliation policy flags eventual consistency operations', () => {
   assert.equal(shouldReconcileConnectorExecution('netlify', 'trigger_deploy'), true);
+  assert.equal(shouldReconcileConnectorExecution('custom_cms', 'publish_book'), true);
   assert.equal(shouldReconcileConnectorExecution('github', 'create_issue'), false);
   assert.equal(shouldReconcileConnectorExecution('stripe', 'create_refund'), false);
+});
+
+test('publication reconciliation verifies per-target release evidence', async () => {
+  const result = await reconcileConnectorExecution('custom_cms', 'publish_book', {
+    ok: true,
+    data: {
+      strategy: 'broadcast',
+      targets: [
+        {
+          target: 'custom_cms',
+          connector: 'custom_cms',
+          ok: true,
+          data: { publicationId: 'pub_123' },
+        },
+        {
+          target: 'substack',
+          connector: 'substack',
+          ok: true,
+          data: {},
+        },
+      ],
+    },
+  });
+
+  assert.equal(result.checked, true);
+  assert.equal(result.ok, false);
+  assert.equal(result.pending, true);
+  assert.equal(Array.isArray(result.targetChecks), true);
+  assert.equal(result.targetChecks.find((entry) => entry.target === 'substack')?.pending, true);
 });
 
 test('netlify reconciliation returns pending when deploy identity is incomplete', async () => {
