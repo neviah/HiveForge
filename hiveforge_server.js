@@ -742,6 +742,196 @@ function ensureFinanceExceptionState(projectState) {
   }
 }
 
+function ensurePublicationHealthState(projectState) {
+  if (!projectState.publicationHealth || typeof projectState.publicationHealth !== 'object') {
+    projectState.publicationHealth = {
+      driftEvents: [],
+      lastCheckedAt: null,
+      lastSelfHealAt: null,
+      lastSelfHealSummary: null,
+    };
+  }
+  if (!Array.isArray(projectState.publicationHealth.driftEvents)) {
+    projectState.publicationHealth.driftEvents = [];
+  }
+}
+
+function appendPublicationDriftEvent(projectState, event = {}) {
+  ensurePublicationHealthState(projectState);
+  const record = {
+    id: crypto.randomUUID(),
+    ts: nowIso(),
+    kind: String(event.kind || 'publication_drift').trim().toLowerCase(),
+    target: event.target ? String(event.target).trim().toLowerCase() : null,
+    summary: String(event.summary || 'Publication drift detected.'),
+    expected: event.expected && typeof event.expected === 'object' ? event.expected : {},
+    observed: event.observed && typeof event.observed === 'object' ? event.observed : {},
+    source: String(event.source || 'runtime').trim().toLowerCase(),
+    healed: event.healed === true,
+  };
+  projectState.publicationHealth.driftEvents.unshift(record);
+  if (projectState.publicationHealth.driftEvents.length > 200) {
+    projectState.publicationHealth.driftEvents.length = 200;
+  }
+  return record;
+}
+
+function buildPublicationDriftReplayPlan(execution = {}, reconciliation = {}, context = {}) {
+  const data = execution && execution.data && typeof execution.data === 'object' ? execution.data : {};
+  const targets = Array.isArray(data.targets) ? data.targets : [];
+  const checks = Array.isArray(reconciliation && reconciliation.targetChecks) ? reconciliation.targetChecks : [];
+  const mode = String(context.mode || 'publish').trim().toLowerCase();
+  const source = String(context.source || 'publication_execution').trim().toLowerCase();
+  const replayForMode = mode === 'unpublish' ? 'unpublish' : (mode === 'update' ? 'update' : 'publish');
+
+  const targetMap = new Map();
+  targets.forEach((entry) => {
+    const key = String(entry && (entry.target || entry.connector) || '').trim().toLowerCase();
+    if (!key) return;
+    targetMap.set(key, entry);
+  });
+
+  const driftTargets = checks
+    .filter((entry) => !entry.ok || entry.pending || entry.rollbacked)
+    .map((entry) => String(entry.target || '').trim().toLowerCase())
+    .filter(Boolean);
+  const uniqueTargets = Array.from(new Set(driftTargets));
+  const steps = uniqueTargets.map((target, index) => {
+    const operation = publicationOperationForTarget(target, replayForMode);
+    if (!operation) return null;
+    const prior = targetMap.get(target);
+    const priorData = prior && prior.data && typeof prior.data === 'object' ? prior.data : {};
+    return {
+      index,
+      target,
+      connector: target,
+      operation,
+      input: {
+        ...priorData,
+        provider: target,
+        replayReason: 'publication_drift',
+        replaySource: source,
+      },
+    };
+  }).filter(Boolean);
+
+  if (!steps.length) {
+    return null;
+  }
+
+  return {
+    replayMode: replayForMode,
+    source,
+    steps,
+  };
+}
+
+async function executePublicationDriftSelfHeal(projectState, options = {}) {
+  ensurePublicationHealthState(projectState);
+  const execution = options.execution && typeof options.execution === 'object' ? options.execution : null;
+  const reconciliation = options.reconciliation && typeof options.reconciliation === 'object' ? options.reconciliation : null;
+  const context = options.context && typeof options.context === 'object' ? options.context : {};
+
+  projectState.publicationHealth.lastCheckedAt = nowIso();
+  if (!execution || !reconciliation || reconciliation.ok || !Array.isArray(reconciliation.targetChecks)) {
+    return { checked: false, driftDetected: false, replayed: 0, healed: true, replay: null };
+  }
+
+  const replayPlan = buildPublicationDriftReplayPlan(execution, reconciliation, context);
+  if (!replayPlan) {
+    return { checked: true, driftDetected: false, replayed: 0, healed: true, replay: null };
+  }
+
+  const driftEvents = replayPlan.steps.map((step) => appendPublicationDriftEvent(projectState, {
+    kind: 'publication_drift',
+    target: step.target,
+    summary: `Publication drift detected for ${step.target}; planning ${step.operation} replay.`,
+    expected: { operation: step.operation, mode: replayPlan.replayMode },
+    observed: { reconciliationReason: reconciliation.reason || null },
+    source: replayPlan.source,
+    healed: false,
+  }));
+
+  const replayResult = await executePublicationDistributionPlan({
+    kind: replayPlan.replayMode,
+    baseConnector: 'publication_self_heal',
+    baseOperation: replayPlan.replayMode,
+    strategy: 'broadcast',
+    rollbackOnFailure: false,
+    verifyAfterPublish: true,
+    requiredSuccesses: replayPlan.steps.length,
+    targets: replayPlan.steps.map((step) => step.target),
+    steps: replayPlan.steps,
+  }, {
+    executeStep: async (step) => executeLiveConnector(step.connector, {
+      operation: step.operation,
+      input: step.input,
+      projectId: projectState.id,
+      idempotencyKey: `${String(context.executionKey || 'publication_drift')}::replay::${step.connector}::${step.operation}::${step.index}`,
+      _skipPublicationPlan: true,
+    }),
+  });
+
+  const replayTargets = Array.isArray(replayResult && replayResult.data && replayResult.data.targets)
+    ? replayResult.data.targets
+    : [];
+  replayTargets.forEach((entry) => {
+    const match = driftEvents.find((event) => event.target === String(entry.target || entry.connector || '').trim().toLowerCase());
+    if (match) {
+      match.healed = Boolean(entry.ok);
+      match.observed = {
+        ...(match.observed || {}),
+        replayMessage: entry.message || null,
+      };
+    }
+  });
+
+  const replayReconciliation = await reconcileConnectorExecution('custom_cms', 'publish_book', replayResult, {
+    projectId: projectState.id,
+    executionKey: `${String(context.executionKey || 'publication_drift')}::replay`,
+  });
+
+  const healed = Boolean(replayResult && replayResult.ok) && Boolean(replayReconciliation && replayReconciliation.ok);
+  const ts = nowIso();
+  projectState.publicationHealth.lastSelfHealAt = ts;
+  projectState.publicationHealth.lastSelfHealSummary = {
+    ts,
+    driftDetected: true,
+    replayed: replayPlan.steps.length,
+    replayOk: Boolean(replayResult && replayResult.ok),
+    reconciliationOk: Boolean(replayReconciliation && replayReconciliation.ok),
+    healed,
+  };
+
+  appendProjectLog(projectState, healed ? 'fix' : 'warning', {
+    kind: healed ? 'publication_drift_self_healed' : 'publication_drift_self_heal_failed',
+    replayMode: replayPlan.replayMode,
+    replayedTargets: replayPlan.steps.map((step) => step.target),
+    replayResult: replayResult && replayResult.data ? replayResult.data : null,
+    reconciliation: replayReconciliation,
+  });
+  appendMessageBusEntry({
+    projectId: projectState.id,
+    from: 'coordinator',
+    to: 'publication_reliability_engine',
+    kind: healed ? 'publication_drift_self_healed' : 'publication_drift_self_heal_failed',
+    payload: {
+      replayMode: replayPlan.replayMode,
+      replayedTargets: replayPlan.steps.map((step) => step.target),
+      healed,
+    },
+  });
+
+  return {
+    checked: true,
+    driftDetected: true,
+    replayed: replayPlan.steps.length,
+    healed,
+    replay: replayResult,
+    reconciliation: replayReconciliation,
+  };
+}
+
 function evaluateFinanceSettlementExceptions(connectorId, operation, executionResult, context = {}) {
   const connector = String(connectorId || '').trim().toLowerCase();
   const op = String(operation || '').trim().toLowerCase();
@@ -1590,6 +1780,7 @@ function summarizeProjectAutomation(projectState) {
   ensureRecurringState(projectState);
   ensureDeadLetterState(projectState);
   ensureFinanceExceptionState(projectState);
+  ensurePublicationHealthState(projectState);
   ensureApprovalGovernanceState(projectState);
   ensureOperationalLoopState(projectState);
   return {
@@ -1631,6 +1822,12 @@ function summarizeProjectAutomation(projectState) {
     financeExceptions: {
       count: projectState.financeExceptions.length,
       criticalOpen: projectState.financeExceptions.filter((item) => String(item && item.severity || '').toLowerCase() === 'critical').length,
+    },
+    publicationHealth: {
+      driftEvents: projectState.publicationHealth.driftEvents.length,
+      lastCheckedAt: projectState.publicationHealth.lastCheckedAt || null,
+      lastSelfHealAt: projectState.publicationHealth.lastSelfHealAt || null,
+      lastSelfHealSummary: projectState.publicationHealth.lastSelfHealSummary || null,
     },
   };
 }
@@ -2231,6 +2428,15 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
       siteId: String(action?.input?.siteId || ''),
       executionKey,
     });
+    const publicationDriftSelfHeal = await executePublicationDriftSelfHeal(projectState, {
+      execution,
+      reconciliation,
+      context: {
+        mode: publicationOperationKind(action.operation),
+        source: 'recurring_auto_action',
+        executionKey,
+      },
+    });
     const financeExceptions = await processFinanceSettlementExceptions(projectState, {
       connector: action.connector,
       operation: action.operation,
@@ -2252,6 +2458,7 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
       actualCost,
       executionKey,
       reconciliation,
+      publicationDriftSelfHeal,
       supportRouting: supportRouting.route,
       financeGuardrail: financeGuardrail.route,
       financeExceptions,
@@ -2263,6 +2470,7 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
       actualCost,
       result: execution.data || null,
       reconciliation,
+      publicationDriftSelfHeal,
       financeExceptions,
     });
     if (reconciliation && reconciliation.checked && !reconciliation.ok) {
@@ -3357,6 +3565,7 @@ function recoverProjectStateAfterRestart(state) {
   ensureOperationalLoopState(state);
   ensureDeadLetterState(state);
   ensureFinanceExceptionState(state);
+  ensurePublicationHealthState(state);
   ensureConnectorExecutionState(state);
   if (!state.kpiAlerting || typeof state.kpiAlerting !== 'object') {
     state.kpiAlerting = { lastSentAt: null, lastSignature: null };
@@ -3492,6 +3701,12 @@ function createProjectFromTemplate({ name, template, goal }) {
     },
     deadLetters: [],
     financeExceptions: [],
+    publicationHealth: {
+      driftEvents: [],
+      lastCheckedAt: null,
+      lastSelfHealAt: null,
+      lastSelfHealSummary: null,
+    },
     connectorExecutions: {},
     kpiAlerting: {
       lastSentAt: null,
@@ -3874,6 +4089,7 @@ function refreshWeeklyKpiPlan(projectState, ts = nowIso()) {
 function makeAnalyticsSnapshot(projectState) {
   ensureKpiGoalState(projectState);
   ensureFinanceExceptionState(projectState);
+  ensurePublicationHealthState(projectState);
   const done = projectState.tasks.filter((t) => t.status === 'done').length;
   const inProgress = projectState.tasks.filter((t) => t.status === 'inprogress').length;
   const backlog = projectState.tasks.filter((t) => t.status === 'backlog').length;
@@ -3903,6 +4119,21 @@ function makeAnalyticsSnapshot(projectState) {
     weeklyPlan: insight.goals.weeklyPlan,
     deadLetters: Array.isArray(projectState.deadLetters) ? projectState.deadLetters.slice(0, 20) : [],
     financeExceptions: Array.isArray(projectState.financeExceptions) ? projectState.financeExceptions.slice(0, 20) : [],
+    publicationHealth: projectState.publicationHealth && typeof projectState.publicationHealth === 'object'
+      ? {
+        lastCheckedAt: projectState.publicationHealth.lastCheckedAt || null,
+        lastSelfHealAt: projectState.publicationHealth.lastSelfHealAt || null,
+        lastSelfHealSummary: projectState.publicationHealth.lastSelfHealSummary || null,
+        driftEvents: Array.isArray(projectState.publicationHealth.driftEvents)
+          ? projectState.publicationHealth.driftEvents.slice(0, 20)
+          : [],
+      }
+      : {
+        lastCheckedAt: null,
+        lastSelfHealAt: null,
+        lastSelfHealSummary: null,
+        driftEvents: [],
+      },
     lastUpdated: nowIso()
   };
 }
@@ -8503,6 +8734,8 @@ module.exports = {
   processFinanceSettlementExceptions,
   buildPublicationDistributionPlan,
   executePublicationDistributionPlan,
+  buildPublicationDriftReplayPlan,
+  executePublicationDriftSelfHeal,
   markConnectorExecutionRecord,
   appendApprovalDecisionAudit,
   readApprovalDecisionAudit,

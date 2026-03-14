@@ -619,7 +619,7 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 
 ## **Future Feature Candidates**
 
-1. Automated release drift detection and self-healing replay plans for publication endpoints when post-publish verification degrades over time.
+1. Publication reliability SLOs with anomaly alerting and coordinator-owned incident runbooks for repeated drift or replay exhaustion.
 
 ## **Definition of Operational Readiness**
 

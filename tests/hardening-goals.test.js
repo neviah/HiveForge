@@ -21,6 +21,8 @@ const {
   processFinanceSettlementExceptions,
   buildPublicationDistributionPlan,
   executePublicationDistributionPlan,
+  buildPublicationDriftReplayPlan,
+  executePublicationDriftSelfHeal,
   markConnectorExecutionRecord,
   appendApprovalDecisionAudit,
   readApprovalDecisionAudit,
@@ -455,6 +457,80 @@ test('publication reconciliation verifies per-target release evidence', async ()
   assert.equal(result.pending, true);
   assert.equal(Array.isArray(result.targetChecks), true);
   assert.equal(result.targetChecks.find((entry) => entry.target === 'substack')?.pending, true);
+});
+
+test('publication drift replay plan targets only unhealthy publication endpoints', () => {
+  const replayPlan = buildPublicationDriftReplayPlan({
+    ok: false,
+    data: {
+      strategy: 'broadcast',
+      targets: [
+        { target: 'custom_cms', ok: true, data: { publicationId: 'pub_1' } },
+        { target: 'substack', ok: false, data: null },
+      ],
+    },
+  }, {
+    ok: false,
+    pending: true,
+    targetChecks: [
+      { target: 'custom_cms', ok: true, pending: false, rollbacked: false },
+      { target: 'substack', ok: false, pending: true, rollbacked: false },
+    ],
+  }, {
+    mode: 'publish',
+    source: 'reconciliation',
+  });
+
+  assert.ok(replayPlan);
+  assert.equal(replayPlan.replayMode, 'publish');
+  assert.deepEqual(replayPlan.steps.map((entry) => `${entry.connector}:${entry.operation}`), ['substack:publish_post']);
+});
+
+test('publication drift self-heal replays failing targets and records health summary', async () => {
+  const state = {
+    id: projectId('publication-self-heal'),
+    logs: [],
+    publicationHealth: {
+      driftEvents: [],
+      lastCheckedAt: null,
+      lastSelfHealAt: null,
+      lastSelfHealSummary: null,
+    },
+  };
+
+  const summary = await executePublicationDriftSelfHeal(state, {
+    execution: {
+      ok: false,
+      data: {
+        strategy: 'broadcast',
+        targets: [
+          { target: 'custom_cms', connector: 'custom_cms', ok: true, data: { publicationId: 'pub_ok' } },
+          { target: 'substack', connector: 'substack', ok: false, data: null },
+        ],
+      },
+    },
+    reconciliation: {
+      ok: false,
+      pending: true,
+      reason: 'Publication verification pending for 1 target(s).',
+      targetChecks: [
+        { target: 'custom_cms', ok: true, pending: false, rollbacked: false },
+        { target: 'substack', ok: false, pending: true, rollbacked: false },
+      ],
+    },
+    context: {
+      mode: 'publish',
+      executionKey: 'pub::selfheal::1',
+      source: 'test',
+    },
+  });
+
+  assert.equal(summary.checked, true);
+  assert.equal(summary.driftDetected, true);
+  assert.equal(summary.replayed, 1);
+  assert.equal(typeof state.publicationHealth.lastSelfHealSummary, 'object');
+  assert.equal(Array.isArray(state.publicationHealth.driftEvents), true);
+  assert.equal(state.publicationHealth.driftEvents.length > 0, true);
 });
 
 test('netlify reconciliation returns pending when deploy identity is incomplete', async () => {
