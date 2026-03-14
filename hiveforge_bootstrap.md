@@ -604,6 +604,8 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 13. Autonomy connector expansion: API-gateway-backed business operations for marketing (Google Ads optimization), support (inbox triage), and finance (Stripe balance/reconciliation loop actions).
 14. Google Ads autonomy hardening: campaign lifecycle operation support plus automated guardrails for required fields, policy-budget sanity, and KPI spend-variance gating.
 15. Support autonomy expansion: website support chat/ticket connector adapters, SLA-aware routing controls, and confidence-gated auto-response escalation logic.
+16. Finance lifecycle automation: recurring invoice/refund/collections loops with Stripe actions plus cashflow variance and reserve guardrails in connector execution.
+17. Publishing autonomy pack: story bible/chapter pipeline contract, continuity + humanization loops, and connector-backed release workflow trigger.
 
 ## **Next Critical Milestones**
 
@@ -612,12 +614,12 @@ This is the active short-list to drive HiveForge from advanced prototype to full
    - Continue from Future Feature Candidates and extended connector coverage priorities.
 
 2. **Autonomous Operations Completion Track**
-   - Add finance automation flows (invoice/refund/collections lifecycle and cashflow variance actions).
-   - Build publishing/book autonomy pack (story bible, chapter loop, continuity validator, humanization pass).
+   - Add provider adapters for publication endpoints (KDP/Gumroad/Substack/custom CMS) behind the release workflow trigger.
+   - Add finance settlement/reconciliation exception handling and dispute automation runbooks.
 
 ## **Future Feature Candidates**
 
-1. Publishing autonomy workflow template pack with chapter-by-chapter drafting, continuity checks, and iterative feedback/humanization loop controls.
+1. Direct book publishing connectors (for example, KDP or Substack APIs) with Coordinator-gated publish/unpublish/version operations.
 
 ## **Definition of Operational Readiness**
 

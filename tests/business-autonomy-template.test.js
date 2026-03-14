@@ -19,10 +19,16 @@ test('business recurring loops include autonomous connector actions', () => {
   const ads = loops.find((entry) => entry.key === 'business_ads_loop');
   const support = loops.find((entry) => entry.key === 'business_support_loop');
   const analytics = loops.find((entry) => entry.key === 'business_analytics_loop');
+  const invoice = loops.find((entry) => entry.key === 'business_finance_invoice_loop');
+  const collections = loops.find((entry) => entry.key === 'business_finance_collections_loop');
+  const refunds = loops.find((entry) => entry.key === 'business_finance_refund_loop');
 
   assert.ok(ads);
   assert.ok(support);
   assert.ok(analytics);
+  assert.ok(invoice);
+  assert.ok(collections);
+  assert.ok(refunds);
 
   assert.equal(ads.action?.type, 'connector');
   assert.equal(ads.action?.connector, 'google_ads');
@@ -35,4 +41,13 @@ test('business recurring loops include autonomous connector actions', () => {
   assert.equal(analytics.action?.type, 'connector');
   assert.equal(analytics.action?.connector, 'stripe');
   assert.equal(analytics.action?.operation, 'get_balance');
+
+  assert.equal(invoice.action?.connector, 'stripe');
+  assert.equal(invoice.action?.operation, 'create_invoice');
+
+  assert.equal(collections.action?.connector, 'stripe');
+  assert.equal(collections.action?.operation, 'create_payment_intent');
+
+  assert.equal(refunds.action?.connector, 'stripe');
+  assert.equal(refunds.action?.operation, 'create_refund');
 });

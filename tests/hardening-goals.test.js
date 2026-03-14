@@ -16,6 +16,7 @@ const {
   reconcileConnectorExecution,
   evaluateGoogleAdsGuardrails,
   evaluateSupportAutonomyRouting,
+  evaluateFinanceAutonomyGuardrails,
   markConnectorExecutionRecord,
   appendApprovalDecisionAudit,
   readApprovalDecisionAudit,
@@ -210,6 +211,55 @@ test('support routing guardrails allow triage with escalation when SLA is breach
 
   assert.equal(routing.ok, true);
   assert.equal(routing.route?.escalate, true);
+});
+
+test('finance guardrails block refunds above policy cap', () => {
+  const guardrail = evaluateFinanceAutonomyGuardrails({
+    connector: 'stripe',
+    operation: 'create_refund',
+    input: {
+      amount: 420,
+      maxRefundAmount: 300,
+      minCashReserve: 500,
+      currentCashReserve: 2000,
+    },
+  });
+
+  assert.equal(guardrail.ok, false);
+  assert.equal(Boolean((guardrail.checks || []).find((entry) => entry.id === 'finance_refund_cap' && !entry.ok)), true);
+});
+
+test('finance guardrails require variance trigger for invoice automation', () => {
+  const state = {
+    id: projectId('finance-variance-trigger'),
+    tasks: [
+      { id: 'D-1', status: 'done', completedAt: new Date().toISOString() },
+      { id: 'B-1', status: 'backlog' },
+    ],
+    agents: [],
+    deadLetters: [],
+    kpiGoals: {
+      weeklyTasksDoneTarget: 10,
+      maxBacklog: 5,
+      maxMonthlySpend: 5000,
+      weeklyPlan: { weekStart: new Date().toISOString(), lastPlannedAt: null, nextReviewAt: null, summary: null },
+    },
+  };
+
+  const guardrail = evaluateFinanceAutonomyGuardrails({
+    connector: 'stripe',
+    operation: 'create_invoice',
+    input: {
+      amount: 500,
+      triggerWhenMonthlySpendVarianceAbove: 100,
+      minCashReserve: 100,
+      currentCashReserve: 800,
+    },
+    projectState: state,
+  });
+
+  assert.equal(guardrail.ok, false);
+  assert.equal(Boolean((guardrail.checks || []).find((entry) => entry.id === 'finance_cashflow_variance_trigger' && !entry.ok)), true);
 });
 
 test('reconciliation policy flags eventual consistency operations', () => {

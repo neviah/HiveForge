@@ -171,6 +171,69 @@
                                            },
                                 "every_ms":  14400000,
                                 "enabled":  true
+                            },
+                            {
+                                "key":  "business_finance_invoice_loop",
+                                "title":  "Issue invoices when spend variance exceeds plan",
+                                "phase":  "finance",
+                                "owner_role":  "Finance Tracker",
+                                "action":  {
+                                               "type":  "connector",
+                                               "connector":  "stripe",
+                                               "operation":  "create_invoice",
+                                               "estimated_cost":  2,
+                                               "input":  {
+                                                             "amount":  1200,
+                                                             "triggerWhenMonthlySpendVarianceAbove":  150,
+                                                             "minCashReserve":  500,
+                                                             "currentCashReserve":  1500
+                                                         },
+                                               "requires_permission":  false
+                                           },
+                                "every_ms":  21600000,
+                                "enabled":  true
+                            },
+                            {
+                                "key":  "business_finance_collections_loop",
+                                "title":  "Run overdue collections and payment intent capture",
+                                "phase":  "finance",
+                                "owner_role":  "Finance Tracker",
+                                "action":  {
+                                               "type":  "connector",
+                                               "connector":  "stripe",
+                                               "operation":  "create_payment_intent",
+                                               "estimated_cost":  1,
+                                               "input":  {
+                                                             "amount":  650,
+                                                             "triggerWhenMonthlySpendVarianceAbove":  75,
+                                                             "minCashReserve":  500,
+                                                             "currentCashReserve":  1400
+                                                         },
+                                               "requires_permission":  false
+                                           },
+                                "every_ms":  25200000,
+                                "enabled":  true
+                            },
+                            {
+                                "key":  "business_finance_refund_loop",
+                                "title":  "Process eligible refunds under policy guardrails",
+                                "phase":  "finance",
+                                "owner_role":  "Finance Tracker",
+                                "action":  {
+                                               "type":  "connector",
+                                               "connector":  "stripe",
+                                               "operation":  "create_refund",
+                                               "estimated_cost":  1,
+                                               "input":  {
+                                                             "amount":  120,
+                                                             "maxRefundAmount":  300,
+                                                             "minCashReserve":  500,
+                                                             "currentCashReserve":  1600
+                                                         },
+                                               "requires_permission":  false
+                                           },
+                                "every_ms":  28800000,
+                                "enabled":  true
                             }
                         ],
     "auto_staffing_policy":  {

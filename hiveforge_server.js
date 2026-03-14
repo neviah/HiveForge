@@ -1855,9 +1855,35 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
       return;
     }
 
+    const financeGuardrail = evaluateFinanceAutonomyGuardrails({
+      connector: action.connector,
+      operation: action.operation,
+      input: action.input || {},
+      actorRole,
+      projectState,
+    });
+    if (!financeGuardrail.ok) {
+      scheduleAutoActionRetry(projectState, task, financeGuardrail.summary, {
+        connector: action.connector,
+        operation: action.operation,
+        actorRole,
+        source,
+        executionKey,
+        financeGuardrail,
+      });
+      markConnectorExecutionRecord(projectState, executionKey, {
+        status: 'failed',
+        lastError: financeGuardrail.summary,
+        checks: financeGuardrail.checks,
+      });
+      persistProjectState(projectState);
+      return;
+    }
+
     const actionInput = {
       ...(action.input && typeof action.input === 'object' ? action.input : {}),
       supportRouting: supportRouting.route,
+      financeGuardrail: financeGuardrail.route,
     };
     const execution = await executeLiveConnector(action.connector, {
       operation: action.operation,
@@ -1904,6 +1930,7 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
       executionKey,
       reconciliation,
       supportRouting: supportRouting.route,
+      financeGuardrail: financeGuardrail.route,
     });
     markConnectorExecutionRecord(projectState, executionKey, {
       status: 'succeeded',
@@ -4958,6 +4985,91 @@ function evaluateSupportAutonomyRouting(options = {}) {
   };
 }
 
+function evaluateFinanceAutonomyGuardrails(options = {}) {
+  const connector = String(options.connector || '').trim().toLowerCase();
+  const operation = String(options.operation || '').trim().toLowerCase();
+  const input = options.input && typeof options.input === 'object' ? options.input : {};
+  const projectState = options.projectState && typeof options.projectState === 'object' ? options.projectState : null;
+
+  if (connector !== 'stripe') {
+    return {
+      ok: true,
+      checks: [],
+      summary: 'Finance guardrails not required for this connector.',
+      route: null,
+    };
+  }
+
+  const lifecycleOps = new Set(['create_invoice', 'create_refund', 'create_payment_intent']);
+  if (!lifecycleOps.has(operation)) {
+    return {
+      ok: true,
+      checks: [],
+      summary: 'Finance guardrails not required for this operation.',
+      route: null,
+    };
+  }
+
+  const amount = clampNumber(input.amount ?? input.invoiceAmount ?? input.refundAmount, 0, 0, 1000000000);
+  const maxRefundAmount = clampNumber(input.maxRefundAmount, 5000, 0, 1000000000);
+  const minCashReserve = clampNumber(input.minCashReserve, 0, 0, 1000000000);
+  const currentCashReserve = clampNumber(input.currentCashReserve ?? input.availableBalance ?? input.cashReserve, minCashReserve, 0, 1000000000);
+  const spendVarianceTrigger = Number.isFinite(Number(input.triggerWhenMonthlySpendVarianceAbove))
+    ? Number(input.triggerWhenMonthlySpendVarianceAbove)
+    : null;
+  const insight = projectState ? computeKpiVarianceAndAlerts(projectState) : null;
+  const monthlySpendVariance = Number(insight && insight.variance && insight.variance.monthlySpend || 0);
+
+  const checks = [];
+  if (operation === 'create_refund') {
+    checks.push({
+      id: 'finance_refund_cap',
+      ok: amount <= maxRefundAmount,
+      reason: amount <= maxRefundAmount
+        ? `Refund amount $${amount.toFixed(2)} is within cap $${maxRefundAmount.toFixed(2)}.`
+        : `Refund amount $${amount.toFixed(2)} exceeds cap $${maxRefundAmount.toFixed(2)}.`,
+      detail: { amount, maxRefundAmount },
+    });
+  }
+
+  checks.push({
+    id: 'finance_cash_reserve',
+    ok: currentCashReserve >= minCashReserve,
+    reason: currentCashReserve >= minCashReserve
+      ? `Cash reserve $${currentCashReserve.toFixed(2)} is above minimum $${minCashReserve.toFixed(2)}.`
+      : `Cash reserve $${currentCashReserve.toFixed(2)} is below minimum $${minCashReserve.toFixed(2)}.`,
+    detail: { currentCashReserve, minCashReserve },
+  });
+
+  if (spendVarianceTrigger !== null && (operation === 'create_invoice' || operation === 'create_payment_intent')) {
+    checks.push({
+      id: 'finance_cashflow_variance_trigger',
+      ok: monthlySpendVariance >= spendVarianceTrigger,
+      reason: monthlySpendVariance >= spendVarianceTrigger
+        ? `Monthly spend variance $${monthlySpendVariance.toFixed(2)} meets trigger $${spendVarianceTrigger.toFixed(2)}.`
+        : `Monthly spend variance $${monthlySpendVariance.toFixed(2)} is below trigger $${spendVarianceTrigger.toFixed(2)}.`,
+      detail: { monthlySpendVariance, spendVarianceTrigger },
+    });
+  }
+
+  const ok = checks.every((entry) => Boolean(entry.ok));
+  return {
+    ok,
+    checks,
+    summary: ok
+      ? 'Finance guardrails passed.'
+      : 'Finance guardrails failed. Escalate or adjust lifecycle action constraints.',
+    route: {
+      connector,
+      operation,
+      monthlySpendVariance,
+      amount,
+      minCashReserve,
+      currentCashReserve,
+    },
+  };
+}
+
 async function executeGoogleAdsConnector(options = {}) {
   const operation = String(options.operation || 'get_profile').trim() || 'get_profile';
   const token = readCredentialToken('google_ads');
@@ -6981,10 +7093,41 @@ async function main() {
                 }
               }
 
+              const runtimeForFinanceGuard = projectId ? projectRuntimes.get(projectId) : null;
+              const financeGuardrail = evaluateFinanceAutonomyGuardrails({
+                connector,
+                operation,
+                input,
+                actorRole,
+                projectState: runtimeForFinanceGuard && runtimeForFinanceGuard.state ? runtimeForFinanceGuard.state : null,
+              });
+              response.financeGuardrail = financeGuardrail.route;
+              if (response.ok && !financeGuardrail.ok) {
+                response.ok = false;
+                response.decision = 'deny';
+                response.reason = financeGuardrail.summary;
+                response.errorCode = 'PRECHECK_FAILED';
+                auditDecision = 'deny';
+                auditReason = financeGuardrail.summary;
+                auditErrorCode = 'PRECHECK_FAILED';
+                if (projectId && executionKey) {
+                  const runtime = projectRuntimes.get(projectId);
+                  if (runtime && runtime.state) {
+                    markConnectorExecutionRecord(runtime.state, executionKey, {
+                      status: 'failed',
+                      lastError: financeGuardrail.summary,
+                      checks: financeGuardrail.checks,
+                    });
+                    persistProjectState(runtime.state);
+                  }
+                }
+              }
+
               if (response.ok) {
                 const executionInput = {
                   ...input,
                   supportRouting: supportRouting.route,
+                  financeGuardrail: financeGuardrail.route,
                 };
                 const execution = await executeLiveConnector(connector, {
                   operation,
@@ -7583,6 +7726,7 @@ module.exports = {
   reconcileConnectorExecution,
   evaluateGoogleAdsGuardrails,
   evaluateSupportAutonomyRouting,
+  evaluateFinanceAutonomyGuardrails,
   markConnectorExecutionRecord,
   appendApprovalDecisionAudit,
   readApprovalDecisionAudit,
