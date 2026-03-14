@@ -619,7 +619,7 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 
 ## **Future Feature Candidates**
 
-1. Multi-target release orchestration across publication endpoints with Coordinator-gated publish/unpublish/version workflows and fallback sequencing.
+1. Per-target release state reconciliation, rollback orchestration, and post-publish verification across publication endpoints.
 
 ## **Definition of Operational Readiness**
 

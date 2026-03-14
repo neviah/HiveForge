@@ -158,10 +158,17 @@
                                                "operation":  "publish_book",
                                                "estimated_cost":  0,
                                                "input":  {
-                                                             "provider":  "substack",
                                                              "publication":  "book-production",
                                                              "slug":  "weekly-book-release",
-                                                             "visibility":  "public"
+                                                             "visibility":  "public",
+                                                             "distribution_targets":  [
+                                                                                          "custom_cms",
+                                                                                          "substack",
+                                                                                          "gumroad",
+                                                                                          "kdp"
+                                                                                      ],
+                                                             "distribution_strategy":  "broadcast",
+                                                             "required_successes":  2
                                                          },
                                                "requires_permission":  false
                                            },

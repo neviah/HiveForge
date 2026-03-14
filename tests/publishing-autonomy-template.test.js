@@ -37,6 +37,10 @@ test('publishing template includes book autonomy contract and release pipeline a
   assert.equal(releaseLoop.action?.type, 'connector');
   assert.equal(releaseLoop.action?.connector, 'custom_cms');
   assert.equal(releaseLoop.action?.operation, 'publish_book');
+  assert.ok(Array.isArray(releaseLoop.action?.input?.distribution_targets));
+  assert.ok(releaseLoop.action.input.distribution_targets.includes('gumroad'));
+  assert.equal(releaseLoop.action?.input?.distribution_strategy, 'broadcast');
+  assert.equal(releaseLoop.action?.input?.required_successes, 2);
 
   const growthAllowed = Array.isArray(roleCaps['Growth Hacker']?.allowed_connectors)
     ? roleCaps['Growth Hacker'].allowed_connectors

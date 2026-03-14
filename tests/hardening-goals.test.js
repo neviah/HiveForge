@@ -19,6 +19,8 @@ const {
   evaluateFinanceAutonomyGuardrails,
   evaluateFinanceSettlementExceptions,
   processFinanceSettlementExceptions,
+  buildPublicationDistributionPlan,
+  executePublicationDistributionPlan,
   markConnectorExecutionRecord,
   appendApprovalDecisionAudit,
   readApprovalDecisionAudit,
@@ -189,6 +191,62 @@ test('provider idempotency mode maps supported write operations', () => {
   assert.equal(connectorIdempotencyMode('kdp', 'publish_book'), 'native_token');
   assert.equal(connectorIdempotencyMode('analytics', 'list_accounts'), 'not_required');
   assert.equal(connectorIdempotencyMode('unknown_connector', 'create_anything'), 'not_required');
+});
+
+test('publication distribution plan maps targets to provider-specific operations', () => {
+  const plan = buildPublicationDistributionPlan('custom_cms', 'publish_book', {
+    publication: 'book-production',
+    distribution_targets: ['custom_cms', 'substack', 'gumroad', 'kdp'],
+    distribution_strategy: 'broadcast',
+    required_successes: 2,
+  });
+
+  assert.ok(plan);
+  assert.equal(plan.strategy, 'broadcast');
+  assert.equal(plan.requiredSuccesses, 2);
+  assert.deepEqual(
+    plan.steps.map((step) => `${step.connector}:${step.operation}`),
+    [
+      'custom_cms:publish_book',
+      'substack:publish_post',
+      'gumroad:publish_product',
+      'kdp:publish_book',
+    ]
+  );
+});
+
+test('publication distribution fallback stops after first success', async () => {
+  const plan = buildPublicationDistributionPlan('custom_cms', 'publish_book', {
+    distribution_targets: ['substack', 'gumroad', 'kdp'],
+    distribution_strategy: 'fallback',
+  });
+  const calls = [];
+
+  const result = await executePublicationDistributionPlan(plan, {
+    executeStep: async (step) => {
+      calls.push(step.connector);
+      if (step.connector === 'substack') {
+        return {
+          ok: false,
+          errorCode: 'CONNECTOR_FAILURE',
+          message: 'substack down',
+          actualCost: 0,
+          data: null,
+        };
+      }
+      return {
+        ok: true,
+        message: `${step.connector} ok`,
+        actualCost: 0,
+        data: { connector: step.connector },
+      };
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls, ['substack', 'gumroad']);
+  assert.equal(result.data.successCount, 1);
+  assert.equal(result.data.attemptedCount, 2);
 });
 
 test('support routing guardrails block low-confidence autonomous replies', () => {

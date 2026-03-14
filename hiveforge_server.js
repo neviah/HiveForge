@@ -5719,8 +5719,209 @@ async function executeCustomCmsConnector(options = {}) {
   };
 }
 
+function publicationOperationKind(operation) {
+  const normalized = String(operation || '').trim().toLowerCase();
+  if (['publish_book', 'publish_post', 'publish_product'].includes(normalized)) return 'publish';
+  if (['update_publication', 'update_post', 'update_product'].includes(normalized)) return 'update';
+  if (['unpublish_publication', 'unpublish_post', 'unpublish_product'].includes(normalized)) return 'unpublish';
+  return null;
+}
+
+function publicationOperationForTarget(target, kind) {
+  const connector = String(target || '').trim().toLowerCase();
+  if (kind === 'publish') {
+    if (connector === 'kdp') return 'publish_book';
+    if (connector === 'gumroad') return 'publish_product';
+    if (connector === 'substack') return 'publish_post';
+    if (connector === 'custom_cms') return 'publish_book';
+  }
+  if (kind === 'update') {
+    if (connector === 'kdp') return 'update_publication';
+    if (connector === 'gumroad') return 'update_product';
+    if (connector === 'substack') return 'update_post';
+    if (connector === 'custom_cms') return 'update_publication';
+  }
+  if (kind === 'unpublish') {
+    if (connector === 'kdp') return 'unpublish_publication';
+    if (connector === 'gumroad') return 'unpublish_product';
+    if (connector === 'substack') return 'unpublish_post';
+    if (connector === 'custom_cms') return 'unpublish_publication';
+  }
+  return null;
+}
+
+function normalizePublicationTargetList(rawTargets, fallbackConnector) {
+  const input = Array.isArray(rawTargets)
+    ? rawTargets
+    : (typeof rawTargets === 'string' && rawTargets.trim() ? rawTargets.split(',') : []);
+  const normalized = input
+    .map((entry) => String(entry || '').trim().toLowerCase())
+    .filter((entry) => ['kdp', 'gumroad', 'substack', 'custom_cms'].includes(entry));
+  if (normalized.length) {
+    return Array.from(new Set(normalized));
+  }
+  const fallback = String(fallbackConnector || '').trim().toLowerCase();
+  return fallback ? [fallback] : [];
+}
+
+function stripPublicationPlanConfig(input = {}) {
+  const next = { ...(input && typeof input === 'object' ? input : {}) };
+  delete next.distributionTargets;
+  delete next.distribution_targets;
+  delete next.distributionStrategy;
+  delete next.distribution_strategy;
+  delete next.requiredSuccesses;
+  delete next.required_successes;
+  delete next.fallbackOrder;
+  delete next.fallback_order;
+  return next;
+}
+
+function buildPublicationDistributionPlan(connectorId, operation, input = {}) {
+  const connector = String(connectorId || '').trim().toLowerCase();
+  const kind = publicationOperationKind(operation);
+  const rawTargets = input && typeof input === 'object'
+    ? (input.distributionTargets ?? input.distribution_targets ?? input.fallbackOrder ?? input.fallback_order)
+    : null;
+  if (!kind || (!rawTargets && !['kdp', 'gumroad', 'substack', 'custom_cms'].includes(connector))) {
+    return null;
+  }
+
+  const targets = normalizePublicationTargetList(rawTargets, connector);
+  if (targets.length <= 1) {
+    return null;
+  }
+
+  const strategyRaw = String((input && typeof input === 'object' ? (input.distributionStrategy ?? input.distribution_strategy) : '') || 'broadcast').trim().toLowerCase();
+  const strategy = strategyRaw === 'fallback' ? 'fallback' : 'broadcast';
+  const requiredSuccessesDefault = strategy === 'fallback' ? 1 : targets.length;
+  const requiredSuccesses = clampInt(
+    input && typeof input === 'object' ? (input.requiredSuccesses ?? input.required_successes) : requiredSuccessesDefault,
+    requiredSuccessesDefault,
+    1,
+    targets.length
+  );
+  const baseInput = stripPublicationPlanConfig(input);
+  const steps = targets.map((target, index) => {
+    const targetOperation = publicationOperationForTarget(target, kind);
+    return {
+      index,
+      target,
+      connector: target,
+      operation: targetOperation,
+      input: {
+        ...baseInput,
+        distributionTarget: target,
+        provider: target,
+      },
+    };
+  }).filter((step) => step.operation);
+
+  if (steps.length <= 1) {
+    return null;
+  }
+
+  return {
+    kind,
+    baseConnector: connector,
+    baseOperation: String(operation || '').trim().toLowerCase(),
+    strategy,
+    requiredSuccesses,
+    targets,
+    steps,
+  };
+}
+
+async function executePublicationDistributionPlan(plan, options = {}) {
+  const steps = Array.isArray(plan && plan.steps) ? plan.steps : [];
+  const executeStep = typeof options.executeStep === 'function' ? options.executeStep : null;
+  if (!steps.length || !executeStep) {
+    return {
+      ok: false,
+      errorCode: 'VALIDATION_ERROR',
+      operation: plan && plan.baseOperation ? plan.baseOperation : 'publish',
+      actualCost: 0,
+      message: 'Publication distribution plan is missing executable steps.',
+      data: { strategy: plan && plan.strategy ? plan.strategy : 'broadcast', targets: [] },
+    };
+  }
+
+  const results = [];
+  let actualCost = 0;
+  let successCount = 0;
+  for (const step of steps) {
+    let result;
+    try {
+      result = await executeStep(step);
+    } catch (err) {
+      result = {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: redactSensitive(err && err.message ? err.message : 'publication_distribution_step_failed'),
+        operation: step.operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+
+    const cost = Number.isFinite(Number(result && result.actualCost)) ? Number(result.actualCost) : 0;
+    actualCost += cost;
+    if (result && result.ok) {
+      successCount += 1;
+    }
+    results.push({
+      target: step.target,
+      connector: step.connector,
+      operation: step.operation,
+      ok: Boolean(result && result.ok),
+      errorCode: result && result.errorCode ? String(result.errorCode) : null,
+      message: result && result.message ? String(result.message) : null,
+      actualCost: cost,
+      data: result && Object.prototype.hasOwnProperty.call(result, 'data') ? result.data : null,
+    });
+
+    if (plan.strategy === 'fallback' && result && result.ok) {
+      break;
+    }
+  }
+
+  const ok = successCount >= Number(plan.requiredSuccesses || 1);
+  return {
+    ok,
+    errorCode: ok ? null : 'CONNECTOR_FAILURE',
+    operation: plan.baseOperation,
+    actualCost,
+    message: ok
+      ? `Publication distribution ${plan.strategy} completed with ${successCount}/${steps.length} successful targets.`
+      : `Publication distribution ${plan.strategy} failed with ${successCount}/${steps.length} successful targets.`,
+    data: {
+      kind: plan.kind,
+      strategy: plan.strategy,
+      requiredSuccesses: plan.requiredSuccesses,
+      successCount,
+      attemptedCount: results.length,
+      targets: results,
+    },
+  };
+}
+
 async function executeLiveConnector(connectorId, options = {}) {
   const connectorKey = String(connectorId || '').trim().toLowerCase();
+  const actionInput = options.input && typeof options.input === 'object' ? options.input : {};
+  if (!options._skipPublicationPlan) {
+    const publicationPlan = buildPublicationDistributionPlan(connectorKey, options.operation, actionInput);
+    if (publicationPlan) {
+      return executePublicationDistributionPlan(publicationPlan, {
+        executeStep: async (step) => executeLiveConnector(step.connector, {
+          ...options,
+          operation: step.operation,
+          input: step.input,
+          idempotencyKey: `${String(options.idempotencyKey || 'publication_plan')}::${step.connector}::${step.operation}::${step.index}`,
+          _skipPublicationPlan: true,
+        }),
+      });
+    }
+  }
   if (connectorKey === 'github') {
     return executeGithubConnector(options);
   }
@@ -8141,6 +8342,8 @@ module.exports = {
   evaluateFinanceAutonomyGuardrails,
   evaluateFinanceSettlementExceptions,
   processFinanceSettlementExceptions,
+  buildPublicationDistributionPlan,
+  executePublicationDistributionPlan,
   markConnectorExecutionRecord,
   appendApprovalDecisionAudit,
   readApprovalDecisionAudit,
