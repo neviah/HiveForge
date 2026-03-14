@@ -110,6 +110,105 @@ test('analytics snapshot includes variance alerts when goals drift', () => {
   assert.equal(typeof snapshot.variance.weeklyTasksDone, 'number');
   assert.equal(Array.isArray(snapshot.deadLetters), true);
   assert.equal(snapshot.deadLetters.length, 1);
+  assert.equal(typeof snapshot.publicationHealth.dashboard, 'object');
+  assert.equal(typeof snapshot.publicationHealth.dashboard.incidents.total, 'number');
+});
+
+test('publication incident dashboard tracks mttr, runbook hotspots, and cooldown trends', () => {
+  const now = Date.now();
+  const iso = (msAgo) => new Date(now - msAgo).toISOString();
+  const state = {
+    id: projectId('publication-dashboard-trends'),
+    name: 'Publication Dashboard Test',
+    status: 'running',
+    startedAt: new Date(now - (3 * 60 * 60 * 1000)).toISOString(),
+    tasks: [
+      { id: 'D1', status: 'done', completedAt: new Date(now - (2 * 60 * 60 * 1000)).toISOString() },
+      { id: 'B1', status: 'backlog' },
+    ],
+    agents: [
+      { id: 'coordinator', status: 'running', tokens: 2 },
+      { id: 'worker', status: 'idle', tokens: 10 },
+    ],
+    kpiGoals: {
+      weeklyTasksDoneTarget: 5,
+      maxBacklog: 10,
+      maxMonthlySpend: 100,
+      weeklyPlan: {
+        weekStart: new Date(now).toISOString(),
+        lastPlannedAt: null,
+        nextReviewAt: null,
+        summary: null,
+      },
+    },
+    deadLetters: [],
+    financeExceptions: [],
+    publicationHealth: {
+      driftEvents: [
+        { id: 'd1', ts: iso(2 * 60 * 60 * 1000), kind: 'publication_drift', target: 'substack', source: 'test', healed: false },
+        { id: 'd2', ts: iso(3 * 60 * 60 * 1000), kind: 'publication_drift', target: 'substack', source: 'test', healed: true },
+        { id: 'd3', ts: iso(4 * 60 * 60 * 1000), kind: 'publication_drift', target: 'custom_cms', source: 'test', healed: true },
+      ],
+      incidents: [
+        {
+          id: 'i1',
+          ts: iso(2 * 60 * 60 * 1000),
+          status: 'resolved',
+          resolvedAt: iso(30 * 60 * 1000),
+          runbook: 'publication_reliability_incident_triage',
+          summary: 'Resolved incident',
+          checks: [],
+        },
+        {
+          id: 'i2',
+          ts: iso(3 * 60 * 60 * 1000),
+          status: 'open',
+          resolvedAt: null,
+          runbook: 'publication_reliability_incident_triage',
+          summary: 'Open incident',
+          checks: [],
+        },
+        {
+          id: 'i3',
+          ts: iso(26 * 60 * 60 * 1000),
+          status: 'open',
+          resolvedAt: null,
+          runbook: 'manual_review',
+          summary: 'Previous-window incident',
+          checks: [],
+        },
+      ],
+      alerting: {
+        lastSignature: 'publication_reliability_breach',
+        lastSentAt: iso(3 * 60 * 60 * 1000),
+        suppressedSignals: [
+          { ts: iso(2 * 60 * 60 * 1000), signature: 'publication_reliability_breach', source: 'test' },
+          { ts: iso(27 * 60 * 60 * 1000), signature: 'publication_reliability_breach', source: 'test' },
+        ],
+      },
+      policy: {},
+      lastSlo: null,
+      lastCheckedAt: null,
+      lastSelfHealAt: null,
+      lastSelfHealSummary: null,
+    },
+  };
+
+  const snapshot = makeAnalyticsSnapshot(state);
+  const dashboard = snapshot.publicationHealth.dashboard;
+
+  assert.equal(dashboard.incidents.total, 3);
+  assert.equal(dashboard.incidents.open, 2);
+  assert.equal(dashboard.incidents.resolved, 1);
+  assert.equal(dashboard.incidents.createdCurrentWindow, 2);
+  assert.equal(dashboard.incidents.createdPreviousWindow, 1);
+  assert.equal(dashboard.incidents.createdTrend, 1);
+  assert.equal(dashboard.incidents.mttrHoursAvg, 1.5);
+  assert.equal(dashboard.runbookHotspots[0].runbook, 'publication_reliability_incident_triage');
+  assert.equal(dashboard.targetHotspots[0].target, 'substack');
+  assert.equal(dashboard.cooldownSuppressions.currentWindow, 1);
+  assert.equal(dashboard.cooldownSuppressions.previousWindow, 1);
+  assert.equal(dashboard.cooldownSuppressions.trend, 0);
 });
 
 test('connector execution key is deterministic for equivalent input payloads', () => {

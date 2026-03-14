@@ -619,7 +619,7 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 
 ## **Future Feature Candidates**
 
-1. Incident analytics dashboard for coordinator triage latency, MTTR, and repeated runbook hotspots.
+1. Industry-specific legal/compliance policy packs (housing, finance, healthcare) with approval templates and auto-escalation rules.
 
 ## **Definition of Operational Readiness**
 
