@@ -2199,11 +2199,239 @@ function createInitialAgents(projectId, template) {
   return agents;
 }
 
-function createInitialTasks(template) {
+function textContainsAny(haystack, needles = []) {
+  const source = String(haystack || '').toLowerCase();
+  return needles.some((needle) => source.includes(String(needle || '').toLowerCase()));
+}
+
+function normalizeGoalKeywordTags(goalText) {
+  const source = String(goalText || '').toLowerCase();
+  return {
+    webApp: textContainsAny(source, ['website', 'web app', 'app', 'portal', 'platform', 'saas']),
+    deployment: textContainsAny(source, ['deploy', 'deployment', 'go live', 'launch', 'netlify']),
+    payments: textContainsAny(source, ['payment', 'payments', 'billing', 'subscription', 'monthly fee', 'invoice', 'checkout']),
+    support: textContainsAny(source, ['support', 'help desk', 'ticket', 'customer service']),
+    marketing: textContainsAny(source, ['marketing', 'ads', 'advertising', 'campaign', 'growth', 'acquisition']),
+    analytics: textContainsAny(source, ['analytics', 'kpi', 'conversion', 'roi', 'funnel']),
+    legal: textContainsAny(source, ['legal', 'compliance', 'policy', 'privacy', 'terms']),
+    property: textContainsAny(source, ['property', 'landlord', 'tenant', 'lease', 'rental', 'application']),
+  };
+}
+
+function connectorHealthCheckActionForService(connector) {
+  const key = normalizeConnectorId(connector);
+  if (key === 'netlify') {
+    return { connector: 'netlify', operation: 'get_account', actorRole: 'Backend Architect', phase: 'deployment' };
+  }
+  if (key === 'stripe') {
+    return { connector: 'stripe', operation: 'get_balance', actorRole: 'Finance Tracker', phase: 'finance' };
+  }
+  if (key === 'google_ads') {
+    return { connector: 'google_ads', operation: 'get_profile', actorRole: 'Growth Hacker + Content Creator', phase: 'marketing' };
+  }
+  if (key === 'support_ticket') {
+    return { connector: 'support_ticket', operation: 'list_tickets', actorRole: 'Support Responder', phase: 'support' };
+  }
+  if (key === 'analytics') {
+    return { connector: 'analytics', operation: 'get_profile', actorRole: 'Finance Tracker', phase: 'analytics' };
+  }
+  if (key === 'email_provider') {
+    return { connector: 'email_provider', operation: 'list_inbox', actorRole: 'Support Responder', phase: 'support' };
+  }
+  return null;
+}
+
+function goalActionPlanFromPrompt(templateId, goal, template = {}) {
+  const goalText = String(goal || '').trim();
+  if (!goalText) {
+    return {
+      generatedAt: nowIso(),
+      source: 'template_default',
+      goal: '',
+      assumptions: [],
+      requiredConnectors: [],
+      missingCredentialServices: [],
+      tasks: [],
+      milestones: [],
+    };
+  }
+
+  const tags = normalizeGoalKeywordTags(goalText);
+  const connectorSet = new Set();
+  if (tags.deployment || tags.webApp) connectorSet.add('netlify');
+  if (tags.payments) connectorSet.add('stripe');
+  if (tags.marketing) connectorSet.add('google_ads');
+  if (tags.support || tags.property) {
+    connectorSet.add('support_ticket');
+    connectorSet.add('email_provider');
+  }
+  if (tags.analytics || tags.marketing || tags.payments) connectorSet.add('analytics');
+
+  const requiredConnectors = Array.from(connectorSet);
+  const metadata = readCredentialMetadata();
+  const missingCredentialServices = requiredConnectors.filter((connector) => {
+    const service = CONNECTOR_REGISTRY[connector] && CONNECTOR_REGISTRY[connector].credentialService
+      ? CONNECTOR_REGISTRY[connector].credentialService
+      : connector;
+    const entry = metadata.find((item) => item.service === service);
+    return !(entry && entry.connected);
+  });
+
+  const tasks = [];
+  const addTask = (task) => {
+    if (!task || !task.title) return;
+    tasks.push(task);
+  };
+
+  addTask({
+    title: 'Coordinator + CEO convert goal into execution charter',
+    phase: 'strategy',
+    requiredRole: 'Senior Project Manager',
+    description: `Analyze goal prompt, constraints, and success metrics: ${goalText}`,
+  });
+  addTask({
+    title: 'Define milestone roadmap, owners, and acceptance checks',
+    phase: 'strategy',
+    requiredRole: 'Senior Project Manager',
+    description: 'Produce execution milestones from point A to point B with owner roles and verification gates.',
+    dependencies: [0],
+  });
+
+  if (tags.webApp) {
+    addTask({
+      title: 'Design system architecture, domain model, and API contracts',
+      phase: 'product_build',
+      requiredRole: 'Backend Architect',
+      description: 'Translate business workflows into backend services, data model, and endpoint contracts.',
+      dependencies: [1],
+    });
+    addTask({
+      title: 'Implement core web experience and role-based user journeys',
+      phase: 'product_build',
+      requiredRole: 'UI Designer',
+      description: 'Build production-ready UX for required personas and success paths.',
+      dependencies: [2],
+    });
+  }
+
+  if (tags.property) {
+    addTask({
+      title: 'Implement landlord/tenant/property lifecycle workflows',
+      phase: 'product_build',
+      requiredRole: 'Backend Architect',
+      description: 'Cover listings, applications, approvals, tenancy management, and operational state transitions.',
+      dependencies: [2],
+    });
+  }
+
+  if (tags.payments) {
+    addTask({
+      title: 'Model recurring billing, subscription lifecycle, and payment recovery',
+      phase: 'finance',
+      requiredRole: 'Finance Tracker',
+      description: 'Define monthly fee collection logic, invoicing events, and failed-payment handling.',
+      dependencies: [1],
+    });
+  }
+
+  requiredConnectors.forEach((connector) => {
+    const probe = connectorHealthCheckActionForService(connector);
+    if (!probe) return;
+    addTask({
+      title: `Validate ${connector} connector readiness`,
+      phase: probe.phase,
+      requiredRole: probe.actorRole,
+      description: `Coordinator validates ${connector} credentials and API connectivity before autonomous execution.`,
+      autoAction: {
+        type: 'connector',
+        connector: probe.connector,
+        operation: probe.operation,
+        input: {},
+        estimatedCost: 0,
+        actorRole: probe.actorRole,
+        requiresPermission: false,
+      },
+      dependencies: [1],
+    });
+  });
+
+  if (tags.deployment || tags.webApp) {
+    addTask({
+      title: 'Prepare deployment runbook and production rollback checks',
+      phase: 'deployment',
+      requiredRole: 'Backend Architect',
+      description: 'Ensure release safety checks, rollback path, and release verification are in place.',
+      dependencies: [1],
+    });
+  }
+
+  if (tags.marketing || tags.analytics) {
+    addTask({
+      title: 'Launch growth instrumentation and acquisition optimization loop',
+      phase: 'growth',
+      requiredRole: 'Growth Hacker + Content Creator',
+      description: 'Connect KPIs to campaign actions and establish recurring optimization cadence.',
+      dependencies: [1],
+    });
+  }
+
+  if (tags.support || tags.property) {
+    addTask({
+      title: 'Establish support triage, SLA routing, and escalation playbook',
+      phase: 'support',
+      requiredRole: 'Support Responder',
+      description: 'Define support response policy, escalation triggers, and feedback closure loop.',
+      dependencies: [1],
+    });
+  }
+
+  if (tags.legal || tags.property || templateId === 'business') {
+    addTask({
+      title: 'Run legal/compliance risk review for operating model',
+      phase: 'compliance',
+      requiredRole: 'Legal Compliance Checker',
+      description: 'Review contracts, privacy, policy obligations, and regulated workflow boundaries.',
+      dependencies: [1],
+    });
+  }
+
+  addTask({
+    title: 'Publish coordinator operating runbook and autonomous maintenance policy',
+    phase: 'maintenance',
+    requiredRole: 'Senior Project Manager',
+    description: 'Document monitoring, escalation, and long-running business maintenance procedures.',
+    dependencies: [1],
+  });
+
+  const milestones = tasks.map((task, idx) => ({
+    id: `M${idx + 1}`,
+    title: task.title,
+    phase: task.phase,
+  }));
+  const assumptions = [
+    'Coordinator remains the only credential-broker and policy enforcer.',
+    'Blocked connector actions trigger operator assistance notifications with context.',
+    'Plan executes using currently available connectors and falls back to manual assistance where needed.',
+  ];
+
+  return {
+    generatedAt: nowIso(),
+    source: 'goal_prompt_analysis',
+    goal: goalText,
+    tags,
+    assumptions,
+    requiredConnectors,
+    missingCredentialServices,
+    tasks,
+    milestones,
+  };
+}
+
+function createInitialTasks(template, options = {}) {
   const breakdown = Array.isArray(template.task_breakdown) ? template.task_breakdown : [];
   const dependencyGraph = template.dependency_graph || {};
   const createdAt = nowIso();
-  return breakdown.map((task, idx) => ({
+  const baseTasks = breakdown.map((task, idx) => ({
     id: task.id || `TASK-${idx + 1}`,
     title: task.title || `Task ${idx + 1}`,
     phase: task.phase || 'general',
@@ -2224,8 +2452,67 @@ function createInitialTasks(template) {
     createdAt,
     completedAt: null,
     startedAt: null,
-    description: ''
+    description: '',
+    assistanceRequestedAt: null,
   }));
+
+  const goalPlan = options.goalPlan && typeof options.goalPlan === 'object' ? options.goalPlan : null;
+  const templateId = String(options.templateId || '').trim().toLowerCase();
+  const generatedTasks = Array.isArray(goalPlan && goalPlan.tasks)
+    ? goalPlan.tasks.map((task, idx) => {
+        const dependencies = Array.isArray(task.dependencies)
+          ? task.dependencies
+              .map((dep) => Number(dep))
+              .filter((dep) => Number.isInteger(dep) && dep >= 0 && dep < (goalPlan.tasks.length || 0))
+              .map((dep) => `GOAL-${dep + 1}`)
+          : (idx === 0 ? [] : [`GOAL-${idx}`]);
+        return {
+          id: `GOAL-${idx + 1}`,
+          title: String(task.title || `Goal task ${idx + 1}`),
+          phase: String(task.phase || 'strategy'),
+          status: 'backlog',
+          assignee: null,
+          blockedBy: dependencies[0] || null,
+          dependencies,
+          requiredRole: task.requiredRole ? String(task.requiredRole) : null,
+          executionState: 'queued',
+          retryCount: 0,
+          lastFailedAt: null,
+          lastError: null,
+          lastProgressAt: null,
+          executionTaskRunId: null,
+          inprogressCycles: 0,
+          pendingApproval: null,
+          autoActionNotBeforeAt: null,
+          deadLetteredAt: null,
+          recurringKey: null,
+          autoAction: task.autoAction && task.autoAction.type === 'connector'
+            ? {
+                type: 'connector',
+                connector: task.autoAction.connector,
+                operation: task.autoAction.operation,
+                input: task.autoAction.input || {},
+                estimatedCost: Number(task.autoAction.estimatedCost || 0),
+                actorRole: String(task.autoAction.actorRole || task.requiredRole || ''),
+                requiresPermission: Boolean(task.autoAction.requiresPermission),
+              }
+            : null,
+          createdAt,
+          completedAt: null,
+          startedAt: null,
+          description: String(task.description || ''),
+          assistanceRequestedAt: null,
+        };
+      })
+    : [];
+
+  if (!generatedTasks.length) {
+    return baseTasks;
+  }
+  if (templateId === 'business') {
+    return generatedTasks;
+  }
+  return [...generatedTasks, ...baseTasks];
 }
 
 function humanizeDurationMs(ms) {
@@ -2248,6 +2535,7 @@ function summarizeProjectAutomation(projectState) {
     maxHotspots: 5,
     maxRunbooks: 8,
   });
+  const goalPlan = projectState.goalPlan && typeof projectState.goalPlan === 'object' ? projectState.goalPlan : null;
   return {
     recurring: {
       enabled: Boolean(projectState.recurring.enabled),
@@ -2299,6 +2587,15 @@ function summarizeProjectAutomation(projectState) {
       lastSlo: projectState.publicationHealth.lastSlo || null,
       dashboard: publicationDashboard,
     },
+    goalPlan: goalPlan
+      ? {
+          source: goalPlan.source || null,
+          generatedAt: goalPlan.generatedAt || null,
+          milestoneCount: Array.isArray(goalPlan.milestones) ? goalPlan.milestones.length : 0,
+          requiredConnectors: Array.isArray(goalPlan.requiredConnectors) ? goalPlan.requiredConnectors : [],
+          missingCredentialServices: Array.isArray(goalPlan.missingCredentialServices) ? goalPlan.missingCredentialServices : [],
+        }
+      : null,
   };
 }
 
@@ -2402,6 +2699,7 @@ function enqueueRecurringTasks(projectState, ts, source = 'interval') {
       inprogressCycles: 0,
       pendingApproval: null,
       autoActionNotBeforeAt: null,
+      assistanceRequestedAt: null,
       deadLetteredAt: null,
       createdAt: ts,
       completedAt: null,
@@ -2645,6 +2943,65 @@ function sendTaskToDeadLetter(projectState, task, reason, detail = {}) {
   emitProjectEvent(projectState.id, 'task_update', task);
 }
 
+function retryReasonNeedsAssistance(reason, detail = {}) {
+  const summary = `${String(reason || '').toLowerCase()} ${String(detail && detail.errorCode || '').toLowerCase()}`;
+  const blockers = [
+    'secret_missing',
+    'credential',
+    'not connected',
+    'disabled',
+    'unsupported',
+    'not implemented',
+    'unknown_connector',
+    'connector_not_implemented',
+  ];
+  return blockers.some((token) => summary.includes(token));
+}
+
+function maybeEscalateAutoActionAssistance(projectState, task, reason, detail = {}) {
+  if (!retryReasonNeedsAssistance(reason, detail)) {
+    return false;
+  }
+  const nowMs = Date.now();
+  const lastMs = Date.parse(task.assistanceRequestedAt || '');
+  const cooldownMs = 60 * 60 * 1000;
+  if (Number.isFinite(lastMs) && (nowMs - lastMs) < cooldownMs) {
+    return false;
+  }
+  const at = nowIso();
+  task.assistanceRequestedAt = at;
+  appendProjectLog(projectState, 'warning', {
+    kind: 'recurring_auto_action_assistance_requested',
+    taskId: task.id,
+    title: task.title,
+    connector: task.autoAction && task.autoAction.connector ? task.autoAction.connector : null,
+    operation: task.autoAction && task.autoAction.operation ? task.autoAction.operation : null,
+    reason,
+    detail,
+  });
+  appendMessageBusEntry({
+    projectId: projectState.id,
+    from: 'coordinator',
+    to: 'operator',
+    kind: 'assistance_requested_connector_blocked',
+    payload: {
+      taskId: task.id,
+      connector: task.autoAction && task.autoAction.connector ? task.autoAction.connector : null,
+      operation: task.autoAction && task.autoAction.operation ? task.autoAction.operation : null,
+      reason,
+      detail,
+    },
+  });
+  notifyOperator(projectState, `Assistance needed: ${task.title}`, {
+    taskId: task.id,
+    connector: task.autoAction && task.autoAction.connector ? task.autoAction.connector : null,
+    operation: task.autoAction && task.autoAction.operation ? task.autoAction.operation : null,
+    reason,
+    detail,
+  }).catch(() => {});
+  return true;
+}
+
 function scheduleAutoActionRetry(projectState, task, reason, detail = {}) {
   const nextRetryCount = Number(task.retryCount || 0) + 1;
   const connectorId = String(task && task.autoAction && task.autoAction.connector ? task.autoAction.connector : '').trim().toLowerCase();
@@ -2667,6 +3024,11 @@ function scheduleAutoActionRetry(projectState, task, reason, detail = {}) {
   task.lastProgressAt = at;
   task.lastError = String(reason || 'retry_scheduled');
   task.autoActionNotBeforeAt = notBeforeAt;
+  if (typeof task.assistanceRequestedAt === 'undefined') {
+    task.assistanceRequestedAt = null;
+  }
+
+  maybeEscalateAutoActionAssistance(projectState, task, reason, detail);
 
   appendProjectLog(projectState, 'fix', {
     kind: 'recurring_auto_action_retry_scheduled',
@@ -3018,6 +3380,7 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
 
 function summarizeProject(projectState) {
   const inProgress = projectState.tasks.find((task) => task.status === 'inprogress');
+  const goalPlan = projectState.goalPlan && typeof projectState.goalPlan === 'object' ? projectState.goalPlan : null;
   return {
     id: projectState.id,
     name: projectState.name,
@@ -3027,6 +3390,13 @@ function summarizeProject(projectState) {
     lastActivity: projectState.lastActivity,
     agentCount: projectState.agents.length,
     currentTask: inProgress ? inProgress.title : null,
+    goalPlan: goalPlan
+      ? {
+          source: goalPlan.source || null,
+          milestoneCount: Array.isArray(goalPlan.milestones) ? goalPlan.milestones.length : 0,
+          missingCredentialServices: Array.isArray(goalPlan.missingCredentialServices) ? goalPlan.missingCredentialServices.length : 0,
+        }
+      : null,
     completedAt: projectState.completedAt || null,
     failedAt: projectState.failedAt || null
   };
@@ -4021,6 +4391,7 @@ function recoverProjectStateAfterRestart(state) {
     if (typeof t.recurringKey === 'undefined') t.recurringKey = null;
     if (typeof t.pendingApproval === 'undefined') t.pendingApproval = null;
     if (typeof t.autoActionNotBeforeAt === 'undefined') t.autoActionNotBeforeAt = null;
+    if (typeof t.assistanceRequestedAt === 'undefined') t.assistanceRequestedAt = null;
     if (typeof t.deadLetteredAt === 'undefined') t.deadLetteredAt = null;
   });
   if (typeof state.operatingMode !== 'string') {
@@ -4037,6 +4408,9 @@ function recoverProjectStateAfterRestart(state) {
   ensureFinanceExceptionState(state);
   ensurePublicationHealthState(state);
   ensureConnectorExecutionState(state);
+  if (!state.goalPlan || typeof state.goalPlan !== 'object') {
+    state.goalPlan = goalActionPlanFromPrompt(state.template, state.goal || '', {});
+  }
   if (!state.kpiAlerting || typeof state.kpiAlerting !== 'object') {
     state.kpiAlerting = { lastSentAt: null, lastSignature: null };
   }
@@ -4118,6 +4492,7 @@ function createProjectFromTemplate({ name, template, goal }) {
   const subordinateCount = initialAgents.filter((agent) => !agent.isCoordinator).length;
   const operatingMode = templateOperatingMode(template, tpl);
   const staffingPolicy = templateAutoStaffingPolicy(tpl, subordinateCount);
+  const goalPlan = goalActionPlanFromPrompt(template, goal || tpl.goal_definition || '', tpl);
   const state = {
     id,
     name,
@@ -4188,12 +4563,13 @@ function createProjectFromTemplate({ name, template, goal }) {
       lastSelfHealSummary: null,
     },
     connectorExecutions: {},
+    goalPlan,
     kpiAlerting: {
       lastSentAt: null,
       lastSignature: null,
     },
     agents: initialAgents,
-    tasks: createInitialTasks(tpl),
+    tasks: createInitialTasks(tpl, { templateId: template, goalPlan }),
     logs: [],
     heartbeat: {
       status: 'alive',
@@ -4209,6 +4585,54 @@ function createProjectFromTemplate({ name, template, goal }) {
     template,
     goal: state.goal
   });
+
+  if (Array.isArray(goalPlan && goalPlan.tasks) && goalPlan.tasks.length > 0) {
+    appendProjectLog(state, 'message', {
+      kind: 'goal_action_plan_generated',
+      source: goalPlan.source,
+      milestoneCount: Array.isArray(goalPlan.milestones) ? goalPlan.milestones.length : 0,
+      requiredConnectors: goalPlan.requiredConnectors || [],
+    });
+    appendMessageBusEntry({
+      projectId: state.id,
+      from: 'coordinator',
+      to: 'ceo_planner',
+      kind: 'goal_action_plan_generated',
+      payload: {
+        goal: state.goal,
+        milestoneCount: Array.isArray(goalPlan.milestones) ? goalPlan.milestones.length : 0,
+        requiredConnectors: goalPlan.requiredConnectors || [],
+      },
+    });
+  }
+
+  if (Array.isArray(goalPlan && goalPlan.missingCredentialServices) && goalPlan.missingCredentialServices.length > 0) {
+    const missing = goalPlan.missingCredentialServices;
+    appendProjectLog(state, 'warning', {
+      kind: 'goal_plan_missing_credentials',
+      missingCredentialServices: missing,
+      summary: `Goal execution needs connector credentials not yet connected: ${missing.join(', ')}.`,
+    });
+    appendMessageBusEntry({
+      projectId: state.id,
+      from: 'coordinator',
+      to: 'operator',
+      kind: 'assistance_requested_missing_credentials',
+      payload: {
+        missingCredentialServices: missing,
+        goal: state.goal,
+      },
+    });
+    notifyOperator(
+      state,
+      `Assistance needed: connect credentials (${missing.join(', ')}) to execute the new goal plan.`,
+      {
+        kind: 'missing_credentials',
+        missingCredentialServices: missing,
+        projectId: state.id,
+      },
+    ).catch(() => {});
+  }
 
   const runtime = { state, timer: null, execution: null, recurringAction: null };
   projectRuntimes.set(id, runtime);
@@ -4584,6 +5008,7 @@ function makeAnalyticsSnapshot(projectState) {
     maxHotspots: 10,
     maxRunbooks: 12,
   });
+  const goalPlan = projectState.goalPlan && typeof projectState.goalPlan === 'object' ? projectState.goalPlan : null;
 
   return {
     kpi: [
@@ -4628,6 +5053,16 @@ function makeAnalyticsSnapshot(projectState) {
         incidents: [],
         dashboard: publicationDashboard,
       },
+    goalPlan: goalPlan
+      ? {
+          source: goalPlan.source || null,
+          generatedAt: goalPlan.generatedAt || null,
+          assumptions: Array.isArray(goalPlan.assumptions) ? goalPlan.assumptions : [],
+          milestones: Array.isArray(goalPlan.milestones) ? goalPlan.milestones.slice(0, 25) : [],
+          requiredConnectors: Array.isArray(goalPlan.requiredConnectors) ? goalPlan.requiredConnectors : [],
+          missingCredentialServices: Array.isArray(goalPlan.missingCredentialServices) ? goalPlan.missingCredentialServices : [],
+        }
+      : null,
     lastUpdated: nowIso()
   };
 }
@@ -9226,6 +9661,7 @@ module.exports = {
   evaluateFinanceAutonomyGuardrails,
   evaluateFinanceSettlementExceptions,
   processFinanceSettlementExceptions,
+  goalActionPlanFromPrompt,
   buildPublicationDistributionPlan,
   executePublicationDistributionPlan,
   buildPublicationDriftReplayPlan,

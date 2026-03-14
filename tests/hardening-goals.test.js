@@ -19,6 +19,7 @@ const {
   evaluateFinanceAutonomyGuardrails,
   evaluateFinanceSettlementExceptions,
   processFinanceSettlementExceptions,
+  goalActionPlanFromPrompt,
   buildPublicationDistributionPlan,
   executePublicationDistributionPlan,
   buildPublicationDriftReplayPlan,
@@ -112,6 +113,21 @@ test('analytics snapshot includes variance alerts when goals drift', () => {
   assert.equal(snapshot.deadLetters.length, 1);
   assert.equal(typeof snapshot.publicationHealth.dashboard, 'object');
   assert.equal(typeof snapshot.publicationHealth.dashboard.incidents.total, 'number');
+});
+
+test('goal prompt analysis generates phased action plan with connector readiness checks', () => {
+  const plan = goalActionPlanFromPrompt('business', 'Build a property management website where landlords and tenants sign up, process monthly fee billing, launch to production, and run ads/support.', {});
+
+  assert.equal(plan.source, 'goal_prompt_analysis');
+  assert.equal(Array.isArray(plan.tasks), true);
+  assert.equal(plan.tasks.length > 6, true);
+  assert.equal(Array.isArray(plan.requiredConnectors), true);
+  assert.equal(plan.requiredConnectors.includes('stripe'), true);
+  assert.equal(plan.requiredConnectors.includes('netlify'), true);
+  assert.equal(plan.requiredConnectors.includes('google_ads'), true);
+  assert.equal(plan.requiredConnectors.includes('support_ticket'), true);
+  assert.equal(plan.tasks.some((task) => /validate stripe connector readiness/i.test(String(task.title || ''))), true);
+  assert.equal(plan.tasks.some((task) => /landlord\/tenant\/property lifecycle/i.test(String(task.title || ''))), true);
 });
 
 test('publication incident dashboard tracks mttr, runbook hotspots, and cooldown trends', () => {

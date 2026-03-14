@@ -606,6 +606,7 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 15. Support autonomy expansion: website support chat/ticket connector adapters, SLA-aware routing controls, and confidence-gated auto-response escalation logic.
 16. Finance lifecycle automation: recurring invoice/refund/collections loops with Stripe actions plus cashflow variance and reserve guardrails in connector execution.
 17. Publishing autonomy pack: story bible/chapter pipeline contract, continuity + humanization loops, and connector-backed release workflow trigger.
+18. Goal-to-action-plan orchestration: prompt analysis now produces phased execution plans, connector readiness probes, and coordinator assistance requests when missing credentials block autonomous progress.
 
 ## **Next Critical Milestones**
 
