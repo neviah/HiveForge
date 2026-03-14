@@ -528,9 +528,95 @@ test('publication drift self-heal replays failing targets and records health sum
   assert.equal(summary.checked, true);
   assert.equal(summary.driftDetected, true);
   assert.equal(summary.replayed, 1);
+  assert.equal(typeof summary.slo, 'object');
   assert.equal(typeof state.publicationHealth.lastSelfHealSummary, 'object');
   assert.equal(Array.isArray(state.publicationHealth.driftEvents), true);
   assert.equal(state.publicationHealth.driftEvents.length > 0, true);
+});
+
+test('publication drift self-heal enforces replay exhaustion policy and raises incident', async () => {
+  const state = {
+    id: projectId('publication-replay-exhausted'),
+    name: 'Publication Replay Exhaustion Test',
+    logs: [],
+    tasks: [],
+    agents: [],
+    deadLetters: [],
+    financeExceptions: [],
+    publicationHealth: {
+      driftEvents: [
+        {
+          id: 'seed-drift-substack',
+          ts: new Date().toISOString(),
+          kind: 'publication_drift',
+          target: 'substack',
+          summary: 'Seed drift event',
+          expected: {},
+          observed: {},
+          source: 'test',
+          healed: false,
+        },
+      ],
+      incidents: [],
+      policy: {
+        lookbackHours: 24,
+        maxDriftEventsPerWindow: 100,
+        maxSelfHealFailuresPerWindow: 100,
+        maxReplayExhaustedPerWindow: 0,
+        maxReplayAttemptsPerTargetPerWindow: 0,
+        alertCooldownMinutes: 60,
+      },
+      alerting: {
+        lastSignature: null,
+        lastSentAt: null,
+      },
+      lastSlo: null,
+      lastCheckedAt: null,
+      lastSelfHealAt: null,
+      lastSelfHealSummary: null,
+    },
+  };
+
+  const summary = await executePublicationDriftSelfHeal(state, {
+    execution: {
+      ok: false,
+      data: {
+        strategy: 'broadcast',
+        targets: [
+          { target: 'substack', connector: 'substack', ok: false, data: null },
+        ],
+      },
+    },
+    reconciliation: {
+      ok: false,
+      pending: true,
+      reason: 'Publication verification pending for 1 target(s).',
+      targetChecks: [
+        { target: 'substack', ok: false, pending: true, rollbacked: false },
+      ],
+    },
+    context: {
+      mode: 'publish',
+      executionKey: 'pub::selfheal::exhausted',
+      source: 'test',
+    },
+  });
+
+  assert.equal(summary.checked, true);
+  assert.equal(summary.driftDetected, true);
+  assert.equal(summary.replayed, 0);
+  assert.equal(summary.healed, false);
+  assert.deepEqual(summary.replayExhaustedTargets, ['substack']);
+  assert.equal(summary.slo && summary.slo.ok, false);
+  assert.equal(Array.isArray(state.publicationHealth.incidents), true);
+  assert.equal(state.publicationHealth.incidents.length >= 1, true);
+  assert.equal(state.publicationHealth.incidents[0].runbook, 'publication_reliability_incident_triage');
+
+  const analytics = makeAnalyticsSnapshot(state);
+  assert.equal(Array.isArray(analytics.publicationHealth.incidents), true);
+  assert.equal(analytics.publicationHealth.incidents.length >= 1, true);
+  assert.equal(typeof analytics.publicationHealth.lastSlo, 'object');
+  assert.equal(analytics.publicationHealth.lastSlo.ok, false);
 });
 
 test('netlify reconciliation returns pending when deploy identity is incomplete', async () => {

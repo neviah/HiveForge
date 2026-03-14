@@ -619,7 +619,7 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 
 ## **Future Feature Candidates**
 
-1. Publication reliability SLOs with anomaly alerting and coordinator-owned incident runbooks for repeated drift or replay exhaustion.
+1. Incident analytics dashboard for coordinator triage latency, MTTR, and repeated runbook hotspots.
 
 ## **Definition of Operational Readiness**
 

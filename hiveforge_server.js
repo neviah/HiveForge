@@ -48,6 +48,14 @@ const DEFAULT_CONNECTOR_RETRY_POLICIES = {
   telegram: { maxAttempts: 3, baseDelayMs: 15 * 1000, maxDelayMs: 10 * 60 * 1000 },
   whatsapp: { maxAttempts: 3, baseDelayMs: 15 * 1000, maxDelayMs: 10 * 60 * 1000 },
 };
+const DEFAULT_PUBLICATION_RELIABILITY_POLICY = {
+  lookbackHours: 24,
+  maxDriftEventsPerWindow: 6,
+  maxSelfHealFailuresPerWindow: 2,
+  maxReplayExhaustedPerWindow: 1,
+  maxReplayAttemptsPerTargetPerWindow: 3,
+  alertCooldownMinutes: 60,
+};
 const DEFAULT_KPI_GOALS = {
   weeklyTasksDoneTarget: 15,
   maxBacklog: 10,
@@ -746,6 +754,15 @@ function ensurePublicationHealthState(projectState) {
   if (!projectState.publicationHealth || typeof projectState.publicationHealth !== 'object') {
     projectState.publicationHealth = {
       driftEvents: [],
+      incidents: [],
+      policy: {
+        ...DEFAULT_PUBLICATION_RELIABILITY_POLICY,
+      },
+      alerting: {
+        lastSignature: null,
+        lastSentAt: null,
+      },
+      lastSlo: null,
       lastCheckedAt: null,
       lastSelfHealAt: null,
       lastSelfHealSummary: null,
@@ -754,6 +771,149 @@ function ensurePublicationHealthState(projectState) {
   if (!Array.isArray(projectState.publicationHealth.driftEvents)) {
     projectState.publicationHealth.driftEvents = [];
   }
+  if (!Array.isArray(projectState.publicationHealth.incidents)) {
+    projectState.publicationHealth.incidents = [];
+  }
+  if (!projectState.publicationHealth.policy || typeof projectState.publicationHealth.policy !== 'object') {
+    projectState.publicationHealth.policy = {
+      ...DEFAULT_PUBLICATION_RELIABILITY_POLICY,
+    };
+  }
+  if (!projectState.publicationHealth.alerting || typeof projectState.publicationHealth.alerting !== 'object') {
+    projectState.publicationHealth.alerting = {
+      lastSignature: null,
+      lastSentAt: null,
+    };
+  }
+}
+
+function publicationReliabilityPolicy(projectState, overrides = {}) {
+  ensurePublicationHealthState(projectState);
+  const raw = {
+    ...DEFAULT_PUBLICATION_RELIABILITY_POLICY,
+    ...(projectState.publicationHealth.policy && typeof projectState.publicationHealth.policy === 'object'
+      ? projectState.publicationHealth.policy
+      : {}),
+    ...(overrides && typeof overrides === 'object' ? overrides : {}),
+  };
+  return {
+    lookbackHours: clampInt(raw.lookbackHours, DEFAULT_PUBLICATION_RELIABILITY_POLICY.lookbackHours, 1, 24 * 30),
+    maxDriftEventsPerWindow: clampInt(raw.maxDriftEventsPerWindow, DEFAULT_PUBLICATION_RELIABILITY_POLICY.maxDriftEventsPerWindow, 0, 1000),
+    maxSelfHealFailuresPerWindow: clampInt(raw.maxSelfHealFailuresPerWindow, DEFAULT_PUBLICATION_RELIABILITY_POLICY.maxSelfHealFailuresPerWindow, 0, 1000),
+    maxReplayExhaustedPerWindow: clampInt(raw.maxReplayExhaustedPerWindow, DEFAULT_PUBLICATION_RELIABILITY_POLICY.maxReplayExhaustedPerWindow, 0, 1000),
+    maxReplayAttemptsPerTargetPerWindow: clampInt(raw.maxReplayAttemptsPerTargetPerWindow, DEFAULT_PUBLICATION_RELIABILITY_POLICY.maxReplayAttemptsPerTargetPerWindow, 0, 1000),
+    alertCooldownMinutes: clampInt(raw.alertCooldownMinutes, DEFAULT_PUBLICATION_RELIABILITY_POLICY.alertCooldownMinutes, 1, 7 * 24 * 60),
+  };
+}
+
+function recentPublicationHealthEvents(projectState, lookbackMs) {
+  ensurePublicationHealthState(projectState);
+  const nowMs = Date.now();
+  return projectState.publicationHealth.driftEvents.filter((entry) => {
+    const ts = Date.parse(entry && entry.ts ? entry.ts : '');
+    return Number.isFinite(ts) && (nowMs - ts) <= lookbackMs;
+  });
+}
+
+function evaluatePublicationReliabilitySlo(projectState, context = {}) {
+  const policy = publicationReliabilityPolicy(projectState, context.policyOverrides || {});
+  const lookbackMs = policy.lookbackHours * 60 * 60 * 1000;
+  const events = recentPublicationHealthEvents(projectState, lookbackMs);
+
+  const driftEvents = events.filter((entry) => String(entry && entry.kind || '') === 'publication_drift');
+  const selfHealFailures = events.filter((entry) => String(entry && entry.kind || '') === 'publication_drift' && !entry.healed);
+  const replayExhausted = events.filter((entry) => String(entry && entry.kind || '') === 'publication_replay_exhausted');
+
+  const checks = [
+    {
+      id: 'publication_drift_rate',
+      ok: driftEvents.length <= policy.maxDriftEventsPerWindow,
+      actual: driftEvents.length,
+      threshold: policy.maxDriftEventsPerWindow,
+    },
+    {
+      id: 'publication_self_heal_failure_rate',
+      ok: selfHealFailures.length <= policy.maxSelfHealFailuresPerWindow,
+      actual: selfHealFailures.length,
+      threshold: policy.maxSelfHealFailuresPerWindow,
+    },
+    {
+      id: 'publication_replay_exhaustion_rate',
+      ok: replayExhausted.length <= policy.maxReplayExhaustedPerWindow,
+      actual: replayExhausted.length,
+      threshold: policy.maxReplayExhaustedPerWindow,
+    },
+  ];
+  const ok = checks.every((entry) => entry.ok);
+  const failing = checks.filter((entry) => !entry.ok).map((entry) => entry.id);
+  return {
+    ok,
+    severity: ok ? 'info' : 'high',
+    summary: ok
+      ? `Publication reliability SLO healthy over ${policy.lookbackHours}h window.`
+      : `Publication reliability SLO breach: ${failing.join(', ')} over ${policy.lookbackHours}h window.`,
+    checks,
+    policy,
+    lookbackHours: policy.lookbackHours,
+  };
+}
+
+async function maybeTriggerPublicationReliabilityIncident(projectState, slo, context = {}) {
+  ensurePublicationHealthState(projectState);
+  if (!slo || typeof slo.ok !== 'boolean' || slo.ok) {
+    return { alerted: false, reason: 'slo_ok', incident: null };
+  }
+
+  const policy = publicationReliabilityPolicy(projectState, slo.policy || context.policyOverrides || {});
+  const failing = Array.isArray(slo.checks)
+    ? slo.checks.filter((entry) => !entry.ok).map((entry) => `${entry.id}:${entry.actual}/${entry.threshold}`)
+    : [];
+  const signature = failing.join('|') || 'publication_reliability_breach';
+  const now = nowIso();
+  const nowMs = Date.parse(now);
+  const alerting = projectState.publicationHealth.alerting || { lastSignature: null, lastSentAt: null };
+  const lastSentMs = Date.parse(alerting.lastSentAt || '');
+  const cooldownMs = policy.alertCooldownMinutes * 60 * 1000;
+  const withinCooldown = Number.isFinite(lastSentMs) && (nowMs - lastSentMs) < cooldownMs;
+  if (withinCooldown && alerting.lastSignature === signature) {
+    return { alerted: false, reason: 'cooldown', incident: null };
+  }
+
+  const incident = {
+    id: crypto.randomUUID(),
+    ts: now,
+    severity: 'high',
+    summary: slo.summary,
+    runbook: 'publication_reliability_incident_triage',
+    checks: Array.isArray(slo.checks) ? slo.checks : [],
+    source: String(context.source || 'publication_reliability_slo').toLowerCase(),
+  };
+  projectState.publicationHealth.incidents.unshift(incident);
+  if (projectState.publicationHealth.incidents.length > 100) {
+    projectState.publicationHealth.incidents.length = 100;
+  }
+  projectState.publicationHealth.alerting = {
+    lastSignature: signature,
+    lastSentAt: now,
+  };
+
+  appendProjectLog(projectState, 'warning', {
+    kind: 'publication_reliability_incident',
+    incident,
+  });
+  appendMessageBusEntry({
+    projectId: projectState.id,
+    from: 'coordinator',
+    to: 'incident_response_engine',
+    kind: 'publication_reliability_incident',
+    payload: incident,
+  });
+  await notifyOperator(projectState, `Publication reliability incident: ${slo.summary}`, {
+    runbook: incident.runbook,
+    checks: incident.checks,
+    source: incident.source,
+  });
+  return { alerted: true, reason: 'alert_sent', incident };
 }
 
 function appendPublicationDriftEvent(projectState, event = {}) {
@@ -831,6 +991,8 @@ async function executePublicationDriftSelfHeal(projectState, options = {}) {
   const execution = options.execution && typeof options.execution === 'object' ? options.execution : null;
   const reconciliation = options.reconciliation && typeof options.reconciliation === 'object' ? options.reconciliation : null;
   const context = options.context && typeof options.context === 'object' ? options.context : {};
+  const policy = publicationReliabilityPolicy(projectState, context.policyOverrides || {});
+  const lookbackMs = policy.lookbackHours * 60 * 60 * 1000;
 
   projectState.publicationHealth.lastCheckedAt = nowIso();
   if (!execution || !reconciliation || reconciliation.ok || !Array.isArray(reconciliation.targetChecks)) {
@@ -852,6 +1014,87 @@ async function executePublicationDriftSelfHeal(projectState, options = {}) {
     healed: false,
   }));
 
+  const recentEvents = recentPublicationHealthEvents(projectState, lookbackMs);
+  const exhaustedTargets = [];
+  const eligibleSteps = replayPlan.steps.filter((step) => {
+    const attempts = recentEvents.filter((entry) => (
+      String(entry && entry.kind || '') === 'publication_drift'
+      && String(entry && entry.target || '') === step.target
+    )).length;
+    if (attempts > policy.maxReplayAttemptsPerTargetPerWindow) {
+      exhaustedTargets.push(step.target);
+      appendPublicationDriftEvent(projectState, {
+        kind: 'publication_replay_exhausted',
+        target: step.target,
+        summary: `Replay attempts exhausted for ${step.target} in ${policy.lookbackHours}h window.`,
+        expected: {
+          maxReplayAttemptsPerTargetPerWindow: policy.maxReplayAttemptsPerTargetPerWindow,
+          lookbackHours: policy.lookbackHours,
+        },
+        observed: { attempts },
+        source: replayPlan.source,
+        healed: false,
+      });
+      return false;
+    }
+    return true;
+  });
+
+  if (!eligibleSteps.length) {
+    const ts = nowIso();
+    const slo = evaluatePublicationReliabilitySlo(projectState, { policyOverrides: policy });
+    projectState.publicationHealth.lastSlo = {
+      ts,
+      ...slo,
+    };
+    const incidentResult = await maybeTriggerPublicationReliabilityIncident(projectState, slo, {
+      source: context.source || 'publication_drift_self_heal',
+      policyOverrides: policy,
+    });
+    projectState.publicationHealth.lastSelfHealAt = ts;
+    projectState.publicationHealth.lastSelfHealSummary = {
+      ts,
+      driftDetected: true,
+      replayed: 0,
+      replayOk: false,
+      reconciliationOk: Boolean(reconciliation && reconciliation.ok),
+      healed: false,
+      replayExhaustedTargets: exhaustedTargets,
+      sloOk: Boolean(slo.ok),
+      incidentAlerted: Boolean(incidentResult && incidentResult.alerted),
+    };
+    appendProjectLog(projectState, 'warning', {
+      kind: 'publication_drift_replay_exhausted',
+      replayMode: replayPlan.replayMode,
+      replayedTargets: [],
+      exhaustedTargets,
+      policy,
+      slo,
+    });
+    appendMessageBusEntry({
+      projectId: projectState.id,
+      from: 'coordinator',
+      to: 'publication_reliability_engine',
+      kind: 'publication_drift_replay_exhausted',
+      payload: {
+        replayMode: replayPlan.replayMode,
+        exhaustedTargets,
+        policy,
+      },
+    });
+    return {
+      checked: true,
+      driftDetected: true,
+      replayed: 0,
+      healed: false,
+      replay: null,
+      reconciliation,
+      replayExhaustedTargets: exhaustedTargets,
+      slo,
+      incident: incidentResult && incidentResult.incident ? incidentResult.incident : null,
+    };
+  }
+
   const replayResult = await executePublicationDistributionPlan({
     kind: replayPlan.replayMode,
     baseConnector: 'publication_self_heal',
@@ -859,9 +1102,9 @@ async function executePublicationDriftSelfHeal(projectState, options = {}) {
     strategy: 'broadcast',
     rollbackOnFailure: false,
     verifyAfterPublish: true,
-    requiredSuccesses: replayPlan.steps.length,
-    targets: replayPlan.steps.map((step) => step.target),
-    steps: replayPlan.steps,
+    requiredSuccesses: eligibleSteps.length,
+    targets: eligibleSteps.map((step) => step.target),
+    steps: eligibleSteps,
   }, {
     executeStep: async (step) => executeLiveConnector(step.connector, {
       operation: step.operation,
@@ -893,22 +1136,37 @@ async function executePublicationDriftSelfHeal(projectState, options = {}) {
 
   const healed = Boolean(replayResult && replayResult.ok) && Boolean(replayReconciliation && replayReconciliation.ok);
   const ts = nowIso();
+  const slo = evaluatePublicationReliabilitySlo(projectState, { policyOverrides: policy });
+  projectState.publicationHealth.lastSlo = {
+    ts,
+    ...slo,
+  };
+  const incidentResult = await maybeTriggerPublicationReliabilityIncident(projectState, slo, {
+    source: context.source || 'publication_drift_self_heal',
+    policyOverrides: policy,
+  });
   projectState.publicationHealth.lastSelfHealAt = ts;
   projectState.publicationHealth.lastSelfHealSummary = {
     ts,
     driftDetected: true,
-    replayed: replayPlan.steps.length,
+    replayed: eligibleSteps.length,
     replayOk: Boolean(replayResult && replayResult.ok),
     reconciliationOk: Boolean(replayReconciliation && replayReconciliation.ok),
     healed,
+    replayExhaustedTargets: exhaustedTargets,
+    sloOk: Boolean(slo.ok),
+    incidentAlerted: Boolean(incidentResult && incidentResult.alerted),
   };
 
   appendProjectLog(projectState, healed ? 'fix' : 'warning', {
     kind: healed ? 'publication_drift_self_healed' : 'publication_drift_self_heal_failed',
     replayMode: replayPlan.replayMode,
-    replayedTargets: replayPlan.steps.map((step) => step.target),
+    replayedTargets: eligibleSteps.map((step) => step.target),
+    replayExhaustedTargets: exhaustedTargets,
     replayResult: replayResult && replayResult.data ? replayResult.data : null,
     reconciliation: replayReconciliation,
+    slo,
+    incident: incidentResult && incidentResult.incident ? incidentResult.incident : null,
   });
   appendMessageBusEntry({
     projectId: projectState.id,
@@ -917,18 +1175,23 @@ async function executePublicationDriftSelfHeal(projectState, options = {}) {
     kind: healed ? 'publication_drift_self_healed' : 'publication_drift_self_heal_failed',
     payload: {
       replayMode: replayPlan.replayMode,
-      replayedTargets: replayPlan.steps.map((step) => step.target),
+      replayedTargets: eligibleSteps.map((step) => step.target),
+      replayExhaustedTargets: exhaustedTargets,
       healed,
+      sloOk: Boolean(slo.ok),
     },
   });
 
   return {
     checked: true,
     driftDetected: true,
-    replayed: replayPlan.steps.length,
+    replayed: eligibleSteps.length,
     healed,
     replay: replayResult,
     reconciliation: replayReconciliation,
+    replayExhaustedTargets: exhaustedTargets,
+    slo,
+    incident: incidentResult && incidentResult.incident ? incidentResult.incident : null,
   };
 }
 
@@ -1825,9 +2088,13 @@ function summarizeProjectAutomation(projectState) {
     },
     publicationHealth: {
       driftEvents: projectState.publicationHealth.driftEvents.length,
+      incidents: Array.isArray(projectState.publicationHealth.incidents)
+        ? projectState.publicationHealth.incidents.length
+        : 0,
       lastCheckedAt: projectState.publicationHealth.lastCheckedAt || null,
       lastSelfHealAt: projectState.publicationHealth.lastSelfHealAt || null,
       lastSelfHealSummary: projectState.publicationHealth.lastSelfHealSummary || null,
+      lastSlo: projectState.publicationHealth.lastSlo || null,
     },
   };
 }
@@ -4124,15 +4391,21 @@ function makeAnalyticsSnapshot(projectState) {
         lastCheckedAt: projectState.publicationHealth.lastCheckedAt || null,
         lastSelfHealAt: projectState.publicationHealth.lastSelfHealAt || null,
         lastSelfHealSummary: projectState.publicationHealth.lastSelfHealSummary || null,
+        lastSlo: projectState.publicationHealth.lastSlo || null,
         driftEvents: Array.isArray(projectState.publicationHealth.driftEvents)
           ? projectState.publicationHealth.driftEvents.slice(0, 20)
+          : [],
+        incidents: Array.isArray(projectState.publicationHealth.incidents)
+          ? projectState.publicationHealth.incidents.slice(0, 20)
           : [],
       }
       : {
         lastCheckedAt: null,
         lastSelfHealAt: null,
         lastSelfHealSummary: null,
+        lastSlo: null,
         driftEvents: [],
+        incidents: [],
       },
     lastUpdated: nowIso()
   };
