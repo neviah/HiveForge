@@ -16,6 +16,7 @@ test('publishing template includes book autonomy contract and release pipeline a
   const tpl = loadTemplate();
   const contract = tpl.book_autonomy_contract || {};
   const loops = Array.isArray(tpl.recurring_loops) ? tpl.recurring_loops : [];
+  const roleCaps = tpl.role_capabilities || {};
   const phases = Array.isArray(tpl.workflow_definition?.phases) ? tpl.workflow_definition.phases : [];
   const releaseLoop = loops.find((entry) => entry.key === 'publishing_release_loop');
 
@@ -32,6 +33,13 @@ test('publishing template includes book autonomy contract and release pipeline a
 
   assert.ok(releaseLoop);
   assert.equal(releaseLoop.action?.type, 'connector');
-  assert.equal(releaseLoop.action?.connector, 'github');
-  assert.equal(releaseLoop.action?.operation, 'dispatch_workflow');
+  assert.equal(releaseLoop.action?.connector, 'custom_cms');
+  assert.equal(releaseLoop.action?.operation, 'publish_book');
+
+  const growthAllowed = Array.isArray(roleCaps['Growth Hacker']?.allowed_connectors)
+    ? roleCaps['Growth Hacker'].allowed_connectors
+    : [];
+  assert.ok(growthAllowed.includes('kdp'));
+  assert.ok(growthAllowed.includes('substack'));
+  assert.ok(growthAllowed.includes('custom_cms'));
 });

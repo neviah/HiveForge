@@ -17,6 +17,8 @@ const {
   evaluateGoogleAdsGuardrails,
   evaluateSupportAutonomyRouting,
   evaluateFinanceAutonomyGuardrails,
+  evaluateFinanceSettlementExceptions,
+  processFinanceSettlementExceptions,
   markConnectorExecutionRecord,
   appendApprovalDecisionAudit,
   readApprovalDecisionAudit,
@@ -168,6 +170,9 @@ test('mutating operation guard identifies write actions', () => {
   assert.equal(isMutatingConnectorOperation('stripe', 'create_payment_intent'), true);
   assert.equal(isMutatingConnectorOperation('support_ticket', 'reply_ticket'), true);
   assert.equal(isMutatingConnectorOperation('support_ticket', 'list_tickets'), false);
+  assert.equal(isMutatingConnectorOperation('custom_cms', 'publish_book'), true);
+  assert.equal(isMutatingConnectorOperation('substack', 'publish_post'), true);
+  assert.equal(isMutatingConnectorOperation('kdp', 'publish_book'), true);
 });
 
 test('provider idempotency mode maps supported write operations', () => {
@@ -177,6 +182,9 @@ test('provider idempotency mode maps supported write operations', () => {
   assert.equal(connectorIdempotencyMode('email_provider', 'send_campaign'), 'native_token');
   assert.equal(connectorIdempotencyMode('google_ads', 'create_campaign'), 'native_token');
   assert.equal(connectorIdempotencyMode('support_ticket', 'reply_ticket'), 'native_token');
+  assert.equal(connectorIdempotencyMode('custom_cms', 'publish_book'), 'native_token');
+  assert.equal(connectorIdempotencyMode('substack', 'publish_post'), 'native_token');
+  assert.equal(connectorIdempotencyMode('kdp', 'publish_book'), 'native_token');
   assert.equal(connectorIdempotencyMode('analytics', 'list_accounts'), 'not_required');
   assert.equal(connectorIdempotencyMode('unknown_connector', 'create_anything'), 'not_required');
 });
@@ -260,6 +268,53 @@ test('finance guardrails require variance trigger for invoice automation', () =>
 
   assert.equal(guardrail.ok, false);
   assert.equal(Boolean((guardrail.checks || []).find((entry) => entry.id === 'finance_cashflow_variance_trigger' && !entry.ok)), true);
+});
+
+test('finance settlement exception detection flags disputes and payout delay', () => {
+  const exceptions = evaluateFinanceSettlementExceptions('stripe', 'create_invoice', {
+    ok: true,
+    data: {
+      payoutStatus: 'pending',
+      disputeStatus: 'open',
+      disputeId: 'dp_1',
+    },
+  }, {
+    input: {
+      payoutDueAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    },
+  });
+
+  assert.equal(Array.isArray(exceptions), true);
+  assert.equal(Boolean(exceptions.find((entry) => entry.type === 'dispute_open')), true);
+  assert.equal(Boolean(exceptions.find((entry) => entry.type === 'payout_delay')), true);
+});
+
+test('finance settlement exception runbook processing stores and escalates high severity events', async () => {
+  const state = {
+    id: projectId('finance-exceptions'),
+    financeExceptions: [],
+    logs: [],
+  };
+
+  const summary = await processFinanceSettlementExceptions(state, {
+    connector: 'stripe',
+    operation: 'create_refund',
+    executionKey: 'stripe::create_refund::abc',
+    source: 'manual_execute',
+    exceptions: [
+      {
+        type: 'settlement_mismatch',
+        severity: 'high',
+        summary: 'Mismatch',
+        runbook: 'open_reconciliation_incident',
+      },
+    ],
+  });
+
+  assert.equal(summary.count, 1);
+  assert.equal(summary.escalated, 1);
+  assert.equal(state.financeExceptions.length, 1);
+  assert.equal(state.financeExceptions[0].type, 'settlement_mismatch');
 });
 
 test('reconciliation policy flags eventual consistency operations', () => {

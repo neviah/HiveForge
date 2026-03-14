@@ -41,6 +41,9 @@ const DEFAULT_CONNECTOR_RETRY_POLICIES = {
   analytics: { maxAttempts: 3, baseDelayMs: 20 * 1000, maxDelayMs: 20 * 60 * 1000 },
   stripe: { maxAttempts: 2, baseDelayMs: 60 * 1000, maxDelayMs: 60 * 60 * 1000 },
   email_provider: { maxAttempts: 3, baseDelayMs: 30 * 1000, maxDelayMs: 20 * 60 * 1000 },
+  kdp: { maxAttempts: 3, baseDelayMs: 45 * 1000, maxDelayMs: 30 * 60 * 1000 },
+  substack: { maxAttempts: 3, baseDelayMs: 30 * 1000, maxDelayMs: 20 * 60 * 1000 },
+  custom_cms: { maxAttempts: 3, baseDelayMs: 30 * 1000, maxDelayMs: 20 * 60 * 1000 },
   telegram: { maxAttempts: 3, baseDelayMs: 15 * 1000, maxDelayMs: 10 * 60 * 1000 },
   whatsapp: { maxAttempts: 3, baseDelayMs: 15 * 1000, maxDelayMs: 10 * 60 * 1000 },
 };
@@ -167,6 +170,7 @@ const DEFAULT_ROLE_CAPABILITIES = {
   'DevOps Automator': { canDeploy: true, canSpend: true, allowedConnectors: ['netlify', 'github'] },
   'Backend Architect': { canDeploy: false, canSpend: false, allowedConnectors: ['github'] },
   'Senior Project Manager': { canDeploy: false, canSpend: false, allowedConnectors: [] },
+  'Growth Hacker': { canDeploy: true, canSpend: false, allowedConnectors: ['github', 'netlify', 'email_provider', 'analytics', 'kdp', 'substack', 'custom_cms'] },
   'Reality Checker': { canDeploy: false, canSpend: false, allowedConnectors: ['analytics'] },
   'Growth Hacker + Content Creator': { canDeploy: false, canSpend: true, allowedConnectors: ['google_ads', 'analytics'] },
   'Support Responder': { canDeploy: false, canSpend: false, allowedConnectors: ['email_provider', 'support_chat', 'support_ticket'] },
@@ -218,7 +222,7 @@ const appState = {
   }
 };
 
-const SUPPORTED_CREDENTIAL_SERVICES = ['github', 'netlify', 'stripe', 'google_ads', 'analytics', 'email_provider', 'support_chat', 'support_ticket'];
+const SUPPORTED_CREDENTIAL_SERVICES = ['github', 'netlify', 'stripe', 'google_ads', 'analytics', 'email_provider', 'support_chat', 'support_ticket', 'kdp', 'substack', 'custom_cms'];
 const CONNECTOR_REGISTRY = {
   github: { id: 'github', label: 'GitHub', credentialService: 'github' },
   telegram: { id: 'telegram', label: 'Telegram', provider: 'telegram' },
@@ -230,6 +234,9 @@ const CONNECTOR_REGISTRY = {
   email_provider: { id: 'email_provider', label: 'Email Provider', credentialService: 'email_provider' },
   support_chat: { id: 'support_chat', label: 'Support Chat', credentialService: 'support_chat' },
   support_ticket: { id: 'support_ticket', label: 'Support Ticketing', credentialService: 'support_ticket' },
+  kdp: { id: 'kdp', label: 'Amazon KDP', credentialService: 'kdp' },
+  substack: { id: 'substack', label: 'Substack', credentialService: 'substack' },
+  custom_cms: { id: 'custom_cms', label: 'Custom CMS', credentialService: 'custom_cms' },
 };
 const MUTATING_CONNECTOR_OPERATIONS = {
   netlify: new Set(['trigger_deploy']),
@@ -239,6 +246,9 @@ const MUTATING_CONNECTOR_OPERATIONS = {
   google_ads: new Set(['create_campaign', 'update_campaign_budget', 'pause_campaign', 'resume_campaign']),
   support_chat: new Set(['reply_conversation', 'close_conversation', 'escalate_conversation', 'triage_conversations']),
   support_ticket: new Set(['reply_ticket', 'close_ticket', 'escalate_ticket', 'triage_tickets']),
+  kdp: new Set(['publish_book', 'update_publication', 'unpublish_publication']),
+  substack: new Set(['publish_post', 'update_post', 'unpublish_post']),
+  custom_cms: new Set(['publish_book', 'update_publication', 'unpublish_publication']),
 };
 const CONNECTOR_IDEMPOTENCY_PROFILES = {
   netlify: {
@@ -335,6 +345,48 @@ const CONNECTOR_IDEMPOTENCY_PROFILES = {
       reconciliation: null,
     },
     triage_tickets: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+  },
+  kdp: {
+    publish_book: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    update_publication: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    unpublish_publication: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+  },
+  substack: {
+    publish_post: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    update_post: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    unpublish_post: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+  },
+  custom_cms: {
+    publish_book: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    update_publication: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    unpublish_publication: {
       mode: 'native_token',
       reconciliation: null,
     },
@@ -583,6 +635,164 @@ function markConnectorExecutionRecord(projectState, executionKey, patch = {}) {
   }
 
   return next;
+}
+
+function ensureFinanceExceptionState(projectState) {
+  if (!Array.isArray(projectState.financeExceptions)) {
+    projectState.financeExceptions = [];
+  }
+}
+
+function evaluateFinanceSettlementExceptions(connectorId, operation, executionResult, context = {}) {
+  const connector = String(connectorId || '').trim().toLowerCase();
+  const op = String(operation || '').trim().toLowerCase();
+  const input = context && context.input && typeof context.input === 'object' ? context.input : {};
+  const result = executionResult && executionResult.data && typeof executionResult.data === 'object'
+    ? executionResult.data
+    : {};
+
+  if (connector !== 'stripe') return [];
+
+  const out = [];
+  const nowMs = Date.now();
+  const tolerance = clampNumber(input.settlementTolerance, 5, 0, 1000000);
+  const expectedSettlement = Number(input.expectedSettlementAmount ?? input.expectedNetAmount);
+  const actualSettlement = Number(result.settledAmount ?? result.actualSettlementAmount ?? result.netAmount);
+  if (Number.isFinite(expectedSettlement) && Number.isFinite(actualSettlement)) {
+    const delta = Number((actualSettlement - expectedSettlement).toFixed(2));
+    if (Math.abs(delta) > tolerance) {
+      out.push({
+        type: 'settlement_mismatch',
+        severity: 'high',
+        summary: `Settlement mismatch detected for ${op}: expected $${expectedSettlement.toFixed(2)}, actual $${actualSettlement.toFixed(2)}.`,
+        detail: { expectedSettlement, actualSettlement, delta, tolerance },
+        runbook: 'open_reconciliation_incident',
+      });
+    }
+  }
+
+  const payoutDueAt = String(input.payoutDueAt || result.payoutDueAt || '').trim();
+  const payoutStatus = String(result.payoutStatus || '').trim().toLowerCase();
+  const payoutDueMs = Date.parse(payoutDueAt);
+  if (payoutDueAt && Number.isFinite(payoutDueMs) && payoutDueMs < nowMs && payoutStatus !== 'paid') {
+    out.push({
+      type: 'payout_delay',
+      severity: 'medium',
+      summary: 'Payout due time passed without confirmed payout settlement.',
+      detail: { payoutDueAt, payoutStatus: payoutStatus || 'unknown' },
+      runbook: 'retry_payout_sync_then_escalate',
+    });
+  }
+
+  const disputeStatus = String(result.disputeStatus || input.disputeStatus || '').trim().toLowerCase();
+  const disputeOpen = Boolean(result.disputeOpen || input.disputeOpen || disputeStatus === 'open');
+  if (disputeOpen) {
+    out.push({
+      type: 'dispute_open',
+      severity: 'high',
+      summary: 'Stripe dispute is open and requires evidence runbook handling.',
+      detail: {
+        disputeId: result.disputeId || input.disputeId || null,
+        disputeStatus: disputeStatus || 'open',
+      },
+      runbook: 'collect_evidence_and_escalate_finance_support',
+    });
+  }
+
+  const chargebackAmount = Number(result.chargebackAmount ?? input.chargebackAmount);
+  const chargebackLost = disputeStatus === 'lost' || Boolean(result.chargebackReceived);
+  if ((Number.isFinite(chargebackAmount) && chargebackAmount > 0) || chargebackLost) {
+    out.push({
+      type: 'chargeback_received',
+      severity: 'critical',
+      summary: 'Chargeback received; trigger critical finance dispute runbook.',
+      detail: {
+        chargebackAmount: Number.isFinite(chargebackAmount) ? chargebackAmount : null,
+        disputeStatus: disputeStatus || null,
+      },
+      runbook: 'freeze_refund_lane_and_notify_operator',
+    });
+  }
+
+  return out;
+}
+
+async function processFinanceSettlementExceptions(projectState, context = {}) {
+  ensureFinanceExceptionState(projectState);
+  const exceptions = Array.isArray(context.exceptions) ? context.exceptions : [];
+  if (!exceptions.length) {
+    return { count: 0, escalated: 0, items: [] };
+  }
+
+  const created = [];
+  let escalated = 0;
+  for (const entry of exceptions) {
+    const severity = String(entry.severity || 'medium').toLowerCase();
+    const item = {
+      id: crypto.randomUUID(),
+      createdAt: nowIso(),
+      connector: String(context.connector || 'stripe').toLowerCase(),
+      operation: String(context.operation || '').toLowerCase(),
+      executionKey: context.executionKey || null,
+      taskId: context.taskId || null,
+      type: String(entry.type || 'finance_exception'),
+      severity,
+      summary: String(entry.summary || 'Finance exception detected.'),
+      detail: entry.detail && typeof entry.detail === 'object' ? entry.detail : {},
+      runbook: String(entry.runbook || 'manual_review'),
+      source: String(context.source || 'connector_execution'),
+      status: 'open',
+    };
+    projectState.financeExceptions.unshift(item);
+    created.push(item);
+
+    appendProjectLog(projectState, 'message', {
+      kind: 'finance_exception_detected',
+      exceptionId: item.id,
+      connector: item.connector,
+      operation: item.operation,
+      type: item.type,
+      severity: item.severity,
+      runbook: item.runbook,
+      summary: item.summary,
+    });
+    appendMessageBusEntry({
+      projectId: projectState.id,
+      from: 'coordinator',
+      to: 'finance_runbook_engine',
+      kind: 'finance_exception_detected',
+      payload: {
+        exceptionId: item.id,
+        type: item.type,
+        severity: item.severity,
+        runbook: item.runbook,
+        summary: item.summary,
+        connector: item.connector,
+        operation: item.operation,
+      },
+    });
+
+    if (item.severity === 'high' || item.severity === 'critical') {
+      escalated += 1;
+      await notifyOperator(projectState, `Finance exception (${item.severity}): ${item.summary}`, {
+        exceptionId: item.id,
+        runbook: item.runbook,
+        connector: item.connector,
+        operation: item.operation,
+        type: item.type,
+      });
+    }
+  }
+
+  if (projectState.financeExceptions.length > 200) {
+    projectState.financeExceptions.length = 200;
+  }
+
+  return {
+    count: created.length,
+    escalated,
+    items: created,
+  };
 }
 
 function ensureKpiGoalState(projectState) {
@@ -1280,6 +1490,7 @@ function humanizeDurationMs(ms) {
 function summarizeProjectAutomation(projectState) {
   ensureRecurringState(projectState);
   ensureDeadLetterState(projectState);
+  ensureFinanceExceptionState(projectState);
   ensureApprovalGovernanceState(projectState);
   ensureOperationalLoopState(projectState);
   return {
@@ -1317,6 +1528,10 @@ function summarizeProjectAutomation(projectState) {
     },
     deadLetters: {
       count: projectState.deadLetters.length,
+    },
+    financeExceptions: {
+      count: projectState.financeExceptions.length,
+      criticalOpen: projectState.financeExceptions.filter((item) => String(item && item.severity || '').toLowerCase() === 'critical').length,
     },
   };
 }
@@ -1917,6 +2132,15 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
       siteId: String(action?.input?.siteId || ''),
       executionKey,
     });
+    const financeExceptions = await processFinanceSettlementExceptions(projectState, {
+      connector: action.connector,
+      operation: action.operation,
+      execution,
+      input: actionInput,
+      executionKey,
+      source: 'recurring_auto_action',
+      taskId: task.id,
+    });
     if (actualCost > 0 && policyResult.credentialService) {
       recordCredentialSpend(projectState.id, policyResult.credentialService, actualCost, nowIso());
     }
@@ -1931,6 +2155,7 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
       reconciliation,
       supportRouting: supportRouting.route,
       financeGuardrail: financeGuardrail.route,
+      financeExceptions,
     });
     markConnectorExecutionRecord(projectState, executionKey, {
       status: 'succeeded',
@@ -1939,6 +2164,7 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
       actualCost,
       result: execution.data || null,
       reconciliation,
+      financeExceptions,
     });
     if (reconciliation && reconciliation.checked && !reconciliation.ok) {
       appendProjectLog(projectState, 'message', {
@@ -2289,6 +2515,7 @@ function ensureMessageBus() {
   try {
     const { DatabaseSync } = require('node:sqlite');
     const db = new DatabaseSync(MESSAGE_BUS_PATH);
+    db.exec('PRAGMA busy_timeout = 1000;');
     db.exec(`
       CREATE TABLE IF NOT EXISTS message_bus (
         id TEXT PRIMARY KEY,
@@ -2325,27 +2552,34 @@ function appendMessageBusEntry({ projectId, from, to, kind, payload = {} }) {
     payload,
   };
   if (sqliteMessageBus) {
-    try {
-      const stmt = sqliteMessageBus.prepare(`
-        INSERT INTO message_bus (id, ts, project_id, from_actor, to_actor, kind, payload_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `);
-      stmt.run(
-        entry.id,
-        entry.ts,
-        entry.projectId,
-        entry.from,
-        entry.to,
-        entry.kind,
-        JSON.stringify(entry.payload || {})
-      );
-    } catch (err) {
-      // SQLite may return ERR_SQLITE_ERROR/"database is locked" under parallel
-      // test workers. Message-bus durability is best-effort in that edge case.
-      const msg = String(err && err.message ? err.message : '').toLowerCase();
-      if (!msg.includes('database is locked')) {
-        throw err;
+    const stmt = sqliteMessageBus.prepare(`
+      INSERT INTO message_bus (id, ts, project_id, from_actor, to_actor, kind, payload_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    let lastError = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        stmt.run(
+          entry.id,
+          entry.ts,
+          entry.projectId,
+          entry.from,
+          entry.to,
+          entry.kind,
+          JSON.stringify(entry.payload || {})
+        );
+        lastError = null;
+        break;
+      } catch (err) {
+        const msg = String(err && err.message ? err.message : '').toLowerCase();
+        if (!msg.includes('database is locked')) {
+          throw err;
+        }
+        lastError = err;
       }
+    }
+    if (lastError) {
+      throw lastError;
     }
     return entry;
   }
@@ -3023,6 +3257,7 @@ function recoverProjectStateAfterRestart(state) {
   ensureApprovalGovernanceState(state);
   ensureOperationalLoopState(state);
   ensureDeadLetterState(state);
+  ensureFinanceExceptionState(state);
   ensureConnectorExecutionState(state);
   if (!state.kpiAlerting || typeof state.kpiAlerting !== 'object') {
     state.kpiAlerting = { lastSentAt: null, lastSignature: null };
@@ -3157,6 +3392,7 @@ function createProjectFromTemplate({ name, template, goal }) {
       objectives: [],
     },
     deadLetters: [],
+    financeExceptions: [],
     connectorExecutions: {},
     kpiAlerting: {
       lastSentAt: null,
@@ -3538,6 +3774,7 @@ function refreshWeeklyKpiPlan(projectState, ts = nowIso()) {
 
 function makeAnalyticsSnapshot(projectState) {
   ensureKpiGoalState(projectState);
+  ensureFinanceExceptionState(projectState);
   const done = projectState.tasks.filter((t) => t.status === 'done').length;
   const inProgress = projectState.tasks.filter((t) => t.status === 'inprogress').length;
   const backlog = projectState.tasks.filter((t) => t.status === 'backlog').length;
@@ -3566,6 +3803,7 @@ function makeAnalyticsSnapshot(projectState) {
     alerts: insight.alerts,
     weeklyPlan: insight.goals.weeklyPlan,
     deadLetters: Array.isArray(projectState.deadLetters) ? projectState.deadLetters.slice(0, 20) : [],
+    financeExceptions: Array.isArray(projectState.financeExceptions) ? projectState.financeExceptions.slice(0, 20) : [],
     lastUpdated: nowIso()
   };
 }
@@ -5336,6 +5574,102 @@ async function executeSupportTicketConnector(options = {}) {
   };
 }
 
+async function executeKdpConnector(options = {}) {
+  const operation = String(options.operation || 'publish_book').trim() || 'publish_book';
+  const token = readCredentialToken('kdp');
+  if (!token) {
+    return {
+      ok: false,
+      errorCode: 'SECRET_MISSING',
+      message: 'KDP credential token is missing.',
+      operation,
+      actualCost: 0,
+      data: null,
+    };
+  }
+
+  const gateway = await executeViaApiGateway('kdp', operation, {
+    ...(options.input && typeof options.input === 'object' ? options.input : {}),
+    credentialToken: token,
+    idempotencyKey: options.idempotencyKey || null,
+    projectId: options.projectId || null,
+  }, 25000);
+  if (!gateway.ok) return gateway;
+  return {
+    ok: true,
+    message: gateway.message || `KDP operation ${operation} completed via API gateway.`,
+    operation,
+    actualCost: Number.isFinite(Number(gateway.actualCost))
+      ? Number(gateway.actualCost)
+      : Number(options.estimatedCost || 0),
+    data: gateway.data || null,
+  };
+}
+
+async function executeSubstackConnector(options = {}) {
+  const operation = String(options.operation || 'publish_post').trim() || 'publish_post';
+  const token = readCredentialToken('substack');
+  if (!token) {
+    return {
+      ok: false,
+      errorCode: 'SECRET_MISSING',
+      message: 'Substack credential token is missing.',
+      operation,
+      actualCost: 0,
+      data: null,
+    };
+  }
+
+  const gateway = await executeViaApiGateway('substack', operation, {
+    ...(options.input && typeof options.input === 'object' ? options.input : {}),
+    credentialToken: token,
+    idempotencyKey: options.idempotencyKey || null,
+    projectId: options.projectId || null,
+  }, 25000);
+  if (!gateway.ok) return gateway;
+  return {
+    ok: true,
+    message: gateway.message || `Substack operation ${operation} completed via API gateway.`,
+    operation,
+    actualCost: Number.isFinite(Number(gateway.actualCost))
+      ? Number(gateway.actualCost)
+      : Number(options.estimatedCost || 0),
+    data: gateway.data || null,
+  };
+}
+
+async function executeCustomCmsConnector(options = {}) {
+  const operation = String(options.operation || 'publish_book').trim() || 'publish_book';
+  const token = readCredentialToken('custom_cms');
+  if (!token) {
+    return {
+      ok: false,
+      errorCode: 'SECRET_MISSING',
+      message: 'Custom CMS credential token is missing.',
+      operation,
+      actualCost: 0,
+      data: null,
+    };
+  }
+
+  const gateway = await executeViaApiGateway('custom_cms', operation, {
+    ...(options.input && typeof options.input === 'object' ? options.input : {}),
+    credentialToken: token,
+    idempotencyKey: options.idempotencyKey || null,
+    projectId: options.projectId || null,
+  }, 25000);
+  if (!gateway.ok) return gateway;
+  return {
+    ok: true,
+    message: gateway.message || `Custom CMS operation ${operation} completed via API gateway.`,
+    operation,
+    actualCost: Number.isFinite(Number(gateway.actualCost))
+      ? Number(gateway.actualCost)
+      : Number(options.estimatedCost || 0),
+    data: gateway.data || null,
+  };
+}
+
 async function executeLiveConnector(connectorId, options = {}) {
   const connectorKey = String(connectorId || '').trim().toLowerCase();
   if (connectorKey === 'github') {
@@ -5361,6 +5695,15 @@ async function executeLiveConnector(connectorId, options = {}) {
   }
   if (connectorKey === 'support_ticket') {
     return executeSupportTicketConnector(options);
+  }
+  if (connectorKey === 'kdp') {
+    return executeKdpConnector(options);
+  }
+  if (connectorKey === 'substack') {
+    return executeSubstackConnector(options);
+  }
+  if (connectorKey === 'custom_cms') {
+    return executeCustomCmsConnector(options);
   }
   return {
     ok: false,
@@ -7159,6 +7502,22 @@ async function main() {
                   actualCost = typeof execution.actualCost === 'number' && Number.isFinite(execution.actualCost)
                     ? execution.actualCost
                     : (typeof estimatedCost === 'number' ? estimatedCost : 0);
+                  let financeExceptions = { count: 0, escalated: 0, items: [] };
+                  if (projectId) {
+                    const runtime = projectRuntimes.get(projectId);
+                    if (runtime && runtime.state) {
+                      financeExceptions = await processFinanceSettlementExceptions(runtime.state, {
+                        connector,
+                        operation,
+                        execution,
+                        input: executionInput,
+                        executionKey,
+                        source: 'manual_execute',
+                        taskId: null,
+                      });
+                      response.financeExceptions = financeExceptions;
+                    }
+                  }
                   response.reason = execution.message || response.reason;
                   auditDecision = 'allow';
                   auditReason = response.reason;
@@ -7180,6 +7539,7 @@ async function main() {
                         actualCost,
                         result: execution.data || null,
                         reconciliation,
+                        financeExceptions,
                       });
                       if (reconciliation && reconciliation.checked && !reconciliation.ok) {
                         appendProjectLog(runtime.state, 'message', {
@@ -7727,6 +8087,8 @@ module.exports = {
   evaluateGoogleAdsGuardrails,
   evaluateSupportAutonomyRouting,
   evaluateFinanceAutonomyGuardrails,
+  evaluateFinanceSettlementExceptions,
+  processFinanceSettlementExceptions,
   markConnectorExecutionRecord,
   appendApprovalDecisionAudit,
   readApprovalDecisionAudit,

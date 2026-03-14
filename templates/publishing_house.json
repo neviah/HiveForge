@@ -74,7 +74,10 @@
                                                                                "github",
                                                                                "netlify",
                                                                                "email_provider",
-                                                                               "analytics"
+                                                                               "analytics",
+                                                                               "kdp",
+                                                                               "substack",
+                                                                               "custom_cms"
                                                                            ]
                                                 },
                               "Content Creator":  {
@@ -102,7 +105,7 @@
                                    "continuity_validator":  true,
                                    "humanization_pass":  true,
                                    "feedback_revision_rounds":  2,
-                                   "publish_target":  "github_workflow"
+                                   "publish_target":  "direct_connector"
                                },
     "recurring_loops":  [
                             {
@@ -144,13 +147,14 @@
                                 "owner_role":  "Growth Hacker",
                                 "action":  {
                                                "type":  "connector",
-                                               "connector":  "github",
-                                               "operation":  "dispatch_workflow",
+                                               "connector":  "custom_cms",
+                                               "operation":  "publish_book",
                                                "estimated_cost":  0,
                                                "input":  {
-                                                             "repository":  "book-production",
-                                                             "workflow":  "publish-book.yml",
-                                                             "ref":  "main"
+                                                             "provider":  "substack",
+                                                             "publication":  "book-production",
+                                                             "slug":  "weekly-book-release",
+                                                             "visibility":  "public"
                                                          },
                                                "requires_permission":  false
                                            },
