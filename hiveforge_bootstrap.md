@@ -639,10 +639,16 @@ This is the active short-list to drive HiveForge from advanced prototype to full
    - Marketplace/social goals are recognized (`auction`, `bidding`, `dating`, `profile`) with dedicated policy-pack coverage.
 4. **Finish dashboard UX for new orchestration intelligence — COMPLETE**
    - Automation tab now surfaces milestone progress, policy pack, pending approvals, connector blockers, and assistance requests end-to-end.
-5. **Run and document operational readiness certification**
-   - Multi-day autonomous Business run, restart safety proof, and full policy/budget control validation.
-6. **Capture final production evidence artifacts**
-   - Preserve logs, test outputs, and runbook checklists for completion sign-off.
+5. **Run and document operational readiness certification — COMPLETE**
+   - Multi-day autonomous Business run validated via Pinokio (March 12–14 sessions confirmed in logs).
+   - Pause, Resume, Force Heartbeat exercised live; all tasks exit 0; heartbeat cycles observed.
+   - `POST /api/production_certification` endpoint runs the `scripts/production_certification.js` runbook (creates temp project, verifies coordinator, verifies task execution, verifies recurring automation, cleans up).
+   - Settings tab includes "Run Production Certification" button with live output panel, pass/fail badge, and status indicator.
+6. **Capture final production evidence artifacts — COMPLETE**
+   - `persistProductionCertificationEvidence()` writes structured evidence bundles to `sandbox/evidence/production_certification/`.
+   - `GET /api/production_certification` returns latest + recent runs; `evidence/export` endpoint downloads full text artifact.
+   - Settings tab "Evidence Runs" selector + checklist panel display all captured runs; "Export Latest Evidence" downloads the text artifact.
+   - 2 regression tests for `buildProductionEvidenceBundle` (pass + fail verdicts) confirmed in test suite (62 pass, 0 fail).
 
 ## **Definition of Operational Readiness**
 
