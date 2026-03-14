@@ -275,6 +275,52 @@ const INDUSTRY_APPROVAL_POLICY_PACKS = {
       },
     ],
   },
+  marketplace: {
+    id: 'marketplace',
+    title: 'Marketplace & Social Platform Pack',
+    summary: 'Protects auction/bidding transactions, user profile data, trust/safety deployments, and matching algorithm changes for marketplaces, dating apps, and social platforms.',
+    autoDenyRules: [
+      {
+        id: 'marketplace-deny-bulk-message-untrusted',
+        connectors: ['email_provider', 'support_ticket'],
+        operations: ['send_bulk_email', 'send_email', 'create_broadcast'],
+        actorRoles: ['intern', 'contractor', 'unknown'],
+        taskKeywords: ['blast', 'broadcast', 'all users', 'mass message', 'bulk send'],
+      },
+      {
+        id: 'marketplace-deny-auction-settlement-untrusted',
+        connectors: ['stripe'],
+        operations: ['create_transfer', 'create_payout', 'create_refund'],
+        actorRoles: ['intern', 'contractor', 'unknown'],
+        minEstimatedCost: 100,
+      },
+    ],
+    escalationRules: [
+      {
+        id: 'marketplace-escalate-trust-safety-deploy',
+        operations: ['trigger_deploy'],
+        taskKeywords: ['trust', 'safety', 'moderation', 'reporting', 'ban', 'block', 'terms of service', 'community guidelines', 'harassment policy'],
+      },
+      {
+        id: 'marketplace-escalate-matching-algo-change',
+        connectors: ['netlify', 'github'],
+        minRiskScore: 50,
+        taskKeywords: ['matching algorithm', 'ranking', 'recommendation', 'feed algorithm', 'scoring', 'search ranking', 'auction algorithm'],
+      },
+      {
+        id: 'marketplace-escalate-fee-structure',
+        connectors: ['stripe', 'analytics'],
+        minRiskScore: 55,
+        taskKeywords: ['fee', 'commission', 'platform cut', 'take rate', 'transaction fee', 'listing fee', 'subscription tier'],
+      },
+      {
+        id: 'marketplace-escalate-auction-transaction',
+        connectors: ['stripe'],
+        operations: ['create_payment_intent', 'create_invoice', 'create_transfer'],
+        minEstimatedCost: 100,
+      },
+    ],
+  },
 };
 const WEEKLY_OBJECTIVES_BY_TEMPLATE = {
   default: [
@@ -313,6 +359,52 @@ const WEEKLY_OBJECTIVES_BY_TEMPLATE = {
       metric: 'monthlySpend',
     },
   ],
+  marketplace: {
+    id: 'marketplace',
+    title: 'Marketplace & Social Platform Pack',
+    summary: 'Protects auction/bidding transactions, user profile data, trust/safety deployments, and matching algorithm changes for marketplaces, dating apps, and social platforms.',
+    autoDenyRules: [
+      {
+        id: 'marketplace-deny-bulk-message-untrusted',
+        connectors: ['email_provider', 'support_ticket'],
+        operations: ['send_bulk_email', 'send_email', 'create_broadcast'],
+        actorRoles: ['intern', 'contractor', 'unknown'],
+        taskKeywords: ['blast', 'broadcast', 'all users', 'mass message', 'bulk send'],
+      },
+      {
+        id: 'marketplace-deny-auction-settlement-untrusted',
+        connectors: ['stripe'],
+        operations: ['create_transfer', 'create_payout', 'create_refund'],
+        actorRoles: ['intern', 'contractor', 'unknown'],
+        minEstimatedCost: 100,
+      },
+    ],
+    escalationRules: [
+      {
+        id: 'marketplace-escalate-trust-safety-deploy',
+        operations: ['trigger_deploy'],
+        taskKeywords: ['trust', 'safety', 'moderation', 'reporting', 'ban', 'block', 'terms of service', 'community guidelines', 'harassment policy'],
+      },
+      {
+        id: 'marketplace-escalate-matching-algo-change',
+        connectors: ['netlify', 'github'],
+        minRiskScore: 50,
+        taskKeywords: ['matching algorithm', 'ranking', 'recommendation', 'feed algorithm', 'scoring', 'search ranking', 'auction algorithm'],
+      },
+      {
+        id: 'marketplace-escalate-fee-structure',
+        connectors: ['stripe', 'analytics'],
+        minRiskScore: 55,
+        taskKeywords: ['fee', 'commission', 'platform cut', 'take rate', 'transaction fee', 'listing fee', 'subscription tier'],
+      },
+      {
+        id: 'marketplace-escalate-auction-transaction',
+        connectors: ['stripe'],
+        operations: ['create_payment_intent', 'create_invoice', 'create_transfer'],
+        minEstimatedCost: 100,
+      },
+    ],
+  },
 };
 const DEFAULT_RECURRING_SCHEDULE = [
   { key: 'maintenance_health', title: 'Run maintenance health check', phase: 'maintenance', everyMs: 60 * 60 * 1000 },
@@ -2128,6 +2220,7 @@ function inferIndustryApprovalPack(templateId, goalPlan = {}) {
   if (Boolean(tags.healthcare)) return 'healthcare';
   if (Boolean(tags.ecommerce)) return 'ecommerce';
   if (Boolean(tags.fintech)) return 'finance';
+  if (Boolean(tags.marketplace) || Boolean(tags.social)) return 'marketplace';
   if (templateKey === 'business' && Boolean(tags.legal) && textContainsAny(goalText, ['housing', 'landlord', 'tenant', 'lease', 'rental', 'property'])) {
     return 'housing';
   }
@@ -2503,7 +2596,9 @@ function normalizeGoalKeywordTags(goalText) {
     property: textContainsAny(source, ['property', 'landlord', 'tenant', 'lease', 'rental', 'application']),
     fintech: textContainsAny(source, ['fintech', 'financial service', 'accounting', 'bookkeeping', 'payroll', 'cashflow', 'ledger', 'accounts payable', 'accounts receivable', 'expense tracking']),
     healthcare: textContainsAny(source, ['patient', 'medical', 'clinical', 'healthcare', 'health care', 'hipaa', 'ehr', 'prescription', 'diagnosis', 'hospital', 'clinic', 'telehealth']),
-    ecommerce: textContainsAny(source, ['ecommerce', 'e-commerce', 'online store', 'shopify', 'woocommerce', 'product catalog', 'inventory', 'order fulfillment', 'marketplace', 'retail store']),
+    ecommerce: textContainsAny(source, ['ecommerce', 'e-commerce', 'online store', 'shopify', 'woocommerce', 'product catalog', 'inventory', 'order fulfillment', 'retail store']),
+    marketplace: textContainsAny(source, ['marketplace', 'auction', 'bidding', 'bid', 'listing', 'buy and sell', 'seller', 'buyer', 'classifieds', 'peer-to-peer']),
+    social: textContainsAny(source, ['social', 'profile', 'dating', 'match', 'matchmaking', 'network', 'community', 'forum', 'feed', 'follow', 'user-generated']),
   };
 }
 
@@ -2556,6 +2651,11 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   }
   if (tags.ecommerce || tags.fintech) connectorSet.add('stripe');
   if (tags.analytics || tags.marketing || tags.payments || tags.ecommerce) connectorSet.add('analytics');
+  if (tags.marketplace || tags.social) {
+    connectorSet.add('stripe');
+    connectorSet.add('support_ticket');
+    connectorSet.add('email_provider');
+  }
 
   const requiredConnectors = Array.from(connectorSet);
   const metadata = readCredentialMetadata();
@@ -2567,10 +2667,28 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
     return !(entry && entry.connected);
   });
 
+  const GOAL_PHASE_SEQUENCE = ['strategy', 'product_build', 'finance', 'compliance', 'deployment', 'growth', 'analytics', 'marketing', 'support', 'maintenance'];
+  const lastIdxByPhase = {};
   const tasks = [];
   const addTask = (task) => {
     if (!task || !task.title) return;
-    tasks.push(task);
+    const phase = String(task.phase || 'general');
+    const phasePos = GOAL_PHASE_SEQUENCE.indexOf(phase);
+    let depIdx = null;
+    if (typeof lastIdxByPhase[phase] === 'number') {
+      depIdx = lastIdxByPhase[phase];
+    } else if (phasePos > 0) {
+      for (let p = phasePos - 1; p >= 0; p--) {
+        const prev = GOAL_PHASE_SEQUENCE[p];
+        if (typeof lastIdxByPhase[prev] === 'number') {
+          depIdx = lastIdxByPhase[prev];
+          break;
+        }
+      }
+    }
+    const idx = tasks.length;
+    tasks.push({ ...task, dependencies: depIdx !== null ? [depIdx] : [] });
+    lastIdxByPhase[phase] = idx;
   };
 
   addTask({
@@ -2584,7 +2702,6 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
     phase: 'strategy',
     requiredRole: 'Senior Project Manager',
     description: 'Produce execution milestones from point A to point B with owner roles and verification gates.',
-    dependencies: [0],
   });
 
   if (tags.webApp) {
@@ -2593,14 +2710,12 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       phase: 'product_build',
       requiredRole: 'Backend Architect',
       description: 'Translate business workflows into backend services, data model, and endpoint contracts.',
-      dependencies: [1],
     });
     addTask({
       title: 'Implement core web experience and role-based user journeys',
       phase: 'product_build',
       requiredRole: 'UI Designer',
       description: 'Build production-ready UX for required personas and success paths.',
-      dependencies: [2],
     });
   }
 
@@ -2610,7 +2725,6 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       phase: 'product_build',
       requiredRole: 'Backend Architect',
       description: 'Cover listings, applications, approvals, tenancy management, and operational state transitions.',
-      dependencies: [2],
     });
   }
 
@@ -2620,7 +2734,6 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       phase: 'finance',
       requiredRole: 'Finance Tracker',
       description: 'Define monthly fee collection logic, invoicing events, and failed-payment handling.',
-      dependencies: [1],
     });
   }
 
@@ -2630,14 +2743,12 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       phase: 'product_build',
       requiredRole: 'Backend Architect',
       description: 'Define PHI boundaries, access controls, consent capture, and data retention policies.',
-      dependencies: [1],
     });
     addTask({
       title: 'Establish patient data escalation and regulated support triage policy',
       phase: 'compliance',
       requiredRole: 'Legal Compliance Checker',
       description: 'Document PHI access paths, breach notification procedures, and regulated support routing.',
-      dependencies: [1],
     });
   }
 
@@ -2647,14 +2758,12 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       phase: 'product_build',
       requiredRole: 'Backend Architect',
       description: 'Implement catalog management, stock levels, order lifecycle, and fulfillment workflows.',
-      dependencies: [1],
     });
     addTask({
       title: 'Configure pricing rules, discount engine, and checkout flow',
       phase: 'finance',
       requiredRole: 'Finance Tracker',
       description: 'Set up product pricing, promotional tiers, tax rules, and checkout-to-payment integration.',
-      dependencies: [1],
     });
   }
 
@@ -2664,7 +2773,6 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       phase: 'finance',
       requiredRole: 'Finance Tracker',
       description: 'Define transaction recording, reconciliation workflows, and financial reporting outputs.',
-      dependencies: [1],
     });
   }
 
@@ -2685,7 +2793,6 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
         actorRole: probe.actorRole,
         requiresPermission: false,
       },
-      dependencies: [1],
     });
   });
 
@@ -2695,7 +2802,6 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       phase: 'deployment',
       requiredRole: 'Backend Architect',
       description: 'Ensure release safety checks, rollback path, and release verification are in place.',
-      dependencies: [1],
     });
   }
 
@@ -2705,7 +2811,6 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       phase: 'growth',
       requiredRole: 'Growth Hacker + Content Creator',
       description: 'Connect KPIs to campaign actions and establish recurring optimization cadence.',
-      dependencies: [1],
     });
   }
 
@@ -2715,7 +2820,6 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       phase: 'support',
       requiredRole: 'Support Responder',
       description: 'Define support response policy, escalation triggers, and feedback closure loop.',
-      dependencies: [1],
     });
   }
 
@@ -2725,7 +2829,45 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       phase: 'compliance',
       requiredRole: 'Legal Compliance Checker',
       description: 'Review contracts, privacy, policy obligations, and regulated workflow boundaries.',
-      dependencies: [1],
+    });
+  }
+
+  if (tags.marketplace) {
+    addTask({
+      title: 'Build listing, auction/bidding mechanics, and transaction flow',
+      phase: 'product_build',
+      requiredRole: 'Backend Architect',
+      description: 'Implement listing creation, bid management, auction lifecycle, transaction settlement, and seller/buyer dashboards.',
+    });
+    addTask({
+      title: 'Configure platform commission, fee structure, and payout routing',
+      phase: 'finance',
+      requiredRole: 'Finance Tracker',
+      description: 'Set up take-rate rules, seller payout timing, escrow-like settlement, and financial reconciliation.',
+    });
+  }
+
+  if (tags.social) {
+    addTask({
+      title: 'Implement user profile management, onboarding, and verification flow',
+      phase: 'product_build',
+      requiredRole: 'Backend Architect',
+      description: 'Cover account creation, profile setup, identity verification, photo/media handling, and privacy controls.',
+    });
+    addTask({
+      title: 'Build trust and safety system: reporting, moderation, and community guidelines enforcement',
+      phase: 'compliance',
+      requiredRole: 'Legal Compliance Checker',
+      description: 'Implement user reporting, content moderation workflow, ban/block mechanics, and community policy enforcement.',
+    });
+  }
+
+  if (tags.marketplace || tags.social) {
+    addTask({
+      title: 'Establish user safety incident escalation and abuse response playbook',
+      phase: 'support',
+      requiredRole: 'Support Responder',
+      description: 'Define escalation paths for harassment, fraud, and platform abuse incidents with fast-response SLAs.',
     });
   }
 
@@ -2734,14 +2876,9 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
     phase: 'maintenance',
     requiredRole: 'Senior Project Manager',
     description: 'Document monitoring, escalation, and long-running business maintenance procedures.',
-    dependencies: [1],
   });
 
-  const milestones = tasks.map((task, idx) => ({
-    id: `M${idx + 1}`,
-    title: task.title,
-    phase: task.phase,
-  }));
+  const milestones = buildGoalMilestones(tasks, tags);
   const assumptions = [
     'Coordinator remains the only credential-broker and policy enforcer.',
     'Blocked connector actions trigger operator assistance notifications with context.',
@@ -2856,6 +2993,141 @@ function humanizeDurationMs(ms) {
   return `${totalMinutes}m`;
 }
 
+function buildGoalMilestones(tasks, tags = {}) {
+  const PHASE_TITLE_MAP = {
+    strategy: 'Strategy & Charter',
+    product_build: 'Product Build & Architecture',
+    finance: 'Finance, Billing & Payments',
+    compliance: 'Legal & Compliance Review',
+    deployment: 'Deployment & Release',
+    growth: 'Growth & Acquisition',
+    analytics: 'Analytics & Instrumentation',
+    marketing: 'Marketing',
+    support: 'Support & Operations',
+    maintenance: 'Ongoing Maintenance',
+  };
+  const PHASE_ACCEPTANCE_MAP = {
+    strategy: ['Execution charter reviewed and accepted by coordinator', 'Milestone roadmap and owners documented with verification gates'],
+    product_build: ['Core product features implemented, reviewed, and ready for deployment'],
+    finance: ['Billing flows tested end-to-end with live connector', 'Payment recovery and edge cases documented'],
+    compliance: ['Legal/compliance review complete with no blocking findings', 'Policy and operating obligations documented'],
+    deployment: ['Production deployment successful', 'Rollback path verified and documented'],
+    growth: ['KPI instrumentation live with data flowing', 'Initial campaign or acquisition loop running'],
+    analytics: ['Analytics pipeline verified with live data', 'Dashboards and alerting configured'],
+    marketing: ['Marketing channels configured', 'Campaign KPIs set and tracked'],
+    support: ['Support triage policy documented and SLA routing active', 'Escalation paths verified'],
+    maintenance: ['Coordinator operating runbook published', 'Autonomous maintenance policy active'],
+  };
+  const phaseOrder = [];
+  const tasksByPhase = {};
+  tasks.forEach((task, idx) => {
+    const phase = String(task.phase || 'general');
+    if (!tasksByPhase[phase]) {
+      tasksByPhase[phase] = [];
+      phaseOrder.push(phase);
+    }
+    tasksByPhase[phase].push(`GOAL-${idx + 1}`);
+  });
+  return phaseOrder.map((phase) => ({
+    id: `MS-${phase}`,
+    phase,
+    title: PHASE_TITLE_MAP[phase] || String(phase).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+    acceptanceCriteria: PHASE_ACCEPTANCE_MAP[phase] || [`All ${phase} tasks completed and verified`],
+    requiredTaskIds: tasksByPhase[phase],
+    completedAt: null,
+  }));
+}
+
+function evaluateMilestoneCompletion(projectState) {
+  const goalPlan = projectState.goalPlan;
+  if (!goalPlan || !Array.isArray(goalPlan.milestones) || goalPlan.milestones.length === 0) {
+    return { total: 0, completed: 0, pct: 100, milestones: [] };
+  }
+  const doneTasks = new Set(projectState.tasks.filter((t) => t.status === 'done').map((t) => t.id));
+  let completed = 0;
+  const milestones = goalPlan.milestones.map((m) => {
+    const requiredIds = Array.isArray(m.requiredTaskIds) ? m.requiredTaskIds : [];
+    const allDone = requiredIds.length > 0 && requiredIds.every((id) => doneTasks.has(id));
+    if (allDone && !m.completedAt) m.completedAt = nowIso();
+    else if (!allDone) m.completedAt = null;
+    if (m.completedAt) completed++;
+    return {
+      id: m.id,
+      phase: m.phase,
+      title: m.title,
+      completedAt: m.completedAt || null,
+      requiredTaskCount: requiredIds.length,
+      doneTaskCount: requiredIds.filter((id) => doneTasks.has(id)).length,
+    };
+  });
+  const total = milestones.length;
+  return { total, completed, pct: total === 0 ? 100 : Math.round((completed / total) * 100), milestones };
+}
+
+function verifyGoalDelivery(projectState) {
+  const goalPlan = projectState.goalPlan;
+  if (!goalPlan || !Array.isArray(goalPlan.tasks) || goalPlan.tasks.length === 0) {
+    return { verified: true, gaps: [] };
+  }
+  const gaps = [];
+  const deadGoalTasks = projectState.tasks.filter(
+    (t) => String(t.id).startsWith('GOAL-') && t.deadLetteredAt,
+  );
+  if (deadGoalTasks.length > 0) {
+    gaps.push(`${deadGoalTasks.length} goal task(s) dead-lettered without resolution: ${deadGoalTasks.map((t) => t.id).join(', ')}`);
+  }
+  if (Array.isArray(goalPlan.requiredConnectors)) {
+    const unverified = goalPlan.requiredConnectors.filter((connector) => {
+      const probe = projectState.tasks.find((t) =>
+        String(t.title || '').toLowerCase().includes(`validate ${connector} connector`),
+      );
+      return probe && probe.status !== 'done';
+    });
+    if (unverified.length > 0) {
+      gaps.push(`Connector readiness unverified for: ${unverified.join(', ')}`);
+    }
+  }
+  const completion = evaluateMilestoneCompletion(projectState);
+  const incomplete = completion.milestones.filter((m) => !m.completedAt);
+  if (incomplete.length > 0) {
+    gaps.push(`${incomplete.length} delivery milestone(s) not fully verified: ${incomplete.map((m) => m.id).join(', ')}`);
+  }
+  if (gaps.length === 0) {
+    return { verified: true, gaps: [] };
+  }
+  const gapTaskExists = projectState.tasks.some((t) => t.id === 'GOAL-DELIVERY-GAP');
+  if (!gapTaskExists) {
+    projectState.tasks.push({
+      id: 'GOAL-DELIVERY-GAP',
+      title: 'Address delivery gaps before project close',
+      phase: 'maintenance',
+      status: 'backlog',
+      assignee: null,
+      blockedBy: null,
+      dependencies: [],
+      requiredRole: 'Senior Project Manager',
+      executionState: 'queued',
+      retryCount: 0,
+      lastFailedAt: null,
+      lastError: null,
+      lastProgressAt: null,
+      executionTaskRunId: null,
+      inprogressCycles: 0,
+      pendingApproval: null,
+      autoActionNotBeforeAt: null,
+      deadLetteredAt: null,
+      createdAt: nowIso(),
+      completedAt: null,
+      startedAt: null,
+      assistanceRequestedAt: null,
+      description: `Delivery gaps found before project close:\n${gaps.map((g) => `- ${g}`).join('\n')}`,
+    });
+    appendProjectLog(projectState, 'message', { kind: 'delivery_gap_task_created', gaps });
+    notifyOperator(projectState, 'Delivery gap review required before project close', { gaps }).catch(() => {});
+  }
+  return { verified: false, gaps, deliveryTaskCreated: !gapTaskExists };
+}
+
 function summarizeProjectAutomation(projectState) {
   ensureRecurringState(projectState);
   ensureDeadLetterState(projectState);
@@ -2933,6 +3205,9 @@ function summarizeProjectAutomation(projectState) {
           requiredConnectors: Array.isArray(goalPlan.requiredConnectors) ? goalPlan.requiredConnectors : [],
           missingCredentialServices: Array.isArray(goalPlan.missingCredentialServices) ? goalPlan.missingCredentialServices : [],
         }
+      : null,
+    milestoneCompletion: goalPlan && Array.isArray(goalPlan.milestones) && goalPlan.milestones.length > 0
+      ? evaluateMilestoneCompletion(projectState)
       : null,
   };
 }
@@ -4294,7 +4569,12 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
 
     const allDone = runtime.state.tasks.length > 0 && runtime.state.tasks.every((t) => t.status === 'done');
     if (allDone && !shouldKeepRunningForRecurring(runtime.state)) {
-      markProjectCompleted(runtime.state);
+      const delivery = verifyGoalDelivery(runtime.state);
+      if (delivery.verified) {
+        markProjectCompleted(runtime.state);
+      } else {
+        persistProjectState(runtime.state);
+      }
       return;
     }
   } else {
@@ -4530,6 +4810,9 @@ function runProjectHeartbeat(projectState, source = 'interval') {
   evaluateAndNotifyKpiAlerts(projectState, beatTs);
   enqueueRecurringTasks(projectState, beatTs, source);
   evaluateAutoStaffing(projectState, beatTs);
+  if (projectState.goalPlan && Array.isArray(projectState.goalPlan.milestones)) {
+    evaluateMilestoneCompletion(projectState);
+  }
 
   // ── Stall detection + auto-fix ───────────────────────────────────────────
   const runtime = projectRuntimes.get(projectState.id);
@@ -4659,7 +4942,12 @@ function runProjectHeartbeat(projectState, source = 'interval') {
       // No runnable backlog tasks and no inprogress — check if everything is done
       const allDone = projectState.tasks.length > 0 && projectState.tasks.every((t) => t.status === 'done');
       if (allDone && !shouldKeepRunningForRecurring(projectState)) {
-        markProjectCompleted(projectState);
+        const delivery = verifyGoalDelivery(projectState);
+        if (delivery.verified) {
+          markProjectCompleted(projectState);
+        } else {
+          persistProjectState(projectState);
+        }
         return;
       }
     }
@@ -10033,6 +10321,9 @@ module.exports = {
   evaluateApprovalGovernanceDecision,
   applyIndustryApprovalPolicyPack,
   connectorRetryPlan,
+    buildGoalMilestones,
+    evaluateMilestoneCompletion,
+    verifyGoalDelivery,
   connectorExecutionKey,
   connectorMutationExecutionKey,
   isMutatingConnectorOperation,

@@ -627,13 +627,16 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 ## **Remaining to Complete Project (Tracking)**
 
 1. **Industry policy-pack coverage — COMPLETE**
-   - All 5 packs implemented: housing, finance, healthcare, saas, ecommerce.
+   - All 6 packs implemented: housing, finance, healthcare, saas, ecommerce, marketplace.
    - Each pack adds autoDeny + escalation rules matched by connector, operation, risk score, and task keywords.
    - `inferIndustryApprovalPack()` auto-selects pack from goal tags; `applyIndustryApprovalPolicyPack()` merges idempotently.
-2. **Strengthen plan-to-delivery closure from prompt analysis**
-   - Improve milestone decomposition, dependency quality, and objective completion verification.
+2. **Strengthen plan-to-delivery closure from prompt analysis — COMPLETE**
+   - Goal milestones are now phase-grouped with acceptance criteria and required task IDs.
+   - Runtime verifies milestone completion before project close and creates an explicit delivery-gap task when verification fails.
+   - Completion now requires objective delivery verification instead of raw task-count completion.
 3. **Expand connector/domain execution coverage for generalized business prompts**
    - Broaden operation depth where vertical workflows require additional API actions and runbooks.
+   - Marketplace/social goals are now recognized (`auction`, `bidding`, `dating`, `profile`) with dedicated policy-pack coverage.
 4. **Finish dashboard UX for new orchestration intelligence**
    - Surface goal-plan milestones, missing connector blockers, policy-pack decisions, and assistance requests end-to-end.
 5. **Run and document operational readiness certification**

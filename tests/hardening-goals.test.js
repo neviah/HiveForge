@@ -33,6 +33,9 @@ const {
   ensureCredentialStorage,
   upsertProjectCredentialPolicy,
   recordCredentialSpend,
+  buildGoalMilestones,
+  evaluateMilestoneCompletion,
+  verifyGoalDelivery,
 } = require('../hiveforge_server');
 
 function projectId(prefix) {
@@ -1031,6 +1034,135 @@ test('ecommerce policy pack escalates catalog deploys and high-value refunds', (
   assert.equal(state.approvalGovernance.industryPolicyPack.id, 'ecommerce');
   assert.equal(decision.decision, 'escalate');
   assert.equal(Boolean(decision.matchedRuleId), true);
+});
+
+test('marketplace policy pack escalates trust-and-safety deployment changes', () => {
+  const state = { id: projectId('approval-marketplace-pack'), approvalGovernance: null };
+  ensureApprovalGovernanceState(state);
+
+  const applied = applyIndustryApprovalPolicyPack(state, {
+    templateId: 'business',
+    goalPlan: {
+      goal: 'Build a social marketplace where users create profiles and auction date experiences.',
+      tags: { marketplace: true, social: true },
+    },
+  });
+
+  const task = {
+    id: 'GOAL-mkt',
+    title: 'Deploy trust and safety moderation policy updates to production',
+    phase: 'compliance',
+    autoAction: {
+      connector: 'netlify',
+      operation: 'trigger_deploy',
+      estimatedCost: 0,
+      actorRole: 'Backend Architect',
+    },
+  };
+
+  const decision = evaluateApprovalGovernanceDecision(state, task, {
+    riskScore: 62,
+    estimatedCost: 0,
+    connector: 'netlify',
+    operation: 'trigger_deploy',
+    actorRole: 'Backend Architect',
+    taskTitle: task.title,
+    taskPhase: task.phase,
+  });
+
+  assert.equal(applied.applied, true);
+  assert.equal(applied.packId, 'marketplace');
+  assert.equal(state.approvalGovernance.industryPolicyPack.id, 'marketplace');
+  assert.equal(decision.decision, 'escalate');
+  assert.equal(Boolean(decision.matchedRuleId), true);
+});
+
+test('goal prompt analysis detects social marketplace and infers marketplace policy pack', () => {
+  const goal = 'Build an auction dating website where people can create profiles, bid on date experiences, and handle payments safely.';
+  const plan = goalActionPlanFromPrompt('business', goal, {});
+  const inferred = plan && plan.tags ? (plan.tags.marketplace && plan.tags.social) : false;
+
+  const state = { id: projectId('marketplace-infer'), approvalGovernance: null };
+  ensureApprovalGovernanceState(state);
+  const applied = applyIndustryApprovalPolicyPack(state, { templateId: 'business', goalPlan: plan });
+
+  assert.equal(Boolean(inferred), true);
+  assert.equal(plan.requiredConnectors.includes('stripe'), true);
+  assert.equal(plan.requiredConnectors.includes('support_ticket'), true);
+  assert.equal(plan.requiredConnectors.includes('email_provider'), true);
+  assert.equal(applied.packId, 'marketplace');
+});
+
+test('buildGoalMilestones creates phase-grouped verification milestones', () => {
+  const tasks = [
+    { title: 'Task 1', phase: 'strategy' },
+    { title: 'Task 2', phase: 'product_build' },
+    { title: 'Task 3', phase: 'product_build' },
+    { title: 'Task 4', phase: 'compliance' },
+  ];
+  const milestones = buildGoalMilestones(tasks, {});
+  const productMilestone = milestones.find((m) => m.phase === 'product_build');
+
+  assert.equal(Array.isArray(milestones), true);
+  assert.equal(milestones.length >= 3, true);
+  assert.equal(Boolean(productMilestone), true);
+  assert.equal(Array.isArray(productMilestone.requiredTaskIds), true);
+  assert.equal(productMilestone.requiredTaskIds.length, 2);
+  assert.equal(Array.isArray(productMilestone.acceptanceCriteria), true);
+  assert.equal(productMilestone.acceptanceCriteria.length > 0, true);
+});
+
+test('verifyGoalDelivery creates explicit backlog task when milestones are incomplete', () => {
+  const state = {
+    id: projectId('goal-delivery-gap'),
+    template: 'business',
+    goalPlan: {
+      goal: 'Ship business workflow',
+      source: 'goal_prompt_analysis',
+      tasks: [{ title: 'A', phase: 'strategy' }, { title: 'B', phase: 'product_build' }],
+      requiredConnectors: ['netlify'],
+      milestones: [
+        {
+          id: 'MS-strategy',
+          phase: 'strategy',
+          title: 'Strategy',
+          acceptanceCriteria: ['done'],
+          requiredTaskIds: ['GOAL-1'],
+          completedAt: null,
+        },
+        {
+          id: 'MS-product',
+          phase: 'product_build',
+          title: 'Build',
+          acceptanceCriteria: ['done'],
+          requiredTaskIds: ['GOAL-2'],
+          completedAt: null,
+        },
+      ],
+    },
+    tasks: [
+      { id: 'GOAL-1', title: 'A', phase: 'strategy', status: 'done', deadLetteredAt: null },
+      { id: 'GOAL-2', title: 'B', phase: 'product_build', status: 'backlog', deadLetteredAt: null },
+      { id: 'GOAL-3', title: 'Validate netlify connector readiness', phase: 'deployment', status: 'backlog', deadLetteredAt: null },
+    ],
+    logs: [],
+    approvalGovernance: null,
+    recurring: { enabled: false, lastRunAt: {}, schedule: [] },
+    deadLetters: [],
+    financeExceptions: [],
+    publicationHealth: { driftEvents: [], incidents: [], recentDeliveries: [] },
+    operationalLoops: { weekStart: new Date().toISOString(), generatedAt: null, objectives: [] },
+  };
+
+  const completion = evaluateMilestoneCompletion(state);
+  const delivery = verifyGoalDelivery(state);
+  const gapTask = state.tasks.find((t) => t.id === 'GOAL-DELIVERY-GAP');
+
+  assert.equal(completion.total, 2);
+  assert.equal(completion.completed, 1);
+  assert.equal(delivery.verified, false);
+  assert.equal(Boolean(gapTask), true);
+  assert.equal(gapTask.status, 'backlog');
 });
 
 test('approval decision audit uses immutable hash chaining', () => {
