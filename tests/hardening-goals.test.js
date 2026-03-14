@@ -7,6 +7,7 @@ const {
   assessApprovalRisk,
   ensureApprovalGovernanceState,
   evaluateApprovalGovernanceDecision,
+  applyIndustryApprovalPolicyPack,
   connectorRetryPlan,
   connectorExecutionKey,
   connectorMutationExecutionKey,
@@ -818,6 +819,51 @@ test('approval governance policy packs auto-deny critical approval context', () 
   });
 
   assert.equal(decision.decision, 'deny');
+  assert.equal(typeof decision.matchedRuleId, 'string');
+  assert.equal(Boolean(decision.matchedRuleId), true);
+});
+
+test('housing policy pack adds escalation for landlord-tenant compliance workflows', () => {
+  const state = {
+    id: projectId('approval-housing-pack'),
+    approvalGovernance: null,
+  };
+  ensureApprovalGovernanceState(state);
+
+  const applied = applyIndustryApprovalPolicyPack(state, {
+    templateId: 'business',
+    goalPlan: {
+      goal: 'Build and operate a landlord and tenant property management platform.',
+      tags: { property: true },
+    },
+  });
+
+  const task = {
+    id: 'GOAL-legal',
+    title: 'Publish housing lease policy and tenant screening disclosures',
+    phase: 'compliance',
+    autoAction: {
+      connector: 'netlify',
+      operation: 'trigger_deploy',
+      estimatedCost: 20,
+      actorRole: 'Backend Architect',
+    },
+  };
+
+  const decision = evaluateApprovalGovernanceDecision(state, task, {
+    riskScore: 70,
+    estimatedCost: 20,
+    connector: 'netlify',
+    operation: 'trigger_deploy',
+    actorRole: 'Backend Architect',
+    taskTitle: task.title,
+    taskPhase: task.phase,
+  });
+
+  assert.equal(applied.applied, true);
+  assert.equal(applied.packId, 'housing');
+  assert.equal(state.approvalGovernance.industryPolicyPack.id, 'housing');
+  assert.equal(decision.decision, 'escalate');
   assert.equal(typeof decision.matchedRuleId, 'string');
   assert.equal(Boolean(decision.matchedRuleId), true);
 });

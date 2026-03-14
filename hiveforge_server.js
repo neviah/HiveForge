@@ -85,6 +85,37 @@ const DEFAULT_APPROVAL_GOVERNANCE = {
       actorRoles: ['intern', 'contractor', 'unknown'],
     },
   ],
+  escalationRules: [],
+  industryPolicyPack: null,
+};
+const INDUSTRY_APPROVAL_POLICY_PACKS = {
+  housing: {
+    id: 'housing',
+    title: 'Housing Compliance Pack',
+    summary: 'Adds legal/compliance escalation for landlord-tenant, leasing, and regulated housing workflows.',
+    autoDenyRules: [
+      {
+        id: 'housing-deny-critical-untrusted-finance',
+        connectors: ['stripe'],
+        operations: ['create_refund', 'create_invoice', 'create_payment_intent'],
+        actorRoles: ['intern', 'contractor', 'unknown'],
+        minEstimatedCost: 200,
+      },
+    ],
+    escalationRules: [
+      {
+        id: 'housing-escalate-legal-review',
+        connectors: ['netlify', 'stripe', 'support_ticket', 'email_provider'],
+        minRiskScore: 55,
+        taskKeywords: ['housing', 'property', 'landlord', 'tenant', 'lease', 'rental', 'application', 'screening', 'eviction'],
+      },
+      {
+        id: 'housing-escalate-privacy-docs',
+        operations: ['trigger_deploy'],
+        taskKeywords: ['privacy', 'terms', 'policy', 'legal', 'compliance'],
+      },
+    ],
+  },
 };
 const WEEKLY_OBJECTIVES_BY_TEMPLATE = {
   default: [
@@ -1856,21 +1887,33 @@ function readApprovalDecisionAudit(projectId, limit = 200) {
   return out;
 }
 
+function cloneApprovalRules(rules = []) {
+  return Array.isArray(rules) ? rules.map((rule) => ({ ...(rule && typeof rule === 'object' ? rule : {}) })) : [];
+}
+
 function ensureApprovalGovernanceState(projectState) {
   if (!projectState.approvalGovernance || typeof projectState.approvalGovernance !== 'object') {
     projectState.approvalGovernance = {
       enabled: DEFAULT_APPROVAL_GOVERNANCE.enabled,
-      autoApproveRules: DEFAULT_APPROVAL_GOVERNANCE.autoApproveRules.map((rule) => ({ ...rule })),
-      autoDenyRules: DEFAULT_APPROVAL_GOVERNANCE.autoDenyRules.map((rule) => ({ ...rule })),
+      autoApproveRules: cloneApprovalRules(DEFAULT_APPROVAL_GOVERNANCE.autoApproveRules),
+      autoDenyRules: cloneApprovalRules(DEFAULT_APPROVAL_GOVERNANCE.autoDenyRules),
+      escalationRules: cloneApprovalRules(DEFAULT_APPROVAL_GOVERNANCE.escalationRules),
+      industryPolicyPack: DEFAULT_APPROVAL_GOVERNANCE.industryPolicyPack,
       updatedAt: null,
     };
   }
   projectState.approvalGovernance.enabled = projectState.approvalGovernance.enabled !== false;
   if (!Array.isArray(projectState.approvalGovernance.autoApproveRules)) {
-    projectState.approvalGovernance.autoApproveRules = DEFAULT_APPROVAL_GOVERNANCE.autoApproveRules.map((rule) => ({ ...rule }));
+    projectState.approvalGovernance.autoApproveRules = cloneApprovalRules(DEFAULT_APPROVAL_GOVERNANCE.autoApproveRules);
   }
   if (!Array.isArray(projectState.approvalGovernance.autoDenyRules)) {
-    projectState.approvalGovernance.autoDenyRules = DEFAULT_APPROVAL_GOVERNANCE.autoDenyRules.map((rule) => ({ ...rule }));
+    projectState.approvalGovernance.autoDenyRules = cloneApprovalRules(DEFAULT_APPROVAL_GOVERNANCE.autoDenyRules);
+  }
+  if (!Array.isArray(projectState.approvalGovernance.escalationRules)) {
+    projectState.approvalGovernance.escalationRules = cloneApprovalRules(DEFAULT_APPROVAL_GOVERNANCE.escalationRules);
+  }
+  if (typeof projectState.approvalGovernance.industryPolicyPack === 'undefined') {
+    projectState.approvalGovernance.industryPolicyPack = null;
   }
 }
 
@@ -1884,6 +1927,8 @@ function ruleMatchesApprovalContext(rule = {}, context = {}) {
   const connector = String(context.connector || '').toLowerCase();
   const operation = String(context.operation || '').toLowerCase();
   const actorRole = String(context.actorRole || '').toLowerCase();
+  const taskTitle = String(context.taskTitle || '').toLowerCase();
+  const taskPhase = String(context.taskPhase || '').toLowerCase();
 
   if (typeof rule.minRiskScore === 'number' && riskScore < rule.minRiskScore) return false;
   if (typeof rule.maxRiskScore === 'number' && riskScore > rule.maxRiskScore) return false;
@@ -1902,7 +1947,68 @@ function ruleMatchesApprovalContext(rule = {}, context = {}) {
     const allowed = rule.actorRoles.map((v) => String(v || '').toLowerCase());
     if (!allowed.some((entry) => roleLooksLike(actorRole, entry))) return false;
   }
+  if (Array.isArray(rule.taskKeywords) && rule.taskKeywords.length > 0) {
+    const matchedKeyword = rule.taskKeywords
+      .map((entry) => String(entry || '').toLowerCase().trim())
+      .filter(Boolean)
+      .some((needle) => taskTitle.includes(needle));
+    if (!matchedKeyword) return false;
+  }
+  if (Array.isArray(rule.phases) && rule.phases.length > 0) {
+    const allowed = rule.phases.map((entry) => String(entry || '').toLowerCase());
+    if (!allowed.includes(taskPhase)) return false;
+  }
   return true;
+}
+
+function inferIndustryApprovalPack(templateId, goalPlan = {}) {
+  const templateKey = String(templateId || '').trim().toLowerCase();
+  const tags = goalPlan && goalPlan.tags && typeof goalPlan.tags === 'object' ? goalPlan.tags : {};
+  if (Boolean(tags.property)) return 'housing';
+  if (templateKey === 'business' && Boolean(tags.legal) && textContainsAny(goalPlan.goal || '', ['housing', 'landlord', 'tenant', 'lease', 'rental', 'property'])) {
+    return 'housing';
+  }
+  return null;
+}
+
+function applyIndustryApprovalPolicyPack(projectState, options = {}) {
+  ensureApprovalGovernanceState(projectState);
+  const approval = projectState.approvalGovernance;
+  const packId = String(options.packId || inferIndustryApprovalPack(options.templateId, options.goalPlan) || '').trim().toLowerCase();
+  if (!packId) {
+    return { applied: false, packId: null };
+  }
+  const pack = INDUSTRY_APPROVAL_POLICY_PACKS[packId];
+  if (!pack) {
+    return { applied: false, packId, reason: 'unknown_pack' };
+  }
+
+  const addUniqueRule = (target, incomingRule) => {
+    if (!incomingRule || typeof incomingRule !== 'object') return;
+    const id = String(incomingRule.id || '').trim();
+    if (!id) return;
+    if (target.some((rule) => String(rule && rule.id || '').trim() === id)) return;
+    target.push({ ...incomingRule, policyPack: pack.id });
+  };
+
+  cloneApprovalRules(pack.autoApproveRules || []).forEach((rule) => addUniqueRule(approval.autoApproveRules, rule));
+  cloneApprovalRules(pack.autoDenyRules || []).forEach((rule) => addUniqueRule(approval.autoDenyRules, rule));
+  cloneApprovalRules(pack.escalationRules || []).forEach((rule) => addUniqueRule(approval.escalationRules, rule));
+
+  approval.industryPolicyPack = {
+    id: pack.id,
+    title: pack.title,
+    summary: pack.summary,
+    appliedAt: nowIso(),
+  };
+  approval.updatedAt = nowIso();
+
+  return {
+    applied: true,
+    packId: pack.id,
+    title: pack.title,
+    summary: pack.summary,
+  };
 }
 
 function evaluateApprovalGovernanceDecision(projectState, task, detail = {}) {
@@ -1917,7 +2023,9 @@ function evaluateApprovalGovernanceDecision(projectState, task, detail = {}) {
   const connector = String(detail.connector || task?.autoAction?.connector || '').toLowerCase();
   const operation = String(detail.operation || task?.autoAction?.operation || '').toLowerCase();
   const actorRole = String(detail.actorRole || task?.autoAction?.actorRole || '').toLowerCase();
-  const context = { riskScore, estimatedCost, connector, operation, actorRole };
+  const taskTitle = String(detail.taskTitle || task?.title || '').toLowerCase();
+  const taskPhase = String(detail.taskPhase || task?.phase || '').toLowerCase();
+  const context = { riskScore, estimatedCost, connector, operation, actorRole, taskTitle, taskPhase };
 
   const denyRule = governance.autoDenyRules.find((rule) => ruleMatchesApprovalContext(rule, context));
   if (denyRule) {
@@ -1925,6 +2033,15 @@ function evaluateApprovalGovernanceDecision(projectState, task, detail = {}) {
       decision: 'deny',
       matchedRuleId: String(denyRule.id || 'auto_deny_rule'),
       reason: `Auto-denied by policy pack rule ${String(denyRule.id || 'auto_deny_rule')}.`,
+    };
+  }
+
+  const escalateRule = governance.escalationRules.find((rule) => ruleMatchesApprovalContext(rule, context));
+  if (escalateRule) {
+    return {
+      decision: 'escalate',
+      matchedRuleId: String(escalateRule.id || 'auto_escalate_rule'),
+      reason: `Escalation required by policy pack rule ${String(escalateRule.id || 'auto_escalate_rule')}.`,
     };
   }
 
@@ -2554,6 +2671,10 @@ function summarizeProjectAutomation(projectState) {
       autoDenyRuleCount: Array.isArray(projectState.approvalGovernance.autoDenyRules)
         ? projectState.approvalGovernance.autoDenyRules.length
         : 0,
+      escalationRuleCount: Array.isArray(projectState.approvalGovernance.escalationRules)
+        ? projectState.approvalGovernance.escalationRules.length
+        : 0,
+      industryPolicyPack: projectState.approvalGovernance.industryPolicyPack || null,
     },
     weeklyObjectives: {
       weekStart: projectState.operationalLoops.weekStart,
@@ -3542,14 +3663,26 @@ function markTaskAwaitingApproval(projectState, task, reason, detail = {}) {
       source: 'approval_policy_pack',
       matchedRuleId: governanceDecision.matchedRuleId,
       evaluatedAt: at,
+      decision: governanceDecision.decision,
     };
-    applyTaskApprovalDecision(
-      projectState,
-      task,
-      governanceDecision.decision,
-      governanceDecision.reason || 'Automated policy decision.',
-      'approval_policy_pack',
-    );
+
+    if (governanceDecision.decision === 'approve' || governanceDecision.decision === 'deny') {
+      applyTaskApprovalDecision(
+        projectState,
+        task,
+        governanceDecision.decision,
+        governanceDecision.reason || 'Automated policy decision.',
+        'approval_policy_pack',
+      );
+    } else if (governanceDecision.decision === 'escalate') {
+      notifyOperator(projectState, `Policy escalation required: ${task.title}`, {
+        taskId: task.id,
+        matchedRuleId: governanceDecision.matchedRuleId,
+        reason: governanceDecision.reason,
+        source: 'approval_policy_pack',
+      }).catch(() => {});
+    }
+
     appendProjectLog(projectState, 'message', {
       kind: 'task_approval_policy_pack_decision',
       taskId: task.id,
@@ -3566,6 +3699,7 @@ function markTaskAwaitingApproval(projectState, task, reason, detail = {}) {
         taskId: task.id,
         decision: governanceDecision.decision,
         matchedRuleId: governanceDecision.matchedRuleId,
+        reason: governanceDecision.reason,
       },
     });
   }
@@ -4411,6 +4545,12 @@ function recoverProjectStateAfterRestart(state) {
   if (!state.goalPlan || typeof state.goalPlan !== 'object') {
     state.goalPlan = goalActionPlanFromPrompt(state.template, state.goal || '', {});
   }
+  if (!state.approvalGovernance.industryPolicyPack) {
+    applyIndustryApprovalPolicyPack(state, {
+      templateId: state.template,
+      goalPlan: state.goalPlan,
+    });
+  }
   if (!state.kpiAlerting || typeof state.kpiAlerting !== 'object') {
     state.kpiAlerting = { lastSentAt: null, lastSignature: null };
   }
@@ -4535,8 +4675,10 @@ function createProjectFromTemplate({ name, template, goal }) {
     },
     approvalGovernance: {
       enabled: DEFAULT_APPROVAL_GOVERNANCE.enabled,
-      autoApproveRules: DEFAULT_APPROVAL_GOVERNANCE.autoApproveRules.map((rule) => ({ ...rule })),
-      autoDenyRules: DEFAULT_APPROVAL_GOVERNANCE.autoDenyRules.map((rule) => ({ ...rule })),
+      autoApproveRules: cloneApprovalRules(DEFAULT_APPROVAL_GOVERNANCE.autoApproveRules),
+      autoDenyRules: cloneApprovalRules(DEFAULT_APPROVAL_GOVERNANCE.autoDenyRules),
+      escalationRules: cloneApprovalRules(DEFAULT_APPROVAL_GOVERNANCE.escalationRules),
+      industryPolicyPack: DEFAULT_APPROVAL_GOVERNANCE.industryPolicyPack,
       updatedAt: null,
     },
     operationalLoops: {
@@ -4580,11 +4722,34 @@ function createProjectFromTemplate({ name, template, goal }) {
     }
   };
 
+  const appliedPolicyPack = applyIndustryApprovalPolicyPack(state, {
+    templateId: template,
+    goalPlan,
+  });
+
   appendProjectLog(state, 'message', {
     kind: 'project_created',
     template,
     goal: state.goal
   });
+
+  if (appliedPolicyPack && appliedPolicyPack.applied) {
+    appendProjectLog(state, 'message', {
+      kind: 'industry_policy_pack_applied',
+      policyPack: appliedPolicyPack.packId,
+      summary: appliedPolicyPack.summary,
+    });
+    appendMessageBusEntry({
+      projectId: state.id,
+      from: 'coordinator',
+      to: 'compliance_engine',
+      kind: 'industry_policy_pack_applied',
+      payload: {
+        policyPack: appliedPolicyPack.packId,
+        title: appliedPolicyPack.title,
+      },
+    });
+  }
 
   if (Array.isArray(goalPlan && goalPlan.tasks) && goalPlan.tasks.length > 0) {
     appendProjectLog(state, 'message', {
@@ -9649,6 +9814,7 @@ module.exports = {
   assessApprovalRisk,
   ensureApprovalGovernanceState,
   evaluateApprovalGovernanceDecision,
+  applyIndustryApprovalPolicyPack,
   connectorRetryPlan,
   connectorExecutionKey,
   connectorMutationExecutionKey,

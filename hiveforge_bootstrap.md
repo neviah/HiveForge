@@ -607,6 +607,7 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 16. Finance lifecycle automation: recurring invoice/refund/collections loops with Stripe actions plus cashflow variance and reserve guardrails in connector execution.
 17. Publishing autonomy pack: story bible/chapter pipeline contract, continuity + humanization loops, and connector-backed release workflow trigger.
 18. Goal-to-action-plan orchestration: prompt analysis now produces phased execution plans, connector readiness probes, and coordinator assistance requests when missing credentials block autonomous progress.
+19. Housing legal/compliance policy pack: approval governance now supports industry policy packs with housing-specific auto-deny and auto-escalation rules for landlord/tenant/property workflows.
 
 ## **Next Critical Milestones**
 
@@ -620,7 +621,24 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 
 ## **Future Feature Candidates**
 
-1. Industry-specific legal/compliance policy packs (housing, finance, healthcare) with approval templates and auto-escalation rules.
+1. Expand industry policy packs to finance and healthcare, with role-aware escalation templates and regulator-specific runbooks.
+2. Dashboard-native policy pack controls and policy simulation UI for preflight "what-if" approval decisions.
+
+## **Remaining to Complete Project (Tracking)**
+
+1. **Complete industry policy-pack coverage**
+   - Housing pack is implemented.
+   - Finance and healthcare packs remain.
+2. **Strengthen plan-to-delivery closure from prompt analysis**
+   - Improve milestone decomposition, dependency quality, and objective completion verification.
+3. **Expand connector/domain execution coverage for generalized business prompts**
+   - Broaden operation depth where vertical workflows require additional API actions and runbooks.
+4. **Finish dashboard UX for new orchestration intelligence**
+   - Surface goal-plan milestones, missing connector blockers, policy-pack decisions, and assistance requests end-to-end.
+5. **Run and document operational readiness certification**
+   - Multi-day autonomous Business run, restart safety proof, and full policy/budget control validation.
+6. **Capture final production evidence artifacts**
+   - Preserve logs, test outputs, and runbook checklists for completion sign-off.
 
 ## **Definition of Operational Readiness**
 
