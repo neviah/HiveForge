@@ -169,7 +169,7 @@ const DEFAULT_ROLE_CAPABILITIES = {
   'Senior Project Manager': { canDeploy: false, canSpend: false, allowedConnectors: [] },
   'Reality Checker': { canDeploy: false, canSpend: false, allowedConnectors: ['analytics'] },
   'Growth Hacker + Content Creator': { canDeploy: false, canSpend: true, allowedConnectors: ['google_ads', 'analytics'] },
-  'Support Responder': { canDeploy: false, canSpend: false, allowedConnectors: ['email_provider'] },
+  'Support Responder': { canDeploy: false, canSpend: false, allowedConnectors: ['email_provider', 'support_chat', 'support_ticket'] },
   'Finance Tracker': { canDeploy: false, canSpend: true, allowedConnectors: ['analytics', 'stripe', 'google_ads'] },
 };
 const OPTIONAL_AGENT_PERSONALITY_PATHS = {
@@ -218,7 +218,7 @@ const appState = {
   }
 };
 
-const SUPPORTED_CREDENTIAL_SERVICES = ['github', 'netlify', 'stripe', 'google_ads', 'analytics', 'email_provider'];
+const SUPPORTED_CREDENTIAL_SERVICES = ['github', 'netlify', 'stripe', 'google_ads', 'analytics', 'email_provider', 'support_chat', 'support_ticket'];
 const CONNECTOR_REGISTRY = {
   github: { id: 'github', label: 'GitHub', credentialService: 'github' },
   telegram: { id: 'telegram', label: 'Telegram', provider: 'telegram' },
@@ -228,6 +228,8 @@ const CONNECTOR_REGISTRY = {
   google_ads: { id: 'google_ads', label: 'Google Ads', credentialService: 'google_ads' },
   analytics: { id: 'analytics', label: 'Analytics', credentialService: 'analytics' },
   email_provider: { id: 'email_provider', label: 'Email Provider', credentialService: 'email_provider' },
+  support_chat: { id: 'support_chat', label: 'Support Chat', credentialService: 'support_chat' },
+  support_ticket: { id: 'support_ticket', label: 'Support Ticketing', credentialService: 'support_ticket' },
 };
 const MUTATING_CONNECTOR_OPERATIONS = {
   netlify: new Set(['trigger_deploy']),
@@ -235,6 +237,8 @@ const MUTATING_CONNECTOR_OPERATIONS = {
   stripe: new Set(['create_payment_intent', 'create_refund', 'create_invoice']),
   email_provider: new Set(['send_email', 'send_campaign']),
   google_ads: new Set(['create_campaign', 'update_campaign_budget', 'pause_campaign', 'resume_campaign']),
+  support_chat: new Set(['reply_conversation', 'close_conversation', 'escalate_conversation', 'triage_conversations']),
+  support_ticket: new Set(['reply_ticket', 'close_ticket', 'escalate_ticket', 'triage_tickets']),
 };
 const CONNECTOR_IDEMPOTENCY_PROFILES = {
   netlify: {
@@ -295,6 +299,42 @@ const CONNECTOR_IDEMPOTENCY_PROFILES = {
       reconciliation: null,
     },
     resume_campaign: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+  },
+  support_chat: {
+    reply_conversation: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    close_conversation: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    escalate_conversation: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    triage_conversations: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+  },
+  support_ticket: {
+    reply_ticket: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    close_ticket: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    escalate_ticket: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    triage_tickets: {
       mode: 'native_token',
       reconciliation: null,
     },
@@ -1791,9 +1831,37 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
       return;
     }
 
-    const execution = await executeLiveConnector(action.connector, {
+    const supportRouting = evaluateSupportAutonomyRouting({
+      connector: action.connector,
       operation: action.operation,
       input: action.input || {},
+      actorRole,
+    });
+    if (!supportRouting.ok) {
+      scheduleAutoActionRetry(projectState, task, supportRouting.summary, {
+        connector: action.connector,
+        operation: action.operation,
+        actorRole,
+        source,
+        executionKey,
+        supportRouting,
+      });
+      markConnectorExecutionRecord(projectState, executionKey, {
+        status: 'failed',
+        lastError: supportRouting.summary,
+        checks: supportRouting.checks,
+      });
+      persistProjectState(projectState);
+      return;
+    }
+
+    const actionInput = {
+      ...(action.input && typeof action.input === 'object' ? action.input : {}),
+      supportRouting: supportRouting.route,
+    };
+    const execution = await executeLiveConnector(action.connector, {
+      operation: action.operation,
+      input: actionInput,
       projectId: projectState.id,
       estimatedCost: Number(action.estimatedCost || 0),
       idempotencyKey: executionKey,
@@ -1835,6 +1903,7 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
       actualCost,
       executionKey,
       reconciliation,
+      supportRouting: supportRouting.route,
     });
     markConnectorExecutionRecord(projectState, executionKey, {
       status: 'succeeded',
@@ -4808,6 +4877,87 @@ function evaluateGoogleAdsGuardrails(options = {}) {
   };
 }
 
+function evaluateSupportAutonomyRouting(options = {}) {
+  const connector = String(options.connector || '').trim().toLowerCase();
+  const operation = String(options.operation || '').trim().toLowerCase();
+  const input = options.input && typeof options.input === 'object' ? options.input : {};
+
+  if (connector !== 'support_chat' && connector !== 'support_ticket') {
+    return {
+      ok: true,
+      checks: [],
+      summary: 'Support routing guardrails not required for this connector.',
+      route: null,
+    };
+  }
+
+  const isEscalationOperation = operation.startsWith('escalate_');
+  const isReplyOperation = operation.startsWith('reply_');
+  const allowsAutoReply = Boolean(isReplyOperation || operation.startsWith('triage_'));
+  const confidence = clampNumber(
+    input.responseConfidence ?? input.confidence,
+    isReplyOperation ? 0 : 1,
+    0,
+    1,
+  );
+  const minConfidence = clampNumber(input.minConfidence, connector === 'support_chat' ? 0.8 : 0.72, 0.5, 0.99);
+  const waitingMinutes = clampInt(
+    input.waitingMinutes ?? input.firstResponseAgeMinutes ?? input.ticketAgeMinutes,
+    0,
+    0,
+    14 * 24 * 60,
+  );
+  const slaMinutes = clampInt(input.slaMinutes, connector === 'support_chat' ? 15 : 60, 1, 7 * 24 * 60);
+  const confidenceOk = !allowsAutoReply || confidence >= minConfidence;
+  const withinSla = waitingMinutes <= slaMinutes;
+  const decision = (!withinSla || !confidenceOk) && !isEscalationOperation
+    ? 'escalate'
+    : 'auto_reply';
+
+  const checks = [
+    {
+      id: 'support_confidence_gate',
+      ok: confidenceOk,
+      reason: confidenceOk
+        ? `Response confidence ${confidence.toFixed(2)} meets threshold ${minConfidence.toFixed(2)}.`
+        : `Response confidence ${confidence.toFixed(2)} is below threshold ${minConfidence.toFixed(2)}.`,
+      detail: { confidence, minConfidence },
+    },
+    {
+      id: 'support_sla_window',
+      ok: withinSla,
+      reason: withinSla
+        ? `Queue age ${waitingMinutes}m is within SLA ${slaMinutes}m.`
+        : `Queue age ${waitingMinutes}m exceeded SLA ${slaMinutes}m.`,
+      detail: { waitingMinutes, slaMinutes },
+    },
+  ];
+
+  const blockedAutoReply = decision === 'escalate' && isReplyOperation && !isEscalationOperation;
+  const summary = blockedAutoReply
+    ? 'Support guardrail blocked auto-reply; escalate to human support role.'
+    : decision === 'escalate'
+      ? 'Support request should be escalated due to SLA or confidence constraints.'
+      : 'Support request can proceed with autonomous response.';
+
+  return {
+    ok: !blockedAutoReply,
+    checks,
+    summary,
+    route: {
+      decision,
+      escalate: decision === 'escalate',
+      connector,
+      operation,
+      confidence,
+      minConfidence,
+      waitingMinutes,
+      slaMinutes,
+      escalationTargetRole: String(input.escalationTargetRole || 'Support Responder'),
+    },
+  };
+}
+
 async function executeGoogleAdsConnector(options = {}) {
   const operation = String(options.operation || 'get_profile').trim() || 'get_profile';
   const token = readCredentialToken('google_ads');
@@ -5010,6 +5160,70 @@ async function executeEmailProviderConnector(options = {}) {
   };
 }
 
+async function executeSupportChatConnector(options = {}) {
+  const operation = String(options.operation || 'list_conversations').trim() || 'list_conversations';
+  const token = readCredentialToken('support_chat');
+  if (!token) {
+    return {
+      ok: false,
+      errorCode: 'SECRET_MISSING',
+      message: 'Support chat credential token is missing.',
+      operation,
+      actualCost: 0,
+      data: null,
+    };
+  }
+
+  const gateway = await executeViaApiGateway('support_chat', operation, {
+    ...(options.input && typeof options.input === 'object' ? options.input : {}),
+    credentialToken: token,
+    idempotencyKey: options.idempotencyKey || null,
+    projectId: options.projectId || null,
+  }, 25000);
+  if (!gateway.ok) return gateway;
+  return {
+    ok: true,
+    message: gateway.message || `Support chat operation ${operation} completed via API gateway.`,
+    operation,
+    actualCost: Number.isFinite(Number(gateway.actualCost))
+      ? Number(gateway.actualCost)
+      : Number(options.estimatedCost || 0),
+    data: gateway.data || null,
+  };
+}
+
+async function executeSupportTicketConnector(options = {}) {
+  const operation = String(options.operation || 'list_tickets').trim() || 'list_tickets';
+  const token = readCredentialToken('support_ticket');
+  if (!token) {
+    return {
+      ok: false,
+      errorCode: 'SECRET_MISSING',
+      message: 'Support ticketing credential token is missing.',
+      operation,
+      actualCost: 0,
+      data: null,
+    };
+  }
+
+  const gateway = await executeViaApiGateway('support_ticket', operation, {
+    ...(options.input && typeof options.input === 'object' ? options.input : {}),
+    credentialToken: token,
+    idempotencyKey: options.idempotencyKey || null,
+    projectId: options.projectId || null,
+  }, 25000);
+  if (!gateway.ok) return gateway;
+  return {
+    ok: true,
+    message: gateway.message || `Support ticketing operation ${operation} completed via API gateway.`,
+    operation,
+    actualCost: Number.isFinite(Number(gateway.actualCost))
+      ? Number(gateway.actualCost)
+      : Number(options.estimatedCost || 0),
+    data: gateway.data || null,
+  };
+}
+
 async function executeLiveConnector(connectorId, options = {}) {
   const connectorKey = String(connectorId || '').trim().toLowerCase();
   if (connectorKey === 'github') {
@@ -5029,6 +5243,12 @@ async function executeLiveConnector(connectorId, options = {}) {
   }
   if (connectorKey === 'email_provider') {
     return executeEmailProviderConnector(options);
+  }
+  if (connectorKey === 'support_chat') {
+    return executeSupportChatConnector(options);
+  }
+  if (connectorKey === 'support_ticket') {
+    return executeSupportTicketConnector(options);
   }
   return {
     ok: false,
@@ -6733,80 +6953,114 @@ async function main() {
                 }
               }
 
-              const execution = await executeLiveConnector(connector, {
+              const supportRouting = evaluateSupportAutonomyRouting({
+                connector,
                 operation,
                 input,
-                projectId,
-                estimatedCost,
-                idempotencyKey: executionKey || undefined,
+                actorRole,
               });
-              response.execution = execution;
-              if (!execution.ok) {
+              response.supportRouting = supportRouting.route;
+              if (!supportRouting.ok) {
                 response.ok = false;
                 response.decision = 'deny';
-                response.reason = execution.message;
-                response.errorCode = execution.errorCode;
+                response.reason = supportRouting.summary;
+                response.errorCode = 'PRECHECK_FAILED';
                 auditDecision = 'deny';
-                auditReason = execution.message;
-                auditErrorCode = execution.errorCode;
+                auditReason = supportRouting.summary;
+                auditErrorCode = 'PRECHECK_FAILED';
                 if (projectId && executionKey) {
                   const runtime = projectRuntimes.get(projectId);
                   if (runtime && runtime.state) {
                     markConnectorExecutionRecord(runtime.state, executionKey, {
                       status: 'failed',
-                      lastError: execution.message || execution.errorCode || 'execution_failed',
+                      lastError: supportRouting.summary,
+                      checks: supportRouting.checks,
                     });
                     persistProjectState(runtime.state);
                   }
                 }
-              } else {
-                actualCost = typeof execution.actualCost === 'number' && Number.isFinite(execution.actualCost)
-                  ? execution.actualCost
-                  : (typeof estimatedCost === 'number' ? estimatedCost : 0);
-                response.reason = execution.message || response.reason;
-                auditDecision = 'allow';
-                auditReason = response.reason;
-                if (isMutating) {
-                  reconciliation = await reconcileConnectorExecution(connector, operation, execution, {
-                    projectId,
-                    siteId: String(input && input.siteId ? input.siteId : ''),
-                    executionKey,
-                  });
-                  response.reconciliation = reconciliation;
-                }
-                if (projectId && executionKey) {
-                  const runtime = projectRuntimes.get(projectId);
-                  if (runtime && runtime.state) {
-                    markConnectorExecutionRecord(runtime.state, executionKey, {
-                      status: 'succeeded',
-                      message: response.reason,
-                      completedAt: nowIso(),
-                      actualCost,
-                      result: execution.data || null,
-                      reconciliation,
+              }
+
+              if (response.ok) {
+                const executionInput = {
+                  ...input,
+                  supportRouting: supportRouting.route,
+                };
+                const execution = await executeLiveConnector(connector, {
+                  operation,
+                  input: executionInput,
+                  projectId,
+                  estimatedCost,
+                  idempotencyKey: executionKey || undefined,
+                });
+                response.execution = execution;
+                if (!execution.ok) {
+                  response.ok = false;
+                  response.decision = 'deny';
+                  response.reason = execution.message;
+                  response.errorCode = execution.errorCode;
+                  auditDecision = 'deny';
+                  auditReason = execution.message;
+                  auditErrorCode = execution.errorCode;
+                  if (projectId && executionKey) {
+                    const runtime = projectRuntimes.get(projectId);
+                    if (runtime && runtime.state) {
+                      markConnectorExecutionRecord(runtime.state, executionKey, {
+                        status: 'failed',
+                        lastError: execution.message || execution.errorCode || 'execution_failed',
+                      });
+                      persistProjectState(runtime.state);
+                    }
+                  }
+                } else {
+                  actualCost = typeof execution.actualCost === 'number' && Number.isFinite(execution.actualCost)
+                    ? execution.actualCost
+                    : (typeof estimatedCost === 'number' ? estimatedCost : 0);
+                  response.reason = execution.message || response.reason;
+                  auditDecision = 'allow';
+                  auditReason = response.reason;
+                  if (isMutating) {
+                    reconciliation = await reconcileConnectorExecution(connector, operation, execution, {
+                      projectId,
+                      siteId: String(input && input.siteId ? input.siteId : ''),
+                      executionKey,
                     });
-                    if (reconciliation && reconciliation.checked && !reconciliation.ok) {
-                      appendProjectLog(runtime.state, 'message', {
-                        kind: 'connector_reconciliation_pending',
-                        connector,
-                        operation,
-                        executionKey,
+                    response.reconciliation = reconciliation;
+                  }
+                  if (projectId && executionKey) {
+                    const runtime = projectRuntimes.get(projectId);
+                    if (runtime && runtime.state) {
+                      markConnectorExecutionRecord(runtime.state, executionKey, {
+                        status: 'succeeded',
+                        message: response.reason,
+                        completedAt: nowIso(),
+                        actualCost,
+                        result: execution.data || null,
                         reconciliation,
                       });
-                      appendMessageBusEntry({
-                        projectId,
-                        from: 'coordinator',
-                        to: 'reconciliation_engine',
-                        kind: 'connector_reconciliation_pending',
-                        payload: {
+                      if (reconciliation && reconciliation.checked && !reconciliation.ok) {
+                        appendProjectLog(runtime.state, 'message', {
+                          kind: 'connector_reconciliation_pending',
                           connector,
                           operation,
                           executionKey,
                           reconciliation,
-                        },
-                      });
+                        });
+                        appendMessageBusEntry({
+                          projectId,
+                          from: 'coordinator',
+                          to: 'reconciliation_engine',
+                          kind: 'connector_reconciliation_pending',
+                          payload: {
+                            connector,
+                            operation,
+                            executionKey,
+                            reconciliation,
+                          },
+                        });
+                      }
+                      persistProjectState(runtime.state);
                     }
-                    persistProjectState(runtime.state);
                   }
                 }
               }
@@ -7328,6 +7582,7 @@ module.exports = {
   shouldReconcileConnectorExecution,
   reconcileConnectorExecution,
   evaluateGoogleAdsGuardrails,
+  evaluateSupportAutonomyRouting,
   markConnectorExecutionRecord,
   appendApprovalDecisionAudit,
   readApprovalDecisionAudit,

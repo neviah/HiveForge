@@ -603,6 +603,7 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 12. Provider-specific idempotency expansion: mutating operation catalog across connectors, provider idempotency mode mapping, and eventual-consistency reconciliation checks.
 13. Autonomy connector expansion: API-gateway-backed business operations for marketing (Google Ads optimization), support (inbox triage), and finance (Stripe balance/reconciliation loop actions).
 14. Google Ads autonomy hardening: campaign lifecycle operation support plus automated guardrails for required fields, policy-budget sanity, and KPI spend-variance gating.
+15. Support autonomy expansion: website support chat/ticket connector adapters, SLA-aware routing controls, and confidence-gated auto-response escalation logic.
 
 ## **Next Critical Milestones**
 
@@ -611,12 +612,12 @@ This is the active short-list to drive HiveForge from advanced prototype to full
    - Continue from Future Feature Candidates and extended connector coverage priorities.
 
 2. **Autonomous Operations Completion Track**
-   - Expand support autonomy beyond email (website chat/ticket APIs with SLA-aware auto-response).
    - Add finance automation flows (invoice/refund/collections lifecycle and cashflow variance actions).
+   - Build publishing/book autonomy pack (story bible, chapter loop, continuity validator, humanization pass).
 
 ## **Future Feature Candidates**
 
-1. Website live support chat connector (for example, Intercom/Zendesk/custom widget) with Coordinator-gated read/reply/close operations for Support roles.
+1. Publishing autonomy workflow template pack with chapter-by-chapter drafting, continuity checks, and iterative feedback/humanization loop controls.
 
 ## **Definition of Operational Readiness**
 

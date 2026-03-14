@@ -29,8 +29,8 @@ test('business recurring loops include autonomous connector actions', () => {
   assert.equal(ads.action?.operation, 'optimize_campaigns');
 
   assert.equal(support.action?.type, 'connector');
-  assert.equal(support.action?.connector, 'email_provider');
-  assert.equal(support.action?.operation, 'triage_inbox');
+  assert.equal(support.action?.connector, 'support_ticket');
+  assert.equal(support.action?.operation, 'triage_tickets');
 
   assert.equal(analytics.action?.type, 'connector');
   assert.equal(analytics.action?.connector, 'stripe');

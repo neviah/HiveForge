@@ -15,6 +15,7 @@ const {
   shouldReconcileConnectorExecution,
   reconcileConnectorExecution,
   evaluateGoogleAdsGuardrails,
+  evaluateSupportAutonomyRouting,
   markConnectorExecutionRecord,
   appendApprovalDecisionAudit,
   readApprovalDecisionAudit,
@@ -164,6 +165,8 @@ test('mutating operation guard identifies write actions', () => {
   assert.equal(isMutatingConnectorOperation('github', 'list_repos'), false);
   assert.equal(isMutatingConnectorOperation('github', 'create_issue'), true);
   assert.equal(isMutatingConnectorOperation('stripe', 'create_payment_intent'), true);
+  assert.equal(isMutatingConnectorOperation('support_ticket', 'reply_ticket'), true);
+  assert.equal(isMutatingConnectorOperation('support_ticket', 'list_tickets'), false);
 });
 
 test('provider idempotency mode maps supported write operations', () => {
@@ -172,8 +175,41 @@ test('provider idempotency mode maps supported write operations', () => {
   assert.equal(connectorIdempotencyMode('stripe', 'create_refund'), 'native_token');
   assert.equal(connectorIdempotencyMode('email_provider', 'send_campaign'), 'native_token');
   assert.equal(connectorIdempotencyMode('google_ads', 'create_campaign'), 'native_token');
+  assert.equal(connectorIdempotencyMode('support_ticket', 'reply_ticket'), 'native_token');
   assert.equal(connectorIdempotencyMode('analytics', 'list_accounts'), 'not_required');
   assert.equal(connectorIdempotencyMode('unknown_connector', 'create_anything'), 'not_required');
+});
+
+test('support routing guardrails block low-confidence autonomous replies', () => {
+  const routing = evaluateSupportAutonomyRouting({
+    connector: 'support_ticket',
+    operation: 'reply_ticket',
+    input: {
+      waitingMinutes: 20,
+      slaMinutes: 60,
+      responseConfidence: 0.54,
+      minConfidence: 0.72,
+    },
+  });
+
+  assert.equal(routing.ok, false);
+  assert.equal(routing.route?.decision, 'escalate');
+});
+
+test('support routing guardrails allow triage with escalation when SLA is breached', () => {
+  const routing = evaluateSupportAutonomyRouting({
+    connector: 'support_chat',
+    operation: 'triage_conversations',
+    input: {
+      waitingMinutes: 35,
+      slaMinutes: 15,
+      responseConfidence: 0.86,
+      minConfidence: 0.8,
+    },
+  });
+
+  assert.equal(routing.ok, true);
+  assert.equal(routing.route?.escalate, true);
 });
 
 test('reconciliation policy flags eventual consistency operations', () => {

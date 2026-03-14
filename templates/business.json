@@ -89,7 +89,9 @@
                                                        "can_deploy":  false,
                                                        "can_spend":  false,
                                                        "allowed_connectors":  [
-                                                                                  "email_provider"
+                                                                                  "email_provider",
+                                                                                  "support_chat",
+                                                                                  "support_ticket"
                                                                               ]
                                                    },
                               "Finance Tracker":  {
@@ -137,11 +139,15 @@
                                 "owner_role":  "Support Responder",
                                 "action":  {
                                                "type":  "connector",
-                                               "connector":  "email_provider",
-                                               "operation":  "triage_inbox",
+                                               "connector":  "support_ticket",
+                                               "operation":  "triage_tickets",
                                                "estimated_cost":  5,
                                                "input":  {
-                                                             "queue":  "support"
+                                                             "queue":  "web_support",
+                                                             "slaMinutes":  60,
+                                                             "minConfidence":  0.72,
+                                                             "responseConfidence":  0.8,
+                                                             "escalationTargetRole":  "Support Responder"
                                                          },
                                                "requires_permission":  false
                                            },
