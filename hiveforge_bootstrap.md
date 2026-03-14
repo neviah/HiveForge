@@ -634,11 +634,11 @@ This is the active short-list to drive HiveForge from advanced prototype to full
    - Goal milestones are now phase-grouped with acceptance criteria and required task IDs.
    - Runtime verifies milestone completion before project close and creates an explicit delivery-gap task when verification fails.
    - Completion now requires objective delivery verification instead of raw task-count completion.
-3. **Expand connector/domain execution coverage for generalized business prompts**
-   - Broaden operation depth where vertical workflows require additional API actions and runbooks.
-   - Marketplace/social goals are now recognized (`auction`, `bidding`, `dating`, `profile`) with dedicated policy-pack coverage.
-4. **Finish dashboard UX for new orchestration intelligence**
-   - Surface goal-plan milestones, missing connector blockers, policy-pack decisions, and assistance requests end-to-end.
+3. **Expand connector/domain execution coverage for generalized business prompts — COMPLETE**
+   - Domain plans now include runnable connector auto-actions for payments, ticket triage, and lifecycle messaging in vertical workflows.
+   - Marketplace/social goals are recognized (`auction`, `bidding`, `dating`, `profile`) with dedicated policy-pack coverage.
+4. **Finish dashboard UX for new orchestration intelligence — COMPLETE**
+   - Automation tab now surfaces milestone progress, policy pack, pending approvals, connector blockers, and assistance requests end-to-end.
 5. **Run and document operational readiness certification**
    - Multi-day autonomous Business run, restart safety proof, and full policy/budget control validation.
 6. **Capture final production evidence artifacts**

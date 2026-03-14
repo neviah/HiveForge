@@ -711,6 +711,46 @@
             </label>
             <div style="font-size:0.82rem;color:var(--muted);margin-bottom:0.5rem;">Current recurring schedule</div>
             <div id="projectRecurringSchedule" class="hf-log-stream" style="max-height:180px;"></div>
+            <div class="hf-grid-4" style="margin-top:0.9rem;margin-bottom:0.8rem;">
+              <div class="hf-card">
+                <div class="hf-card-label">Policy Pack</div>
+                <div class="hf-card-value" id="automationPolicyPack" style="font-size:1rem;">—</div>
+              </div>
+              <div class="hf-card">
+                <div class="hf-card-label">Milestone Progress</div>
+                <div class="hf-card-value" id="automationMilestoneProgress">—</div>
+              </div>
+              <div class="hf-card">
+                <div class="hf-card-label">Pending Approvals</div>
+                <div class="hf-card-value" id="automationPendingApprovals">0</div>
+              </div>
+              <div class="hf-card">
+                <div class="hf-card-label">Assistance Requests</div>
+                <div class="hf-card-value" id="automationAssistanceCount">0</div>
+              </div>
+            </div>
+            <div class="hf-grid-2" style="margin-bottom:0.8rem;">
+              <div class="hf-card" style="min-height:190px;">
+                <h4 style="margin-top:0;">Connector Blockers</h4>
+                <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem;">Missing credential services and connector-readiness tasks that are still pending.</div>
+                <div id="automationConnectorBlockers" class="hf-log-stream" style="max-height:120px;"></div>
+              </div>
+              <div class="hf-card" style="min-height:190px;">
+                <h4 style="margin-top:0;">Milestone Status</h4>
+                <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem;">Phase milestones generated from goal analysis and their completion state.</div>
+                <div id="automationMilestoneList" class="hf-log-stream" style="max-height:120px;"></div>
+              </div>
+              <div class="hf-card" style="min-height:190px;">
+                <h4 style="margin-top:0;">Pending Approvals Queue</h4>
+                <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem;">Highest-priority approval decisions currently waiting for operator action.</div>
+                <div id="automationApprovalsList" class="hf-log-stream" style="max-height:120px;"></div>
+              </div>
+              <div class="hf-card" style="min-height:190px;">
+                <h4 style="margin-top:0;">Assistance Needed</h4>
+                <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem;">Tasks where autonomous execution requested operator assistance due to blockers.</div>
+                <div id="automationAssistanceList" class="hf-log-stream" style="max-height:120px;"></div>
+              </div>
+            </div>
             <div class="hf-btn-row" style="margin-top:0.9rem;margin-bottom:0;">
               <button class="hf-btn" onclick="Dashboard.saveProjectAutomation()">Save Project Automation</button>
               <button class="hf-btn secondary" onclick="Dashboard.runRecurringNow()">Run Recurring Cycle Now</button>

@@ -419,6 +419,60 @@ function renderProjectAutomation(data) {
       return `<div style="padding:0.3rem 0;border-bottom:1px solid var(--border);"><strong>${esc(entry.title)}</strong><div style="font-size:0.78rem;color:var(--muted);">${esc(entry.phase)} · every ${esc(entry.everyHuman || 'n/a')}</div><div style="font-size:0.76rem;color:var(--muted);">Last run: ${esc(ranAt)}</div></div>`;
     }).join('')
     : '<div style="color:var(--muted);">No recurring schedule defined for this template.</div>';
+
+  const pack = data?.approvalGovernance?.industryPolicyPack || null;
+  const milestone = data?.milestoneCompletion || null;
+  const orchestration = data?.orchestration || {};
+  setText('automationPolicyPack', pack ? (pack.title || pack.id || 'active') : 'none');
+  setText('automationMilestoneProgress', milestone && typeof milestone.pct === 'number' ? `${milestone.pct}%` : '—');
+  setText('automationPendingApprovals', Number(orchestration.pendingApprovalCount || 0));
+  setText('automationAssistanceCount', Number(orchestration.assistanceRequestCount || 0));
+
+  const blockers = document.getElementById('automationConnectorBlockers');
+  if (blockers) {
+    const missingServices = Array.isArray(data?.goalPlan?.missingCredentialServices)
+      ? data.goalPlan.missingCredentialServices
+      : [];
+    const pendingReadiness = Array.isArray(orchestration.pendingConnectorReadiness)
+      ? orchestration.pendingConnectorReadiness
+      : [];
+    const lines = [];
+    missingServices.forEach((svc) => {
+      lines.push(`<div class="hf-log-line"><strong>Missing credential:</strong> ${esc(String(svc))}</div>`);
+    });
+    pendingReadiness.forEach((item) => {
+      lines.push(`<div class="hf-log-line"><strong>${esc(item.taskId || 'task')}</strong> ${esc(item.title || '')}<div style="color:var(--muted);margin-top:0.15rem;">${esc(item.phase || 'general')} · ${esc(item.status || 'backlog')}</div></div>`);
+    });
+    blockers.innerHTML = lines.length ? lines.join('') : '<div style="color:var(--muted);">No connector blockers detected.</div>';
+  }
+
+  const milestoneList = document.getElementById('automationMilestoneList');
+  if (milestoneList) {
+    const milestones = Array.isArray(milestone?.milestones) ? milestone.milestones : [];
+    milestoneList.innerHTML = milestones.length
+      ? milestones.map((item) => `<div class="hf-log-line"><strong>${esc(item.id || 'MS')}</strong> ${esc(item.title || '')}<div style="color:var(--muted);margin-top:0.15rem;">${esc(item.doneTaskCount || 0)}/${esc(item.requiredTaskCount || 0)} tasks · ${item.completedAt ? 'complete' : 'pending'}</div></div>`).join('')
+      : '<div style="color:var(--muted);">No milestones generated yet.</div>';
+  }
+
+  const approvalsList = document.getElementById('automationApprovalsList');
+  if (approvalsList) {
+    const approvals = Array.isArray(orchestration.pendingApprovals)
+      ? orchestration.pendingApprovals
+      : [];
+    approvalsList.innerHTML = approvals.length
+      ? approvals.map((item) => `<div class="hf-log-line"><strong>${esc(item.taskId || 'task')}</strong> ${esc(item.title || '')}<div style="color:var(--muted);margin-top:0.15rem;">risk ${esc(String(item.riskScore || 0))} · ${esc(item.phase || 'general')}</div></div>`).join('')
+      : '<div style="color:var(--muted);">No approvals pending.</div>';
+  }
+
+  const assistanceList = document.getElementById('automationAssistanceList');
+  if (assistanceList) {
+    const requests = Array.isArray(orchestration.assistanceRequests)
+      ? orchestration.assistanceRequests
+      : [];
+    assistanceList.innerHTML = requests.length
+      ? requests.map((item) => `<div class="hf-log-line"><strong>${esc(item.taskId || 'task')}</strong> ${esc(item.title || '')}<div style="color:var(--muted);margin-top:0.15rem;">${esc(item.phase || 'general')} · ${esc(item.lastError || 'assistance requested')}</div></div>`).join('')
+      : '<div style="color:var(--muted);">No active assistance requests.</div>';
+  }
 }
 
 // ─── SSE ─────────────────────────────────────────────────────────────────────

@@ -2871,6 +2871,78 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
     });
   }
 
+  if (tags.marketplace || tags.ecommerce || tags.payments || tags.fintech) {
+    addTask({
+      title: 'Execute payment flow validation and settlement simulation',
+      phase: 'finance',
+      requiredRole: 'Finance Tracker',
+      description: 'Run a controlled payment-intent flow to validate billing logic, settlement routing, and connector policy controls.',
+      autoAction: {
+        type: 'connector',
+        connector: 'stripe',
+        operation: 'create_payment_intent',
+        input: { mode: 'simulation', amount: 1000, currency: 'usd' },
+        estimatedCost: 20,
+        actorRole: 'Finance Tracker',
+        requiresPermission: true,
+      },
+    });
+  }
+
+  if (tags.fintech) {
+    addTask({
+      title: 'Run invoice issuance and collection workflow validation',
+      phase: 'finance',
+      requiredRole: 'Finance Tracker',
+      description: 'Validate invoice generation, collection events, and reconciliation checkpoints for finance-heavy workflows.',
+      autoAction: {
+        type: 'connector',
+        connector: 'stripe',
+        operation: 'create_invoice',
+        input: { mode: 'simulation' },
+        estimatedCost: 15,
+        actorRole: 'Finance Tracker',
+        requiresPermission: true,
+      },
+    });
+  }
+
+  if (tags.marketplace || tags.social || tags.support || tags.healthcare) {
+    addTask({
+      title: 'Execute support-ticket triage automation baseline',
+      phase: 'support',
+      requiredRole: 'Support Responder',
+      description: 'Run support-ticket triage to verify routing, escalation behavior, and SLA-aware queue handling.',
+      autoAction: {
+        type: 'connector',
+        connector: 'support_ticket',
+        operation: 'triage_tickets',
+        input: { mode: 'baseline' },
+        estimatedCost: 0,
+        actorRole: 'Support Responder',
+        requiresPermission: true,
+      },
+    });
+  }
+
+  if (tags.marketplace || tags.social || tags.marketing) {
+    addTask({
+      title: 'Run lifecycle messaging dry-run for onboarding and policy updates',
+      phase: 'support',
+      requiredRole: 'Support Responder',
+      description: 'Validate outbound messaging pipeline for onboarding, policy updates, and account notices.',
+      autoAction: {
+        type: 'connector',
+        connector: 'email_provider',
+        operation: 'send_campaign',
+        input: { mode: 'dry_run', audience: 'internal_test' },
+        estimatedCost: 0,
+        actorRole: 'Support Responder',
+        requiresPermission: true,
+      },
+    });
+  }
+
   addTask({
     title: 'Publish coordinator operating runbook and autonomous maintenance policy',
     phase: 'maintenance',
@@ -3142,6 +3214,18 @@ function summarizeProjectAutomation(projectState) {
     maxRunbooks: 8,
   });
   const goalPlan = projectState.goalPlan && typeof projectState.goalPlan === 'object' ? projectState.goalPlan : null;
+  const pendingApprovals = projectState.tasks.filter((task) => task.status === 'review' && task.executionState === 'awaiting_approval');
+  const assistanceRequests = projectState.tasks.filter((task) => task.assistanceRequestedAt && task.status !== 'done');
+  const connectorReadinessTasks = projectState.tasks.filter((task) => /validate\s+.+\s+connector\s+readiness/i.test(String(task.title || '')));
+  const pendingConnectorReadiness = connectorReadinessTasks.filter((task) => task.status !== 'done');
+  const recentPolicyDecisions = readMessageBusEntries({
+    projectId: projectState.id,
+    limit: 120,
+    kind: 'policy_decision|connector_policy_decision|approval_decision_applied',
+  });
+  const milestoneCompletion = goalPlan && Array.isArray(goalPlan.milestones) && goalPlan.milestones.length > 0
+    ? evaluateMilestoneCompletion(projectState)
+    : null;
   return {
     recurring: {
       enabled: Boolean(projectState.recurring.enabled),
@@ -3206,9 +3290,36 @@ function summarizeProjectAutomation(projectState) {
           missingCredentialServices: Array.isArray(goalPlan.missingCredentialServices) ? goalPlan.missingCredentialServices : [],
         }
       : null,
-    milestoneCompletion: goalPlan && Array.isArray(goalPlan.milestones) && goalPlan.milestones.length > 0
-      ? evaluateMilestoneCompletion(projectState)
-      : null,
+    milestoneCompletion,
+    orchestration: {
+      pendingApprovalCount: pendingApprovals.length,
+      pendingApprovals: pendingApprovals.slice(0, 25).map((task) => ({
+        taskId: task.id,
+        title: task.title,
+        phase: task.phase,
+        requestedAt: task.pendingApproval && task.pendingApproval.requestedAt ? task.pendingApproval.requestedAt : task.lastProgressAt,
+        riskScore: task.pendingApproval && task.pendingApproval.risk ? Number(task.pendingApproval.risk.score || 0) : 0,
+        reason: task.pendingApproval && task.pendingApproval.reason ? task.pendingApproval.reason : task.lastError,
+      })),
+      assistanceRequestCount: assistanceRequests.length,
+      assistanceRequests: assistanceRequests.slice(0, 25).map((task) => ({
+        taskId: task.id,
+        title: task.title,
+        phase: task.phase,
+        assistanceRequestedAt: task.assistanceRequestedAt,
+        lastError: task.lastError || null,
+      })),
+      connectorReadinessTotal: connectorReadinessTasks.length,
+      pendingConnectorReadinessCount: pendingConnectorReadiness.length,
+      pendingConnectorReadiness: pendingConnectorReadiness.slice(0, 25).map((task) => ({
+        taskId: task.id,
+        title: task.title,
+        phase: task.phase,
+        status: task.status,
+      })),
+      recentPolicyDecisionCount: recentPolicyDecisions.length,
+      milestoneProgressPct: milestoneCompletion ? milestoneCompletion.pct : null,
+    },
   };
 }
 
@@ -10321,9 +10432,10 @@ module.exports = {
   evaluateApprovalGovernanceDecision,
   applyIndustryApprovalPolicyPack,
   connectorRetryPlan,
-    buildGoalMilestones,
-    evaluateMilestoneCompletion,
-    verifyGoalDelivery,
+  buildGoalMilestones,
+  evaluateMilestoneCompletion,
+  verifyGoalDelivery,
+  summarizeProjectAutomation,
   connectorExecutionKey,
   connectorMutationExecutionKey,
   isMutatingConnectorOperation,

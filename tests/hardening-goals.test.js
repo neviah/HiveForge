@@ -36,6 +36,7 @@ const {
   buildGoalMilestones,
   evaluateMilestoneCompletion,
   verifyGoalDelivery,
+  summarizeProjectAutomation,
 } = require('../hiveforge_server');
 
 function projectId(prefix) {
@@ -1091,6 +1092,114 @@ test('goal prompt analysis detects social marketplace and infers marketplace pol
   assert.equal(plan.requiredConnectors.includes('support_ticket'), true);
   assert.equal(plan.requiredConnectors.includes('email_provider'), true);
   assert.equal(applied.packId, 'marketplace');
+});
+
+test('goal prompt analysis adds runnable domain auto-actions for social marketplace prompts', () => {
+  const plan = goalActionPlanFromPrompt(
+    'business',
+    'Build an auction dating marketplace where users create profiles, bid on date experiences, and receive onboarding messages.',
+    {},
+  );
+
+  const hasPaymentSimulation = plan.tasks.some((task) =>
+    task.autoAction
+    && task.autoAction.connector === 'stripe'
+    && task.autoAction.operation === 'create_payment_intent',
+  );
+  const hasSupportTriage = plan.tasks.some((task) =>
+    task.autoAction
+    && task.autoAction.connector === 'support_ticket'
+    && task.autoAction.operation === 'triage_tickets',
+  );
+  const hasLifecycleMessaging = plan.tasks.some((task) =>
+    task.autoAction
+    && task.autoAction.connector === 'email_provider'
+    && task.autoAction.operation === 'send_campaign',
+  );
+
+  assert.equal(hasPaymentSimulation, true);
+  assert.equal(hasSupportTriage, true);
+  assert.equal(hasLifecycleMessaging, true);
+});
+
+test('project automation summary exposes orchestration intelligence signals', () => {
+  const now = new Date().toISOString();
+  const state = {
+    id: projectId('automation-summary-signals'),
+    name: 'Automation Summary Signals',
+    status: 'running',
+    startedAt: now,
+    template: 'business',
+    operatingMode: 'continuous_business',
+    tasks: [
+      { id: 'GOAL-1', title: 'Define charter', phase: 'strategy', status: 'done', completedAt: now, assistanceRequestedAt: null },
+      {
+        id: 'GOAL-2',
+        title: 'Approve auction policy deployment',
+        phase: 'compliance',
+        status: 'review',
+        executionState: 'awaiting_approval',
+        pendingApproval: {
+          requestedAt: now,
+          reason: 'Policy-sensitive deploy',
+          risk: { score: 71, level: 'high', requiresHuman: true },
+        },
+        assistanceRequestedAt: now,
+        lastError: 'Policy gate escalation',
+      },
+      {
+        id: 'GOAL-3',
+        title: 'Validate stripe connector readiness',
+        phase: 'finance',
+        status: 'backlog',
+        assistanceRequestedAt: null,
+      },
+    ],
+    agents: [{ id: 'coordinator', isCoordinator: true, status: 'running', tokens: 0 }],
+    goalPlan: {
+      source: 'goal_prompt_analysis',
+      generatedAt: now,
+      requiredConnectors: ['stripe', 'support_ticket'],
+      missingCredentialServices: ['stripe'],
+      milestones: [
+        {
+          id: 'MS-strategy',
+          phase: 'strategy',
+          title: 'Strategy',
+          acceptanceCriteria: ['complete strategy'],
+          requiredTaskIds: ['GOAL-1'],
+          completedAt: null,
+        },
+        {
+          id: 'MS-compliance',
+          phase: 'compliance',
+          title: 'Compliance',
+          acceptanceCriteria: ['complete compliance'],
+          requiredTaskIds: ['GOAL-2'],
+          completedAt: null,
+        },
+      ],
+    },
+    heartbeat: { status: 'alive', lastBeat: now, autoFixCount: 0, cycleCount: 1, log: [] },
+    recurring: { enabled: true, lastRunAt: {}, schedule: [] },
+    logs: [],
+    deadLetters: [],
+    financeExceptions: [],
+    publicationHealth: { driftEvents: [], incidents: [], recentDeliveries: [] },
+    operationalLoops: { weekStart: now, generatedAt: null, objectives: [] },
+    approvalGovernance: null,
+  };
+
+  const summary = summarizeProjectAutomation(state);
+
+  assert.equal(summary.goalPlan.source, 'goal_prompt_analysis');
+  assert.equal(summary.orchestration.pendingApprovalCount, 1);
+  assert.equal(summary.orchestration.assistanceRequestCount, 1);
+  assert.equal(summary.orchestration.pendingConnectorReadinessCount, 1);
+  assert.equal(Array.isArray(summary.orchestration.pendingApprovals), true);
+  assert.equal(Array.isArray(summary.orchestration.assistanceRequests), true);
+  assert.equal(Array.isArray(summary.orchestration.pendingConnectorReadiness), true);
+  assert.equal(typeof summary.orchestration.recentPolicyDecisionCount, 'number');
 });
 
 test('buildGoalMilestones creates phase-grouped verification milestones', () => {
