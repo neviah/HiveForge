@@ -621,14 +621,15 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 
 ## **Future Feature Candidates**
 
-1. Expand industry policy packs to finance and healthcare, with role-aware escalation templates and regulator-specific runbooks.
-2. Dashboard-native policy pack controls and policy simulation UI for preflight "what-if" approval decisions.
+1. Dashboard-native policy pack controls and policy simulation UI for preflight "what-if" approval decisions.
+2. Extend industry packs with regulator-specific runbooks and deeper role-aware escalation templates as verticals require.
 
 ## **Remaining to Complete Project (Tracking)**
 
-1. **Complete industry policy-pack coverage**
-   - Housing pack is implemented.
-   - Finance and healthcare packs remain.
+1. **Industry policy-pack coverage — COMPLETE**
+   - All 5 packs implemented: housing, finance, healthcare, saas, ecommerce.
+   - Each pack adds autoDeny + escalation rules matched by connector, operation, risk score, and task keywords.
+   - `inferIndustryApprovalPack()` auto-selects pack from goal tags; `applyIndustryApprovalPolicyPack()` merges idempotently.
 2. **Strengthen plan-to-delivery closure from prompt analysis**
    - Improve milestone decomposition, dependency quality, and objective completion verification.
 3. **Expand connector/domain execution coverage for generalized business prompts**

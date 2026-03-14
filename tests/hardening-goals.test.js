@@ -868,6 +868,171 @@ test('housing policy pack adds escalation for landlord-tenant compliance workflo
   assert.equal(Boolean(decision.matchedRuleId), true);
 });
 
+test('finance policy pack escalates chargeback and dispute workflows', () => {
+  const state = { id: projectId('approval-finance-pack'), approvalGovernance: null };
+  ensureApprovalGovernanceState(state);
+
+  const applied = applyIndustryApprovalPolicyPack(state, {
+    templateId: 'business',
+    goalPlan: {
+      goal: 'Build a fintech accounting and cashflow management platform.',
+      tags: { fintech: true },
+    },
+  });
+
+  const task = {
+    id: 'GOAL-finance',
+    title: 'Investigate and respond to unauthorized charge dispute on Stripe account',
+    phase: 'finance',
+    autoAction: {
+      connector: 'stripe',
+      operation: 'create_refund',
+      estimatedCost: 150,
+      actorRole: 'Finance Tracker',
+    },
+  };
+
+  const decision = evaluateApprovalGovernanceDecision(state, task, {
+    riskScore: 65,
+    estimatedCost: 150,
+    connector: 'stripe',
+    operation: 'create_refund',
+    actorRole: 'Finance Tracker',
+    taskTitle: task.title,
+    taskPhase: task.phase,
+  });
+
+  assert.equal(applied.applied, true);
+  assert.equal(applied.packId, 'finance');
+  assert.equal(state.approvalGovernance.industryPolicyPack.id, 'finance');
+  assert.equal(decision.decision, 'escalate');
+  assert.equal(Boolean(decision.matchedRuleId), true);
+});
+
+test('healthcare policy pack escalates patient consent and PHI deployments', () => {
+  const state = { id: projectId('approval-healthcare-pack'), approvalGovernance: null };
+  ensureApprovalGovernanceState(state);
+
+  const applied = applyIndustryApprovalPolicyPack(state, {
+    templateId: 'business',
+    goalPlan: {
+      goal: 'Build a telehealth patient scheduling and clinical records platform.',
+      tags: { healthcare: true },
+    },
+  });
+
+  const task = {
+    id: 'GOAL-health',
+    title: 'Deploy updated patient consent and privacy notice to production',
+    phase: 'compliance',
+    autoAction: {
+      connector: 'netlify',
+      operation: 'trigger_deploy',
+      estimatedCost: 10,
+      actorRole: 'Backend Architect',
+    },
+  };
+
+  const decision = evaluateApprovalGovernanceDecision(state, task, {
+    riskScore: 52,
+    estimatedCost: 10,
+    connector: 'netlify',
+    operation: 'trigger_deploy',
+    actorRole: 'Backend Architect',
+    taskTitle: task.title,
+    taskPhase: task.phase,
+  });
+
+  assert.equal(applied.applied, true);
+  assert.equal(applied.packId, 'healthcare');
+  assert.equal(state.approvalGovernance.industryPolicyPack.id, 'healthcare');
+  assert.equal(decision.decision, 'escalate');
+  assert.equal(Boolean(decision.matchedRuleId), true);
+});
+
+test('saas policy pack escalates GDPR data subject and deletion requests', () => {
+  const state = { id: projectId('approval-saas-pack'), approvalGovernance: null };
+  ensureApprovalGovernanceState(state);
+
+  const applied = applyIndustryApprovalPolicyPack(state, {
+    templateId: 'business',
+    packId: 'saas',
+    goalPlan: {
+      goal: 'Build a multi-tenant SaaS platform with GDPR data subject request handling.',
+      tags: { webApp: true },
+    },
+  });
+
+  const task = {
+    id: 'GOAL-saas',
+    title: 'Process GDPR right to erasure and data export request for user account',
+    phase: 'compliance',
+    autoAction: {
+      connector: 'analytics',
+      operation: 'export_data',
+      estimatedCost: 0,
+      actorRole: 'Backend Architect',
+    },
+  };
+
+  const decision = evaluateApprovalGovernanceDecision(state, task, {
+    riskScore: 50,
+    estimatedCost: 0,
+    connector: 'analytics',
+    operation: 'export_data',
+    actorRole: 'Backend Architect',
+    taskTitle: task.title,
+    taskPhase: task.phase,
+  });
+
+  assert.equal(applied.applied, true);
+  assert.equal(applied.packId, 'saas');
+  assert.equal(state.approvalGovernance.industryPolicyPack.id, 'saas');
+  assert.equal(decision.decision, 'escalate');
+  assert.equal(Boolean(decision.matchedRuleId), true);
+});
+
+test('ecommerce policy pack escalates catalog deploys and high-value refunds', () => {
+  const state = { id: projectId('approval-ecommerce-pack'), approvalGovernance: null };
+  ensureApprovalGovernanceState(state);
+
+  const applied = applyIndustryApprovalPolicyPack(state, {
+    templateId: 'business',
+    goalPlan: {
+      goal: 'Build and operate an online retail store and product marketplace.',
+      tags: { ecommerce: true },
+    },
+  });
+
+  const task = {
+    id: 'GOAL-ecom',
+    title: 'Deploy updated product catalog and new storefront to production',
+    phase: 'deployment',
+    autoAction: {
+      connector: 'netlify',
+      operation: 'trigger_deploy',
+      estimatedCost: 0,
+      actorRole: 'Backend Architect',
+    },
+  };
+
+  const decision = evaluateApprovalGovernanceDecision(state, task, {
+    riskScore: 30,
+    estimatedCost: 0,
+    connector: 'netlify',
+    operation: 'trigger_deploy',
+    actorRole: 'Backend Architect',
+    taskTitle: task.title,
+    taskPhase: task.phase,
+  });
+
+  assert.equal(applied.applied, true);
+  assert.equal(applied.packId, 'ecommerce');
+  assert.equal(state.approvalGovernance.industryPolicyPack.id, 'ecommerce');
+  assert.equal(decision.decision, 'escalate');
+  assert.equal(Boolean(decision.matchedRuleId), true);
+});
+
 test('approval decision audit uses immutable hash chaining', () => {
   const id = projectId('approval-audit');
   const first = appendApprovalDecisionAudit(id, {

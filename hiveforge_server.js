@@ -116,6 +116,165 @@ const INDUSTRY_APPROVAL_POLICY_PACKS = {
       },
     ],
   },
+  finance: {
+    id: 'finance',
+    title: 'Finance & Fintech Compliance Pack',
+    summary: 'Adds escalation and denial rules for high-value payments, chargebacks, tax filings, and financial close workflows.',
+    autoDenyRules: [
+      {
+        id: 'finance-deny-bulk-payout-untrusted',
+        connectors: ['stripe'],
+        operations: ['create_transfer', 'create_payout', 'create_refund'],
+        actorRoles: ['intern', 'contractor', 'unknown'],
+        minEstimatedCost: 1000,
+      },
+      {
+        id: 'finance-deny-bulk-invoice-untrusted',
+        connectors: ['stripe'],
+        operations: ['create_invoice', 'finalize_invoice'],
+        actorRoles: ['intern', 'contractor', 'unknown'],
+        minEstimatedCost: 500,
+      },
+    ],
+    escalationRules: [
+      {
+        id: 'finance-escalate-chargeback-dispute',
+        connectors: ['stripe'],
+        minRiskScore: 50,
+        taskKeywords: ['chargeback', 'dispute', 'fraud', 'reversal', 'unauthorized charge'],
+      },
+      {
+        id: 'finance-escalate-tax-and-close',
+        connectors: ['stripe', 'analytics', 'email_provider'],
+        minRiskScore: 55,
+        taskKeywords: ['tax', 'vat', 'audit', 'year-end', 'financial close', 'revenue recognition', 'regulatory filing'],
+      },
+      {
+        id: 'finance-escalate-high-value-invoice',
+        connectors: ['stripe'],
+        operations: ['create_invoice', 'create_payment_intent'],
+        minEstimatedCost: 500,
+      },
+    ],
+  },
+  healthcare: {
+    id: 'healthcare',
+    title: 'Healthcare Compliance Pack',
+    summary: 'Enforces HIPAA-adjacent escalation for patient data, clinical workflows, and regulated health document deployments.',
+    autoDenyRules: [
+      {
+        id: 'healthcare-deny-phi-export-untrusted',
+        connectors: ['analytics', 'email_provider', 'github'],
+        operations: ['export_data', 'create_export', 'send_email', 'push_file'],
+        actorRoles: ['intern', 'contractor', 'unknown'],
+        taskKeywords: ['patient', 'phi', 'medical record', 'health data', 'clinical data'],
+      },
+      {
+        id: 'healthcare-deny-bulk-delete-health-data',
+        connectors: ['analytics', 'github'],
+        operations: ['delete_records', 'bulk_delete', 'drop_table'],
+        actorRoles: ['intern', 'contractor', 'unknown', 'support responder'],
+      },
+    ],
+    escalationRules: [
+      {
+        id: 'healthcare-escalate-phi-workflow',
+        connectors: ['netlify', 'email_provider', 'support_ticket', 'analytics'],
+        minRiskScore: 50,
+        taskKeywords: ['patient', 'phi', 'hipaa', 'medical', 'clinical', 'prescription', 'diagnosis', 'ehr', 'health record', 'telehealth'],
+      },
+      {
+        id: 'healthcare-escalate-consent-deploy',
+        operations: ['trigger_deploy'],
+        taskKeywords: ['consent', 'authorization', 'treatment', 'medication', 'patient agreement', 'notice of privacy'],
+      },
+      {
+        id: 'healthcare-escalate-regulated-support-access',
+        connectors: ['support_ticket'],
+        minRiskScore: 60,
+        taskKeywords: ['patient', 'medical', 'clinical', 'health information'],
+      },
+    ],
+  },
+  saas: {
+    id: 'saas',
+    title: 'SaaS Data Privacy Pack',
+    summary: 'Adds GDPR/CCPA escalation, production data safety gates, and security review rules for multi-tenant software businesses.',
+    autoDenyRules: [
+      {
+        id: 'saas-deny-bulk-user-data-export-untrusted',
+        connectors: ['analytics', 'github'],
+        operations: ['export_data', 'create_export', 'push_file'],
+        actorRoles: ['intern', 'contractor', 'unknown'],
+      },
+      {
+        id: 'saas-deny-security-config-change-non-admin',
+        connectors: ['netlify', 'github'],
+        operations: ['update_env', 'set_secret', 'update_config', 'disable_auth'],
+        actorRoles: ['intern', 'contractor', 'unknown', 'support responder'],
+      },
+    ],
+    escalationRules: [
+      {
+        id: 'saas-escalate-data-subject-request',
+        connectors: ['analytics', 'email_provider', 'github'],
+        minRiskScore: 45,
+        taskKeywords: ['gdpr', 'ccpa', 'data subject', 'right to erasure', 'right to be forgotten', 'data export request', 'deletion request', 'data access request'],
+      },
+      {
+        id: 'saas-escalate-secret-rotation-prod',
+        connectors: ['netlify', 'github'],
+        operations: ['update_env', 'set_secret', 'rotate_key'],
+        minRiskScore: 55,
+        taskKeywords: ['api key', 'secret rotation', 'production secret', 'env rotation'],
+      },
+      {
+        id: 'saas-escalate-privacy-data-policy-deploy',
+        operations: ['trigger_deploy'],
+        taskKeywords: ['retention policy', 'privacy settings', 'data sharing', 'user deletion', 'consent management', 'cookie policy'],
+      },
+    ],
+  },
+  ecommerce: {
+    id: 'ecommerce',
+    title: 'E-commerce Operations Pack',
+    summary: 'Protects catalog integrity, order operations, and pricing actions for online retail and marketplace businesses.',
+    autoDenyRules: [
+      {
+        id: 'ecommerce-deny-bulk-price-change-untrusted',
+        connectors: ['stripe', 'analytics'],
+        operations: ['update_price', 'bulk_update', 'update_product'],
+        actorRoles: ['intern', 'contractor', 'unknown'],
+        minEstimatedCost: 200,
+      },
+      {
+        id: 'ecommerce-deny-mass-order-cancel-untrusted',
+        connectors: ['stripe'],
+        operations: ['cancel_subscription', 'void_invoice', 'cancel_payment_intent'],
+        actorRoles: ['intern', 'contractor', 'unknown'],
+        minEstimatedCost: 500,
+      },
+    ],
+    escalationRules: [
+      {
+        id: 'ecommerce-escalate-pricing-ops',
+        connectors: ['stripe', 'analytics'],
+        minRiskScore: 55,
+        taskKeywords: ['bulk discount', 'price override', 'flash sale', 'inventory clearance', 'margin', 'supplier contract', 'pricing strategy'],
+      },
+      {
+        id: 'ecommerce-escalate-high-value-refund',
+        connectors: ['stripe'],
+        operations: ['create_refund', 'cancel_subscription'],
+        minEstimatedCost: 500,
+      },
+      {
+        id: 'ecommerce-escalate-catalog-launch',
+        operations: ['trigger_deploy'],
+        taskKeywords: ['product launch', 'catalog', 'go live', 'storefront deploy', 'product release'],
+      },
+    ],
+  },
 };
 const WEEKLY_OBJECTIVES_BY_TEMPLATE = {
   default: [
@@ -1964,9 +2123,19 @@ function ruleMatchesApprovalContext(rule = {}, context = {}) {
 function inferIndustryApprovalPack(templateId, goalPlan = {}) {
   const templateKey = String(templateId || '').trim().toLowerCase();
   const tags = goalPlan && goalPlan.tags && typeof goalPlan.tags === 'object' ? goalPlan.tags : {};
+  const goalText = String(goalPlan && goalPlan.goal || '').toLowerCase();
   if (Boolean(tags.property)) return 'housing';
-  if (templateKey === 'business' && Boolean(tags.legal) && textContainsAny(goalPlan.goal || '', ['housing', 'landlord', 'tenant', 'lease', 'rental', 'property'])) {
+  if (Boolean(tags.healthcare)) return 'healthcare';
+  if (Boolean(tags.ecommerce)) return 'ecommerce';
+  if (Boolean(tags.fintech)) return 'finance';
+  if (templateKey === 'business' && Boolean(tags.legal) && textContainsAny(goalText, ['housing', 'landlord', 'tenant', 'lease', 'rental', 'property'])) {
     return 'housing';
+  }
+  if (templateKey === 'business' && Boolean(tags.webApp) && textContainsAny(goalText, ['saas', 'multi-tenant', 'gdpr', 'data privacy', 'user data', 'subscription software'])) {
+    return 'saas';
+  }
+  if (templateKey === 'business' && Boolean(tags.payments) && textContainsAny(goalText, ['finance', 'fintech', 'accounting', 'bookkeeping', 'payroll', 'cashflow'])) {
+    return 'finance';
   }
   return null;
 }
@@ -2332,6 +2501,9 @@ function normalizeGoalKeywordTags(goalText) {
     analytics: textContainsAny(source, ['analytics', 'kpi', 'conversion', 'roi', 'funnel']),
     legal: textContainsAny(source, ['legal', 'compliance', 'policy', 'privacy', 'terms']),
     property: textContainsAny(source, ['property', 'landlord', 'tenant', 'lease', 'rental', 'application']),
+    fintech: textContainsAny(source, ['fintech', 'financial service', 'accounting', 'bookkeeping', 'payroll', 'cashflow', 'ledger', 'accounts payable', 'accounts receivable', 'expense tracking']),
+    healthcare: textContainsAny(source, ['patient', 'medical', 'clinical', 'healthcare', 'health care', 'hipaa', 'ehr', 'prescription', 'diagnosis', 'hospital', 'clinic', 'telehealth']),
+    ecommerce: textContainsAny(source, ['ecommerce', 'e-commerce', 'online store', 'shopify', 'woocommerce', 'product catalog', 'inventory', 'order fulfillment', 'marketplace', 'retail store']),
   };
 }
 
@@ -2378,11 +2550,12 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   if (tags.deployment || tags.webApp) connectorSet.add('netlify');
   if (tags.payments) connectorSet.add('stripe');
   if (tags.marketing) connectorSet.add('google_ads');
-  if (tags.support || tags.property) {
+  if (tags.support || tags.property || tags.healthcare) {
     connectorSet.add('support_ticket');
     connectorSet.add('email_provider');
   }
-  if (tags.analytics || tags.marketing || tags.payments) connectorSet.add('analytics');
+  if (tags.ecommerce || tags.fintech) connectorSet.add('stripe');
+  if (tags.analytics || tags.marketing || tags.payments || tags.ecommerce) connectorSet.add('analytics');
 
   const requiredConnectors = Array.from(connectorSet);
   const metadata = readCredentialMetadata();
@@ -2447,6 +2620,50 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       phase: 'finance',
       requiredRole: 'Finance Tracker',
       description: 'Define monthly fee collection logic, invoicing events, and failed-payment handling.',
+      dependencies: [1],
+    });
+  }
+
+  if (tags.healthcare) {
+    addTask({
+      title: 'Design HIPAA-aligned data architecture and consent workflows',
+      phase: 'product_build',
+      requiredRole: 'Backend Architect',
+      description: 'Define PHI boundaries, access controls, consent capture, and data retention policies.',
+      dependencies: [1],
+    });
+    addTask({
+      title: 'Establish patient data escalation and regulated support triage policy',
+      phase: 'compliance',
+      requiredRole: 'Legal Compliance Checker',
+      description: 'Document PHI access paths, breach notification procedures, and regulated support routing.',
+      dependencies: [1],
+    });
+  }
+
+  if (tags.ecommerce) {
+    addTask({
+      title: 'Build product catalog, inventory tracking, and order management system',
+      phase: 'product_build',
+      requiredRole: 'Backend Architect',
+      description: 'Implement catalog management, stock levels, order lifecycle, and fulfillment workflows.',
+      dependencies: [1],
+    });
+    addTask({
+      title: 'Configure pricing rules, discount engine, and checkout flow',
+      phase: 'finance',
+      requiredRole: 'Finance Tracker',
+      description: 'Set up product pricing, promotional tiers, tax rules, and checkout-to-payment integration.',
+      dependencies: [1],
+    });
+  }
+
+  if (tags.fintech) {
+    addTask({
+      title: 'Model financial ledger, accounts payable/receivable, and reporting pipeline',
+      phase: 'finance',
+      requiredRole: 'Finance Tracker',
+      description: 'Define transaction recording, reconciliation workflows, and financial reporting outputs.',
       dependencies: [1],
     });
   }
