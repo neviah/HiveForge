@@ -23,7 +23,7 @@ function writeConfig() {
     llm: {
       provider: 'lmstudio',
       endpoint: 'http://127.0.0.1:1234/api/v1',
-      model: 'REPLACE_WITH_LOCAL_MODEL_NAME',
+      model: null,
       streaming: true,
       cloudProviders: false,
       remoteTools: false

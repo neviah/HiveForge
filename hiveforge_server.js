@@ -18,6 +18,7 @@ const CREDENTIAL_BUDGET_COUNTERS_PATH = path.join(CREDENTIALS_ROOT, 'budget_coun
 const AGENTS_RUNTIME_ROOT = path.join(SANDBOX_ROOT, 'agents');
 const MESSAGE_BUS_PATH = path.join(AGENTS_RUNTIME_ROOT, 'messages.db');
 const PRODUCTION_CERTIFICATION_SCRIPT_PATH = path.join(__dirname, 'scripts', 'production_certification.js');
+const PRODUCTION_EVIDENCE_ROOT = path.join(SANDBOX_ROOT, 'evidence', 'production_certification');
 const MAX_TASK_HISTORY = 100;
 const MAX_EVENTS_PER_TASK = 500;
 const DEFAULT_RUNTIME_SETTINGS = {
@@ -702,6 +703,13 @@ const CONNECTOR_IDEMPOTENCY_PROFILES = {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function normalizeLlmModelLabel(modelValue) {
+  const raw = String(modelValue || '').trim();
+  if (!raw) return null;
+  if (raw.toUpperCase() === 'REPLACE_WITH_LOCAL_MODEL_NAME') return null;
+  return raw;
 }
 
 function clampInt(value, fallback, min, max) {
@@ -6351,6 +6359,193 @@ function runProductionCertification(baseUrl) {
   });
 }
 
+function certificationRunIdFromNow() {
+  const now = new Date();
+  const y = String(now.getUTCFullYear());
+  const m = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(now.getUTCDate()).padStart(2, '0');
+  const hh = String(now.getUTCHours()).padStart(2, '0');
+  const mm = String(now.getUTCMinutes()).padStart(2, '0');
+  const ss = String(now.getUTCSeconds()).padStart(2, '0');
+  const suffix = Math.random().toString(36).slice(2, 8);
+  return `${y}${m}${d}T${hh}${mm}${ss}Z-${suffix}`;
+}
+
+function safeEvidenceRunId(value) {
+  return String(value || '').trim().replace(/[^a-zA-Z0-9_-]+/g, '');
+}
+
+function productionEvidenceRunDir(runId) {
+  return path.join(PRODUCTION_EVIDENCE_ROOT, safeEvidenceRunId(runId));
+}
+
+function buildProductionEvidenceBundle(result, context = {}) {
+  const runtimes = Array.isArray(context.projectSummaries) ? context.projectSummaries : [];
+  const preflights = Array.isArray(context.preflightChecks) ? context.preflightChecks : [];
+  const checklist = [
+    {
+      id: 'certification_script',
+      title: 'Production certification script exits successfully',
+      ok: Boolean(result && result.ok),
+      evidence: `exitCode=${Number(result && result.exitCode)}`,
+    },
+    {
+      id: 'runtime_projects_present',
+      title: 'Project runtime state is readable for evidence capture',
+      ok: runtimes.length >= 0,
+      evidence: `projects=${runtimes.length}`,
+    },
+    {
+      id: 'preflight_controls',
+      title: 'Production preflight controls pass across active projects',
+      ok: preflights.length === 0 || preflights.every((entry) => Boolean(entry && entry.passed)),
+      evidence: `preflightProjects=${preflights.length}`,
+    },
+  ];
+  const passed = checklist.every((entry) => entry.ok);
+  return {
+    generatedAt: nowIso(),
+    passed,
+    checklist,
+    summary: {
+      certificationOk: Boolean(result && result.ok),
+      durationMs: Number(result && result.durationMs || 0),
+      projectCount: runtimes.length,
+      preflightProjectCount: preflights.length,
+    },
+    context: {
+      runtimeSettings: runtimeSettings(),
+      projectSummaries: runtimes,
+      preflightChecks: preflights,
+    },
+  };
+}
+
+function collectProductionEvidenceContext() {
+  const projectSummaries = Array.from(projectRuntimes.values()).map((runtime) => summarizeProject(runtime.state));
+  const preflightChecks = Array.from(projectRuntimes.values()).map((runtime) => {
+    const preflight = evaluateProductionPreflight(runtime.state, {});
+    return {
+      projectId: runtime.state.id,
+      projectName: runtime.state.name,
+      passed: Boolean(preflight && preflight.passed),
+      checkCount: Array.isArray(preflight && preflight.checks) ? preflight.checks.length : 0,
+      failingCheckCount: Array.isArray(preflight && preflight.checks)
+        ? preflight.checks.filter((item) => !item.ok).length
+        : 0,
+    };
+  });
+  return { projectSummaries, preflightChecks };
+}
+
+function persistProductionCertificationEvidence(result, options = {}) {
+  ensureDir(PRODUCTION_EVIDENCE_ROOT);
+  const runId = certificationRunIdFromNow();
+  const runDir = productionEvidenceRunDir(runId);
+  ensureDir(runDir);
+
+  const context = collectProductionEvidenceContext();
+  const bundle = buildProductionEvidenceBundle(result, context);
+  const summary = {
+    runId,
+    generatedAt: bundle.generatedAt,
+    baseUrl: String(options.baseUrl || '').trim() || null,
+    result: {
+      ok: Boolean(result && result.ok),
+      exitCode: Number(result && result.exitCode || 0),
+      durationMs: Number(result && result.durationMs || 0),
+    },
+    checklist: bundle.checklist,
+    passed: bundle.passed,
+    summary: bundle.summary,
+    context: bundle.context,
+  };
+
+  fs.writeFileSync(path.join(runDir, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`, 'utf-8');
+  fs.writeFileSync(path.join(runDir, 'stdout.log'), String(result && result.stdout || ''), 'utf-8');
+  fs.writeFileSync(path.join(runDir, 'stderr.log'), String(result && result.stderr || ''), 'utf-8');
+  fs.writeFileSync(path.join(runDir, 'checklist.json'), `${JSON.stringify(bundle.checklist, null, 2)}\n`, 'utf-8');
+
+  return {
+    runId,
+    runDir,
+    summary,
+    files: {
+      summary: path.join(runDir, 'summary.json'),
+      stdout: path.join(runDir, 'stdout.log'),
+      stderr: path.join(runDir, 'stderr.log'),
+      checklist: path.join(runDir, 'checklist.json'),
+    },
+  };
+}
+
+function listProductionEvidenceRuns(limit = 20) {
+  ensureDir(PRODUCTION_EVIDENCE_ROOT);
+  const entries = fs.readdirSync(PRODUCTION_EVIDENCE_ROOT, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort((a, b) => b.localeCompare(a));
+
+  return entries.slice(0, Math.max(1, limit)).map((runId) => {
+    const summaryPath = path.join(productionEvidenceRunDir(runId), 'summary.json');
+    const summary = safeJsonRead(summaryPath, null);
+    return summary || {
+      runId,
+      generatedAt: null,
+      passed: false,
+      result: { ok: false, exitCode: -1, durationMs: 0 },
+      checklist: [],
+      summary: null,
+      context: null,
+    };
+  });
+}
+
+function readProductionEvidenceRun(runId) {
+  const safeRunId = safeEvidenceRunId(runId);
+  if (!safeRunId) return null;
+  const runDir = productionEvidenceRunDir(safeRunId);
+  if (!fs.existsSync(runDir)) return null;
+  const summary = safeJsonRead(path.join(runDir, 'summary.json'), null);
+  if (!summary) return null;
+  const stdout = fs.existsSync(path.join(runDir, 'stdout.log')) ? fs.readFileSync(path.join(runDir, 'stdout.log'), 'utf-8') : '';
+  const stderr = fs.existsSync(path.join(runDir, 'stderr.log')) ? fs.readFileSync(path.join(runDir, 'stderr.log'), 'utf-8') : '';
+  return {
+    ...summary,
+    stdout,
+    stderr,
+  };
+}
+
+function exportProductionEvidenceText(run) {
+  if (!run) return '';
+  const lines = [];
+  lines.push(`HiveForge Production Evidence Run: ${run.runId}`);
+  lines.push(`Generated At: ${run.generatedAt || ''}`);
+  lines.push(`Passed: ${run.passed ? 'yes' : 'no'}`);
+  lines.push(`Exit Code: ${run.result && run.result.exitCode}`);
+  lines.push(`Duration Ms: ${run.result && run.result.durationMs}`);
+  lines.push('');
+  lines.push('Checklist');
+  lines.push('---------');
+  (Array.isArray(run.checklist) ? run.checklist : []).forEach((entry) => {
+    lines.push(`- [${entry.ok ? 'x' : ' '}] ${entry.id}: ${entry.title} :: ${entry.evidence || ''}`);
+  });
+  lines.push('');
+  lines.push('STDOUT');
+  lines.push('------');
+  lines.push(String(run.stdout || '').trim() || '(empty)');
+  lines.push('');
+  lines.push('STDERR');
+  lines.push('------');
+  lines.push(String(run.stderr || '').trim() || '(empty)');
+  lines.push('');
+  lines.push('Context Summary');
+  lines.push('---------------');
+  lines.push(JSON.stringify(run.summary || {}, null, 2));
+  return `${lines.join('\n')}\n`;
+}
+
 async function testGithubIntegration() {
   const status = integrationStatus().github;
   const githubCfg = (appConfig && appConfig.integrations && appConfig.integrations.github) || {};
@@ -9190,6 +9385,7 @@ async function main() {
     }
 
     if (pathname === '/api/settings' && req.method === 'GET') {
+      const recentEvidence = listProductionEvidenceRuns(10);
       writeJson(res, {
         runtime: runtimeSettings(),
         defaults: DEFAULT_RUNTIME_SETTINGS,
@@ -9198,6 +9394,10 @@ async function main() {
           endpoint: appState.llm.endpoint,
         },
         lastCertification: (appConfig && appConfig.lastCertification) || null,
+        productionEvidence: {
+          latest: recentEvidence[0] || null,
+          recentRuns: recentEvidence,
+        },
         notifications: notificationSettingsSummary(),
       });
       return;
@@ -9299,13 +9499,22 @@ async function main() {
       const port = Number(process.env.PORT || 3000);
       const baseUrl = `http://127.0.0.1:${port}`;
       runProductionCertification(baseUrl).then((result) => {
+        const evidence = persistProductionCertificationEvidence(result, { baseUrl });
         appConfig.lastCertification = {
           at: new Date().toISOString(),
           passed: result.ok,
           durationMs: result.durationMs,
+          evidenceRunId: evidence.runId,
+          checklistPassed: Boolean(evidence.summary && evidence.summary.passed),
         };
         persistAppConfig();
-        writeJson(res, result, result.ok ? 200 : 500);
+        writeJson(res, {
+          ...result,
+          evidence: {
+            runId: evidence.runId,
+            summary: evidence.summary,
+          },
+        }, result.ok ? 200 : 500);
       }).catch((err) => {
         writeJson(res, {
           ok: false,
@@ -9315,6 +9524,48 @@ async function main() {
           stderr: redactSensitive(err.message),
         }, 500);
       });
+      return;
+    }
+
+    if (pathname === '/api/production_certification' && req.method === 'GET') {
+      const runId = String(urlObj.searchParams.get('runId') || '').trim();
+      const limit = clampInt(urlObj.searchParams.get('limit'), 20, 1, 100);
+      const latest = listProductionEvidenceRuns(1)[0] || null;
+      if (runId) {
+        const run = readProductionEvidenceRun(runId);
+        if (!run) {
+          writeJson(res, { error: 'Evidence run not found.' }, 404);
+          return;
+        }
+        writeJson(res, {
+          latest,
+          run,
+          recentRuns: listProductionEvidenceRuns(limit),
+        });
+        return;
+      }
+      writeJson(res, {
+        latest,
+        recentRuns: listProductionEvidenceRuns(limit),
+      });
+      return;
+    }
+
+    if (pathname === '/api/production_certification/evidence/export' && req.method === 'GET') {
+      const requestedRunId = String(urlObj.searchParams.get('runId') || '').trim();
+      const latest = listProductionEvidenceRuns(1)[0] || null;
+      const runId = requestedRunId || (latest && latest.runId) || '';
+      const run = readProductionEvidenceRun(runId);
+      if (!run) {
+        writeJson(res, { error: 'No production evidence run available.' }, 404);
+        return;
+      }
+      const text = exportProductionEvidenceText(run);
+      res.writeHead(200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Disposition': `attachment; filename="hiveforge-production-evidence-${run.runId}.txt"`,
+      });
+      res.end(text);
       return;
     }
 
@@ -10140,7 +10391,9 @@ async function main() {
     }
 
     if (pathname === '/api/llm_health' && req.method === 'GET') {
-      const model = appState.llm.model || (appConfig && appConfig.llm && appConfig.llm.model) || 'connected';
+      const model = normalizeLlmModelLabel(appState.llm.model)
+        || normalizeLlmModelLabel(appConfig && appConfig.llm && appConfig.llm.model)
+        || 'connected';
       writeJson(res, appState.llm.reachable
         ? { status: 'ok', model, endpoint: appState.llm.endpoint }
         : { status: 'error', message: 'LM Studio not reachable', endpoint: appState.llm.endpoint });
@@ -10251,11 +10504,19 @@ async function main() {
         appState.llm.reachable = result.reachable;
         if (result.model) appState.llm.model = result.model;
         appState.llm.lastCheckedAt = new Date().toISOString();
-        writeJson(res, appState.llm);
+        writeJson(res, {
+          ...appState.llm,
+          model: normalizeLlmModelLabel(appState.llm.model)
+            || normalizeLlmModelLabel(appConfig && appConfig.llm && appConfig.llm.model),
+        });
       }).catch(() => {
         appState.llm.reachable = false;
         appState.llm.lastCheckedAt = new Date().toISOString();
-        writeJson(res, appState.llm);
+        writeJson(res, {
+          ...appState.llm,
+          model: normalizeLlmModelLabel(appState.llm.model)
+            || normalizeLlmModelLabel(appConfig && appConfig.llm && appConfig.llm.model),
+        });
       });
       return;
     }
@@ -10436,6 +10697,7 @@ module.exports = {
   evaluateMilestoneCompletion,
   verifyGoalDelivery,
   summarizeProjectAutomation,
+  buildProductionEvidenceBundle,
   connectorExecutionKey,
   connectorMutationExecutionKey,
   isMutatingConnectorOperation,

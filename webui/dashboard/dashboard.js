@@ -356,7 +356,34 @@ function renderSettings(data) {
       badge.style.display = 'none';
     }
   }
+  renderProductionEvidenceSummary(data?.productionEvidence || null);
   renderRetryPolicySettings(data?.retryPolicies || {});
+}
+
+function renderProductionEvidenceSummary(data) {
+  const select = document.getElementById('productionEvidenceRunSelect');
+  const checklistSummary = document.getElementById('productionEvidenceChecklistSummary');
+  const checklistList = document.getElementById('productionEvidenceChecklist');
+  if (!select || !checklistSummary || !checklistList) return;
+
+  const runs = Array.isArray(data?.recentRuns) ? data.recentRuns : [];
+  select.innerHTML = runs.length
+    ? runs.map((run, idx) => `<option value="${esc(run.runId || '')}" ${idx === 0 ? 'selected' : ''}>${esc(run.runId || 'run')} · ${run.passed ? 'PASS' : 'FAIL'}</option>`).join('')
+    : '<option value="">No runs yet</option>';
+
+  const latest = data?.latest || runs[0] || null;
+  if (!latest) {
+    checklistSummary.textContent = 'No evidence loaded.';
+    checklistList.innerHTML = '<div style="color:var(--muted);">No checklist entries yet.</div>';
+    return;
+  }
+
+  const checklist = Array.isArray(latest.checklist) ? latest.checklist : [];
+  const passed = checklist.filter((entry) => entry.ok).length;
+  checklistSummary.textContent = `${latest.passed ? 'PASS' : 'FAIL'} · ${passed}/${checklist.length} checks passed`;
+  checklistList.innerHTML = checklist.length
+    ? checklist.map((entry) => `<div class="hf-log-line"><strong>${entry.ok ? 'PASS' : 'FAIL'}</strong> ${esc(entry.title || entry.id || 'check')}<div style="color:var(--muted);margin-top:0.15rem;">${esc(entry.evidence || '')}</div></div>`).join('')
+    : '<div style="color:var(--muted);">No checklist entries yet.</div>';
 }
 
 function renderRetryPolicySettings(retryPolicies = {}) {
@@ -1175,8 +1202,11 @@ async function checkLLMHealth() {
     const res = await fetch('/api/llm_health');
     const data = await res.json();
     const ok = data?.status === 'ok';
+    const model = String(data?.model || '').trim();
     document.getElementById('llmDot').className  = 'hf-dot ' + (ok ? 'ok' : 'error');
-    document.getElementById('llmLabel').textContent = ok ? `LM Studio (${data.model ?? 'connected'})` : 'LLM Offline';
+    document.getElementById('llmLabel').textContent = ok
+      ? (model && model.toLowerCase() !== 'connected' ? `LM Studio (${model})` : 'LM Studio Connected')
+      : 'LLM Offline';
   } catch {
     document.getElementById('llmDot').className = 'hf-dot error';
     document.getElementById('llmLabel').textContent = 'LLM Offline';
@@ -1666,6 +1696,7 @@ const Dashboard = {
       }
       showStatus(status, 'Passed.', 'ok');
       showToast('Production certification passed.', 'ok');
+      await this.refreshProductionEvidence();
       const badge = document.getElementById('lastCertBadge');
       if (badge) {
         badge.textContent = `✓ Last passed ${new Date().toLocaleString()}`;
@@ -1698,6 +1729,43 @@ const Dashboard = {
     }).catch(() => {
       showToast('Could not copy to clipboard.', 'error');
     });
+  },
+
+  async refreshProductionEvidence() {
+    try {
+      const data = await apiFetch(API.productionCertification);
+      renderProductionEvidenceSummary(data);
+      showToast('Production evidence refreshed.', 'ok');
+    } catch (err) {
+      showToast(`Could not refresh evidence: ${err.message}`, 'error');
+    }
+  },
+
+  async loadProductionEvidenceRun() {
+    const select = document.getElementById('productionEvidenceRunSelect');
+    const runId = select ? String(select.value || '').trim() : '';
+    if (!runId) return;
+    try {
+      const data = await apiFetch(`${API.productionCertification}?runId=${encodeURIComponent(runId)}&limit=20`);
+      if (data && data.run) {
+        renderProductionEvidenceSummary({ latest: data.run, recentRuns: data.recentRuns || [] });
+        const out = document.getElementById('productionCertificationOutput');
+        if (out) {
+          const stdout = String(data.run.stdout || '').trim();
+          const stderr = String(data.run.stderr || '').trim();
+          out.textContent = [stdout, stderr ? `STDERR:\n${stderr}` : ''].filter(Boolean).join('\n\n') || 'No output in this run.';
+        }
+      }
+    } catch (err) {
+      showToast(`Could not load evidence run: ${err.message}`, 'error');
+    }
+  },
+
+  exportProductionEvidence() {
+    const select = document.getElementById('productionEvidenceRunSelect');
+    const runId = select ? String(select.value || '').trim() : '';
+    const qp = runId ? `?runId=${encodeURIComponent(runId)}` : '';
+    window.open(`${API.productionCertification}/evidence/export${qp}`, '_blank');
   },
 
   async triggerNetlifyDeploy() {
