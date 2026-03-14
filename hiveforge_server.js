@@ -234,7 +234,7 @@ const MUTATING_CONNECTOR_OPERATIONS = {
   github: new Set(['create_issue', 'create_pull_request', 'dispatch_workflow']),
   stripe: new Set(['create_payment_intent', 'create_refund', 'create_invoice']),
   email_provider: new Set(['send_email', 'send_campaign']),
-  google_ads: new Set(['create_campaign', 'update_campaign_budget']),
+  google_ads: new Set(['create_campaign', 'update_campaign_budget', 'pause_campaign', 'resume_campaign']),
 };
 const CONNECTOR_IDEMPOTENCY_PROFILES = {
   netlify: {
@@ -287,6 +287,14 @@ const CONNECTOR_IDEMPOTENCY_PROFILES = {
       reconciliation: null,
     },
     update_campaign_budget: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    pause_campaign: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    resume_campaign: {
       mode: 'native_token',
       reconciliation: null,
     },
@@ -4711,6 +4719,95 @@ async function executeAnalyticsConnector(options = {}) {
   };
 }
 
+function evaluateGoogleAdsGuardrails(options = {}) {
+  const operation = String(options.operation || '').trim().toLowerCase();
+  const projectId = String(options.projectId || '').trim();
+  const input = options.input && typeof options.input === 'object' ? options.input : {};
+  const estimatedCost = Number.isFinite(Number(options.estimatedCost)) ? Number(options.estimatedCost) : 0;
+  const checks = [];
+
+  if (operation === 'create_campaign') {
+    const campaignName = String(input.campaignName || '').trim();
+    checks.push({
+      id: 'campaign_name_required',
+      ok: Boolean(campaignName),
+      reason: campaignName ? 'campaignName provided.' : 'campaignName is required for create_campaign.',
+    });
+  }
+
+  if (operation === 'update_campaign_budget' || operation === 'pause_campaign' || operation === 'resume_campaign') {
+    const campaignId = String(input.campaignId || '').trim();
+    checks.push({
+      id: 'campaign_id_required',
+      ok: Boolean(campaignId),
+      reason: campaignId ? 'campaignId provided.' : `campaignId is required for ${operation}.`,
+    });
+  }
+
+  if (operation === 'update_campaign_budget') {
+    const newDailyBudget = Number(input.newDailyBudget);
+    checks.push({
+      id: 'new_budget_valid',
+      ok: Number.isFinite(newDailyBudget) && newDailyBudget > 0,
+      reason: Number.isFinite(newDailyBudget) && newDailyBudget > 0
+        ? 'newDailyBudget is valid.'
+        : 'newDailyBudget must be a positive number for update_campaign_budget.',
+      detail: {
+        newDailyBudget: Number.isFinite(newDailyBudget) ? newDailyBudget : null,
+      },
+    });
+  }
+
+  if (projectId) {
+    const policy = getProjectCredentialPolicy(projectId, 'google_ads');
+    const budget = getCredentialBudgetSnapshot(projectId).google_ads || normalizeBudgetCounterEntry({}, nowIso());
+    const budgetDelta = Number.isFinite(Number(input.newDailyBudget)) ? Number(input.newDailyBudget) : 0;
+    const projectedMonthly = Number((Number(budget.monthlySpent || 0) + Math.max(estimatedCost, budgetDelta)).toFixed(2));
+    const cap = typeof policy.monthlyCap === 'number' && Number.isFinite(policy.monthlyCap) ? policy.monthlyCap : null;
+    const budgetOk = Boolean(policy.enabled) && (cap === null || projectedMonthly <= cap);
+    checks.push({
+      id: 'policy_budget_sanity',
+      ok: budgetOk,
+      reason: budgetOk
+        ? 'Projected Google Ads spend is within project policy cap.'
+        : (!policy.enabled
+          ? 'Google Ads credential policy is disabled for this project.'
+          : `Projected monthly Google Ads spend $${projectedMonthly} exceeds cap $${cap}.`),
+      detail: {
+        monthlySpent: Number(budget.monthlySpent || 0),
+        projectedMonthly,
+        monthlyCap: cap,
+      },
+    });
+
+    const runtime = projectRuntimes.get(projectId);
+    if (runtime && runtime.state && (operation === 'create_campaign' || operation === 'update_campaign_budget')) {
+      const insight = computeKpiVarianceAndAlerts(runtime.state);
+      const spendOverTarget = Number(insight && insight.variance && insight.variance.monthlySpend || 0) > 0;
+      checks.push({
+        id: 'kpi_spend_variance_gate',
+        ok: !spendOverTarget,
+        reason: !spendOverTarget
+          ? 'KPI spend variance is within target for budget-increasing ads actions.'
+          : 'Monthly spend is already above KPI target; block campaign creation/budget increase until variance is resolved.',
+        detail: {
+          monthlySpendVariance: Number(insight && insight.variance && insight.variance.monthlySpend || 0),
+        },
+      });
+    }
+  }
+
+  const ok = checks.every((entry) => Boolean(entry.ok));
+  return {
+    ok,
+    operation,
+    checks,
+    summary: ok
+      ? 'Google Ads guardrails passed.'
+      : 'Google Ads guardrails failed. Resolve validation or budget/KPI constraints before execution.',
+  };
+}
+
 async function executeGoogleAdsConnector(options = {}) {
   const operation = String(options.operation || 'get_profile').trim() || 'get_profile';
   const token = readCredentialToken('google_ads');
@@ -4798,7 +4895,26 @@ async function executeGoogleAdsConnector(options = {}) {
     };
   }
 
-  if (operation === 'create_campaign' || operation === 'update_campaign_budget' || operation === 'optimize_campaigns') {
+  if (operation === 'create_campaign' || operation === 'update_campaign_budget' || operation === 'pause_campaign' || operation === 'resume_campaign' || operation === 'optimize_campaigns') {
+    const guardrails = evaluateGoogleAdsGuardrails({
+      operation,
+      projectId: options.projectId,
+      input: options.input || {},
+      estimatedCost: Number(options.estimatedCost || 0),
+    });
+    if (!guardrails.ok) {
+      return {
+        ok: false,
+        errorCode: 'VALIDATION_ERROR',
+        message: guardrails.summary,
+        operation,
+        actualCost: 0,
+        data: {
+          guardrails: guardrails.checks,
+        },
+      };
+    }
+
     const gateway = await executeViaApiGateway('google_ads', operation, {
       ...(options.input && typeof options.input === 'object' ? options.input : {}),
       credentialToken: token,
@@ -4813,14 +4929,17 @@ async function executeGoogleAdsConnector(options = {}) {
       actualCost: Number.isFinite(Number(gateway.actualCost))
         ? Number(gateway.actualCost)
         : Number(options.estimatedCost || 0),
-      data: gateway.data || null,
+      data: {
+        ...(gateway.data && typeof gateway.data === 'object' ? gateway.data : {}),
+        guardrails: guardrails.checks,
+      },
     };
   }
 
   return {
     ok: false,
     errorCode: 'VALIDATION_ERROR',
-    message: `Unsupported Google Ads operation: ${operation}. Use get_profile, list_accessible_customers, create_campaign, update_campaign_budget, or optimize_campaigns.`,
+    message: `Unsupported Google Ads operation: ${operation}. Use get_profile, list_accessible_customers, create_campaign, update_campaign_budget, pause_campaign, resume_campaign, or optimize_campaigns.`,
     operation,
     actualCost: 0,
     data: null,
@@ -7208,6 +7327,7 @@ module.exports = {
   connectorIdempotencyMode,
   shouldReconcileConnectorExecution,
   reconcileConnectorExecution,
+  evaluateGoogleAdsGuardrails,
   markConnectorExecutionRecord,
   appendApprovalDecisionAudit,
   readApprovalDecisionAudit,

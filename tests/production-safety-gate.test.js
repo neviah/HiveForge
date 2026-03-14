@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 
 const {
   ensureCredentialStorage,
@@ -11,7 +12,7 @@ const {
 } = require('../hiveforge_server');
 
 function projectId(prefix) {
-  return `test-${prefix}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1000000000)}`;
+  return `test-${prefix}-${Date.now().toString(36)}-${process.pid}-${crypto.randomUUID()}`;
 }
 
 function baseState(id) {

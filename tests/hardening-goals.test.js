@@ -14,12 +14,15 @@ const {
   connectorIdempotencyMode,
   shouldReconcileConnectorExecution,
   reconcileConnectorExecution,
+  evaluateGoogleAdsGuardrails,
   markConnectorExecutionRecord,
   appendApprovalDecisionAudit,
   readApprovalDecisionAudit,
   refreshWeeklyKpiPlan,
   makeAnalyticsSnapshot,
   ensureCredentialStorage,
+  upsertProjectCredentialPolicy,
+  recordCredentialSpend,
 } = require('../hiveforge_server');
 
 function projectId(prefix) {
@@ -192,6 +195,49 @@ test('netlify reconciliation returns pending when deploy identity is incomplete'
   assert.equal(result.checked, true);
   assert.equal(result.ok, false);
   assert.equal(result.pending, true);
+});
+
+test('google ads guardrails require campaign fields for mutate operations', () => {
+  const missingName = evaluateGoogleAdsGuardrails({
+    operation: 'create_campaign',
+    projectId: null,
+    input: {},
+    estimatedCost: 0,
+  });
+  const missingCampaignId = evaluateGoogleAdsGuardrails({
+    operation: 'update_campaign_budget',
+    projectId: null,
+    input: { newDailyBudget: 25 },
+    estimatedCost: 10,
+  });
+
+  assert.equal(missingName.ok, false);
+  assert.equal(missingCampaignId.ok, false);
+});
+
+test('google ads guardrails block projected spend over project policy cap', () => {
+  ensureCredentialStorage();
+  const id = projectId('ads-guardrail-cap');
+  upsertProjectCredentialPolicy(id, 'google_ads', {
+    enabled: true,
+    monthlyCap: 100,
+  });
+  recordCredentialSpend(id, 'google_ads', 95, new Date().toISOString());
+
+  const guardrail = evaluateGoogleAdsGuardrails({
+    operation: 'update_campaign_budget',
+    projectId: id,
+    input: {
+      campaignId: 'cmp-1',
+      newDailyBudget: 20,
+    },
+    estimatedCost: 20,
+  });
+
+  const budgetCheck = guardrail.checks.find((entry) => entry.id === 'policy_budget_sanity');
+  assert.equal(guardrail.ok, false);
+  assert.ok(budgetCheck);
+  assert.equal(budgetCheck.ok, false);
 });
 
 test('approval governance policy packs auto-deny critical approval context', () => {
