@@ -614,12 +614,12 @@ This is the active short-list to drive HiveForge from advanced prototype to full
    - Continue from Future Feature Candidates and extended connector coverage priorities.
 
 2. **Autonomous Operations Completion Track**
-   - Add provider adapters for publication endpoints (KDP/Gumroad/Substack/custom CMS) behind the release workflow trigger.
-   - Add finance settlement/reconciliation exception handling and dispute automation runbooks.
+   - Provider adapters for publication endpoints (KDP/Gumroad/Substack/custom CMS) are now implemented behind the release workflow trigger.
+   - Finance settlement/reconciliation exception handling and dispute automation runbooks are implemented.
 
 ## **Future Feature Candidates**
 
-1. Direct book publishing connectors (for example, KDP or Substack APIs) with Coordinator-gated publish/unpublish/version operations.
+1. Multi-target release orchestration across publication endpoints with Coordinator-gated publish/unpublish/version workflows and fallback sequencing.
 
 ## **Definition of Operational Readiness**
 

@@ -171,6 +171,7 @@ test('mutating operation guard identifies write actions', () => {
   assert.equal(isMutatingConnectorOperation('support_ticket', 'reply_ticket'), true);
   assert.equal(isMutatingConnectorOperation('support_ticket', 'list_tickets'), false);
   assert.equal(isMutatingConnectorOperation('custom_cms', 'publish_book'), true);
+  assert.equal(isMutatingConnectorOperation('gumroad', 'publish_product'), true);
   assert.equal(isMutatingConnectorOperation('substack', 'publish_post'), true);
   assert.equal(isMutatingConnectorOperation('kdp', 'publish_book'), true);
 });
@@ -183,6 +184,7 @@ test('provider idempotency mode maps supported write operations', () => {
   assert.equal(connectorIdempotencyMode('google_ads', 'create_campaign'), 'native_token');
   assert.equal(connectorIdempotencyMode('support_ticket', 'reply_ticket'), 'native_token');
   assert.equal(connectorIdempotencyMode('custom_cms', 'publish_book'), 'native_token');
+  assert.equal(connectorIdempotencyMode('gumroad', 'publish_product'), 'native_token');
   assert.equal(connectorIdempotencyMode('substack', 'publish_post'), 'native_token');
   assert.equal(connectorIdempotencyMode('kdp', 'publish_book'), 'native_token');
   assert.equal(connectorIdempotencyMode('analytics', 'list_accounts'), 'not_required');

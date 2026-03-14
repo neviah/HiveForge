@@ -76,6 +76,7 @@
                                                                                "email_provider",
                                                                                "analytics",
                                                                                "kdp",
+                                                                               "gumroad",
                                                                                "substack",
                                                                                "custom_cms"
                                                                            ]
@@ -105,7 +106,13 @@
                                    "continuity_validator":  true,
                                    "humanization_pass":  true,
                                    "feedback_revision_rounds":  2,
-                                   "publish_target":  "direct_connector"
+                                   "publish_target":  "direct_connector",
+                                   "distribution_targets":  [
+                                                                "kdp",
+                                                                "gumroad",
+                                                                "substack",
+                                                                "custom_cms"
+                                                            ]
                                },
     "recurring_loops":  [
                             {

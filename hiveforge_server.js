@@ -42,6 +42,7 @@ const DEFAULT_CONNECTOR_RETRY_POLICIES = {
   stripe: { maxAttempts: 2, baseDelayMs: 60 * 1000, maxDelayMs: 60 * 60 * 1000 },
   email_provider: { maxAttempts: 3, baseDelayMs: 30 * 1000, maxDelayMs: 20 * 60 * 1000 },
   kdp: { maxAttempts: 3, baseDelayMs: 45 * 1000, maxDelayMs: 30 * 60 * 1000 },
+  gumroad: { maxAttempts: 3, baseDelayMs: 30 * 1000, maxDelayMs: 20 * 60 * 1000 },
   substack: { maxAttempts: 3, baseDelayMs: 30 * 1000, maxDelayMs: 20 * 60 * 1000 },
   custom_cms: { maxAttempts: 3, baseDelayMs: 30 * 1000, maxDelayMs: 20 * 60 * 1000 },
   telegram: { maxAttempts: 3, baseDelayMs: 15 * 1000, maxDelayMs: 10 * 60 * 1000 },
@@ -170,7 +171,7 @@ const DEFAULT_ROLE_CAPABILITIES = {
   'DevOps Automator': { canDeploy: true, canSpend: true, allowedConnectors: ['netlify', 'github'] },
   'Backend Architect': { canDeploy: false, canSpend: false, allowedConnectors: ['github'] },
   'Senior Project Manager': { canDeploy: false, canSpend: false, allowedConnectors: [] },
-  'Growth Hacker': { canDeploy: true, canSpend: false, allowedConnectors: ['github', 'netlify', 'email_provider', 'analytics', 'kdp', 'substack', 'custom_cms'] },
+  'Growth Hacker': { canDeploy: true, canSpend: false, allowedConnectors: ['github', 'netlify', 'email_provider', 'analytics', 'kdp', 'gumroad', 'substack', 'custom_cms'] },
   'Reality Checker': { canDeploy: false, canSpend: false, allowedConnectors: ['analytics'] },
   'Growth Hacker + Content Creator': { canDeploy: false, canSpend: true, allowedConnectors: ['google_ads', 'analytics'] },
   'Support Responder': { canDeploy: false, canSpend: false, allowedConnectors: ['email_provider', 'support_chat', 'support_ticket'] },
@@ -222,7 +223,7 @@ const appState = {
   }
 };
 
-const SUPPORTED_CREDENTIAL_SERVICES = ['github', 'netlify', 'stripe', 'google_ads', 'analytics', 'email_provider', 'support_chat', 'support_ticket', 'kdp', 'substack', 'custom_cms'];
+const SUPPORTED_CREDENTIAL_SERVICES = ['github', 'netlify', 'stripe', 'google_ads', 'analytics', 'email_provider', 'support_chat', 'support_ticket', 'kdp', 'gumroad', 'substack', 'custom_cms'];
 const CONNECTOR_REGISTRY = {
   github: { id: 'github', label: 'GitHub', credentialService: 'github' },
   telegram: { id: 'telegram', label: 'Telegram', provider: 'telegram' },
@@ -235,6 +236,7 @@ const CONNECTOR_REGISTRY = {
   support_chat: { id: 'support_chat', label: 'Support Chat', credentialService: 'support_chat' },
   support_ticket: { id: 'support_ticket', label: 'Support Ticketing', credentialService: 'support_ticket' },
   kdp: { id: 'kdp', label: 'Amazon KDP', credentialService: 'kdp' },
+  gumroad: { id: 'gumroad', label: 'Gumroad', credentialService: 'gumroad' },
   substack: { id: 'substack', label: 'Substack', credentialService: 'substack' },
   custom_cms: { id: 'custom_cms', label: 'Custom CMS', credentialService: 'custom_cms' },
 };
@@ -247,6 +249,7 @@ const MUTATING_CONNECTOR_OPERATIONS = {
   support_chat: new Set(['reply_conversation', 'close_conversation', 'escalate_conversation', 'triage_conversations']),
   support_ticket: new Set(['reply_ticket', 'close_ticket', 'escalate_ticket', 'triage_tickets']),
   kdp: new Set(['publish_book', 'update_publication', 'unpublish_publication']),
+  gumroad: new Set(['publish_product', 'update_product', 'unpublish_product']),
   substack: new Set(['publish_post', 'update_post', 'unpublish_post']),
   custom_cms: new Set(['publish_book', 'update_publication', 'unpublish_publication']),
 };
@@ -359,6 +362,20 @@ const CONNECTOR_IDEMPOTENCY_PROFILES = {
       reconciliation: null,
     },
     unpublish_publication: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+  },
+  gumroad: {
+    publish_product: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    update_product: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    unpublish_product: {
       mode: 'native_token',
       reconciliation: null,
     },
@@ -5606,6 +5623,38 @@ async function executeKdpConnector(options = {}) {
   };
 }
 
+async function executeGumroadConnector(options = {}) {
+  const operation = String(options.operation || 'publish_product').trim() || 'publish_product';
+  const token = readCredentialToken('gumroad');
+  if (!token) {
+    return {
+      ok: false,
+      errorCode: 'SECRET_MISSING',
+      message: 'Gumroad credential token is missing.',
+      operation,
+      actualCost: 0,
+      data: null,
+    };
+  }
+
+  const gateway = await executeViaApiGateway('gumroad', operation, {
+    ...(options.input && typeof options.input === 'object' ? options.input : {}),
+    credentialToken: token,
+    idempotencyKey: options.idempotencyKey || null,
+    projectId: options.projectId || null,
+  }, 25000);
+  if (!gateway.ok) return gateway;
+  return {
+    ok: true,
+    message: gateway.message || `Gumroad operation ${operation} completed via API gateway.`,
+    operation,
+    actualCost: Number.isFinite(Number(gateway.actualCost))
+      ? Number(gateway.actualCost)
+      : Number(options.estimatedCost || 0),
+    data: gateway.data || null,
+  };
+}
+
 async function executeSubstackConnector(options = {}) {
   const operation = String(options.operation || 'publish_post').trim() || 'publish_post';
   const token = readCredentialToken('substack');
@@ -5698,6 +5747,9 @@ async function executeLiveConnector(connectorId, options = {}) {
   }
   if (connectorKey === 'kdp') {
     return executeKdpConnector(options);
+  }
+  if (connectorKey === 'gumroad') {
+    return executeGumroadConnector(options);
   }
   if (connectorKey === 'substack') {
     return executeSubstackConnector(options);
