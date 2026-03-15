@@ -49,6 +49,11 @@ function writeConfig() {
       stallTimeoutMs: 600000,
       maxAutoFixes: 5,
       countManualHeartbeatForStall: false
+    },
+    planning: {
+      preferFreeTierFirst: true,
+      requireApprovalForPaidTierUpgrade: true,
+      preferredDatabaseService: 'supabase'
     }
   };
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));

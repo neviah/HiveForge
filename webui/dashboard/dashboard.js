@@ -14,6 +14,8 @@ const API = {
   agents:      '/api/agents',
   tasks:       '/api/tasks',
   heartbeat:   '/api/heartbeat',
+  workspace:   '/api/workspace',
+  workspaceFile: '/api/workspace/file',
   credentials: '/api/credentials',
   integrations:'/api/integrations',
   analytics:   '/api/analytics',
@@ -98,6 +100,7 @@ const CREDENTIAL_SERVICES = [
   { id:'stripe',        label:'Stripe',            icon:'💳', desc:'Process payments, subscriptions, invoices.'  },
   { id:'google_ads',    label:'Google Ads',        icon:'📣', desc:'Create and manage ad campaigns.'            },
   { id:'analytics',     label:'Google Analytics',  icon:'📊', desc:'Track traffic, events, and conversions.'    },
+  { id:'supabase',      label:'Supabase',          icon:'🗄️', desc:'Postgres database, auth, and storage for app backends.' },
   { id:'email_provider',label:'Email Provider',    icon:'📧', desc:'SMTP / transactional email (Mailgun etc.).' },
 ];
 
@@ -126,6 +129,7 @@ const CONNECTOR_WEBSITES = {
   stripe: 'https://dashboard.stripe.com/apikeys',
   google_ads: 'https://ads.google.com/home/tools/manager-accounts/',
   analytics: 'https://analytics.google.com/',
+  supabase: 'https://supabase.com/dashboard/account/tokens',
   email_provider: 'https://www.mailgun.com/',
 };
 
@@ -134,6 +138,7 @@ const SERVICE_LABELS = {
   stripe:         'Stripe',
   google_ads:     'Google Ads',
   analytics:      'Google Analytics',
+  supabase:       'Supabase',
   email_provider: 'Email (Mailgun)',
   github:         'GitHub',
   telegram:       'Telegram',
@@ -161,6 +166,10 @@ const SERVICE_TOKEN_GUIDES = {
     where: 'Google Cloud console under APIs & Services credentials.',
     what: 'Use the access token or service credential expected by your Analytics connector setup.',
   },
+  supabase: {
+    where: 'Supabase dashboard -> Account -> Access Tokens, or the project API settings used by your gateway flow.',
+    what: 'Use the personal access token or service role credential expected by your Supabase API gateway integration.',
+  },
   email_provider: {
     where: 'Mailgun dashboard -> API Security -> API Keys.',
     what: 'Use the private API key (starts with key-).',
@@ -180,6 +189,7 @@ const state = {
   credentialPolicies: [],
   credentialBudget: [],
   credentialAudit: [],
+  workspacePath: '',
   messageBusPoller: null,
   messageBusFilter: { kind: '', actor: '', q: '' },
   marketplaceFilter: { division: 'All', query: '' },
@@ -319,20 +329,35 @@ async function fetchCredentialAudit(projectId, limit = 80) {
   return apiFetch(`${API.credentialAudit}?projectId=${encodeURIComponent(projectId)}&limit=${encodeURIComponent(limit)}`);
 }
 
+async function fetchWorkspace(projectId, relativePath = '') {
+  return apiFetch(`${API.workspace}?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(relativePath)}`);
+}
+
+async function fetchWorkspaceFile(projectId, relativePath) {
+  return apiFetch(`${API.workspaceFile}?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(relativePath)}`);
+}
+
 function renderSettings(data) {
   const runtime = data?.runtime || {};
   const llm = data?.llm || {};
+  const planning = data?.planning || {};
   const notifications = data?.notifications || {};
   document.getElementById('settingsHeartbeatSeconds').value = String(Math.round((Number(runtime.heartbeatIntervalMs) || 30000) / 1000));
   document.getElementById('settingsStallMinutes').value = String(Math.round((Number(runtime.stallTimeoutMs) || 600000) / 60000));
   document.getElementById('settingsMaxAutoFixes').value = String(Number(runtime.maxAutoFixes) || 5);
   document.getElementById('settingsCountManualHeartbeat').checked = Boolean(runtime.countManualHeartbeatForStall);
   document.getElementById('settingsLlmEndpoint').value = llm.endpoint || '';
+  const preferFreeTierInput = document.getElementById('settingsPreferFreeTierFirst');
+  const requireUpgradeApprovalInput = document.getElementById('settingsRequirePaidTierApproval');
+  const preferredDatabaseInput = document.getElementById('settingsPreferredDatabase');
   const notifyToInput = document.getElementById('settingsWhatsAppNotifyTo');
   const telegramChatInput = document.getElementById('settingsTelegramChatId');
   const channelInput = document.getElementById('settingsNotifyChannel');
   const kpiAlertsInput = document.getElementById('settingsKpiAlertsEnabled');
   const kpiCooldownInput = document.getElementById('settingsKpiAlertCooldown');
+  if (preferFreeTierInput) preferFreeTierInput.checked = planning?.preferFreeTierFirst !== false;
+  if (requireUpgradeApprovalInput) requireUpgradeApprovalInput.checked = planning?.requireApprovalForPaidTierUpgrade !== false;
+  if (preferredDatabaseInput) preferredDatabaseInput.value = planning?.preferredDatabaseService === 'manual' ? 'manual' : 'supabase';
   if (notifyToInput) notifyToInput.value = notifications?.whatsapp?.notifyTo || '';
   if (telegramChatInput) telegramChatInput.value = notifications?.telegram?.chatId || '';
   if (channelInput) channelInput.value = notifications?.preferredChannel === 'telegram' ? 'telegram' : 'whatsapp';
@@ -1111,6 +1136,57 @@ function renderAgentPreview(templateKey) {
     </div>`;
 }
 
+function formatFileSize(size) {
+  const value = Number(size || 0);
+  if (!Number.isFinite(value) || value <= 0) return '';
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+  return `${value} B`;
+}
+
+function renderWorkspaceDirectory(data) {
+  const tree = document.getElementById('workspaceTree');
+  if (!tree) return;
+  const currentPath = String(data?.path || '');
+  const entries = Array.isArray(data?.entries) ? data.entries : [];
+  state.workspacePath = currentPath;
+  const parentPath = currentPath ? currentPath.split('/').slice(0, -1).join('/') : '';
+
+  const header = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;margin-bottom:0.75rem;">
+      <div style="color:var(--muted);">${currentPath ? `/${esc(currentPath)}` : '/'} </div>
+      <div style="display:flex;gap:0.35rem;">
+        ${currentPath ? `<button class="hf-btn secondary hf-btn sm" onclick="Dashboard.openWorkspacePath('${jsq(parentPath)}')">Up</button>` : ''}
+        <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.refreshWorkspace()">Refresh</button>
+      </div>
+    </div>`;
+
+  if (!entries.length) {
+    tree.innerHTML = `${header}<div style="color:var(--muted);">No files generated for this path yet.</div>`;
+    return;
+  }
+
+  tree.innerHTML = `${header}${entries.map((entry) => `
+    <button class="hf-card" style="display:flex;width:100%;text-align:left;align-items:center;justify-content:space-between;padding:0.55rem 0.7rem;margin-bottom:0.45rem;background:var(--panel-bg);border:1px solid var(--border);cursor:pointer;" onclick="${entry.type === 'dir' ? `Dashboard.openWorkspacePath('${jsq(entry.path)}')` : `Dashboard.previewWorkspaceFile('${jsq(entry.path)}')`}">
+      <span>
+        <span style="margin-right:0.45rem;">${entry.type === 'dir' ? '📁' : '📄'}</span>
+        <span style="font-weight:600;">${esc(entry.name)}</span>
+      </span>
+      <span style="font-size:0.78rem;color:var(--muted);">${entry.type === 'dir' ? 'Folder' : esc(formatFileSize(entry.size))}</span>
+    </button>
+  `).join('')}`;
+}
+
+function renderWorkspacePreview(data) {
+  const preview = document.getElementById('workspacePreview');
+  if (!preview) return;
+  if (!data) {
+    preview.textContent = 'Select a file to preview.';
+    return;
+  }
+  preview.textContent = String(data.content || '').trim() || 'File is empty.';
+}
+
 // ─── Navigation ───────────────────────────────────────────────────────────────
 
 function activateSection(id) {
@@ -1155,6 +1231,26 @@ async function onSectionActivate(id) {
         if (directionEl) directionEl.value = direction;
         if (minRiskEl) minRiskEl.value = minRisk;
         renderApprovals(await fetchApprovals(pid, sortBy, direction, minRisk));
+      }
+      break;
+    }
+    case 'workspace': {
+      if (pid) {
+        try {
+          const listing = await fetchWorkspace(pid, state.workspacePath || '');
+          renderWorkspaceDirectory(listing);
+          const preferredFile = (listing.entries || []).find((entry) => entry.type === 'file' && entry.name === 'project_brief.md')
+            || (listing.entries || []).find((entry) => entry.type === 'file');
+          if (preferredFile) {
+            renderWorkspacePreview(await fetchWorkspaceFile(pid, preferredFile.path));
+          } else {
+            renderWorkspacePreview(null);
+          }
+        } catch (err) {
+          const tree = document.getElementById('workspaceTree');
+          if (tree) tree.innerHTML = `<div style="color:var(--error,#d9534f);">${esc(err.message)}</div>`;
+          renderWorkspacePreview({ content: 'Workspace preview unavailable.' });
+        }
       }
       break;
     }
@@ -1227,6 +1323,7 @@ const Dashboard = {
     state.activeProject = state.projects.find(p => p.id === id) ?? { id };
     document.getElementById('activeProjectPill').style.display = 'flex';
     setText('activeProjectName', state.activeProject.name ?? id);
+    state.workspacePath = '';
     renderSidebarProjectList(state.projects);
     startSSE(id);
     activateSection('agents');
@@ -1259,6 +1356,7 @@ const Dashboard = {
   refreshProjects() { onSectionActivate('projects'); },
   refreshAgents()   { onSectionActivate('agents');   },
   refreshApprovals(){ onSectionActivate('approvals');},
+  refreshWorkspace(){ onSectionActivate('workspace'); },
   refreshHeartbeat(){ onSectionActivate('heartbeat');},
   refreshLogs()     { onSectionActivate('logs');     },
   refreshMessageBus(){ onSectionActivate('message-bus'); },
@@ -1590,6 +1688,32 @@ const Dashboard = {
     URL.revokeObjectURL(url);
   },
 
+  async openWorkspacePath(relativePath = '') {
+    if (!state.activeProject) {
+      showToast('No active project selected.', 'error');
+      return;
+    }
+    try {
+      const listing = await fetchWorkspace(state.activeProject.id, relativePath);
+      renderWorkspaceDirectory(listing);
+      renderWorkspacePreview(null);
+    } catch (err) {
+      showToast(`Could not open workspace path: ${err.message}`, 'error');
+    }
+  },
+
+  async previewWorkspaceFile(relativePath) {
+    if (!state.activeProject) {
+      showToast('No active project selected.', 'error');
+      return;
+    }
+    try {
+      renderWorkspacePreview(await fetchWorkspaceFile(state.activeProject.id, relativePath));
+    } catch (err) {
+      showToast(`Could not preview file: ${err.message}`, 'error');
+    }
+  },
+
   async saveSettings() {
     const status = document.getElementById('settingsStatus');
     const heartbeatSeconds = Number(document.getElementById('settingsHeartbeatSeconds').value);
@@ -1597,6 +1721,9 @@ const Dashboard = {
     const maxAutoFixes = Number(document.getElementById('settingsMaxAutoFixes').value);
     const countManualHeartbeatForStall = document.getElementById('settingsCountManualHeartbeat').checked;
     const llmEndpoint = document.getElementById('settingsLlmEndpoint').value.trim();
+    const preferFreeTierFirst = Boolean(document.getElementById('settingsPreferFreeTierFirst')?.checked);
+    const requireApprovalForPaidTierUpgrade = Boolean(document.getElementById('settingsRequirePaidTierApproval')?.checked);
+    const preferredDatabaseService = document.getElementById('settingsPreferredDatabase')?.value || 'supabase';
     const whatsappNotifyTo = document.getElementById('settingsWhatsAppNotifyTo')?.value.trim() || '';
     const telegramChatId = document.getElementById('settingsTelegramChatId')?.value.trim() || '';
     const preferredChannel = document.getElementById('settingsNotifyChannel')?.value || 'whatsapp';
@@ -1615,6 +1742,11 @@ const Dashboard = {
         },
         llm: {
           endpoint: llmEndpoint,
+        },
+        planning: {
+          preferFreeTierFirst,
+          requireApprovalForPaidTierUpgrade,
+          preferredDatabaseService,
         },
         retryPolicies,
         notifications: {
@@ -2024,6 +2156,9 @@ function esc(str) {
   return String(str ?? '')
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function jsq(str) {
+  return String(str ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 function setText(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; }
 function showStatus(el, msg, type) {

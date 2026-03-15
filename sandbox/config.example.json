@@ -23,6 +23,11 @@
     },
     "sshKeyPath": "/sandbox/.ssh/id_rsa"
   },
+  "planning": {
+    "preferFreeTierFirst": true,
+    "requireApprovalForPaidTierUpgrade": true,
+    "preferredDatabaseService": "supabase"
+  },
   "skills": {
     "policyFile": "/sandbox/skills/sandbox_policy.json",
     "requireSkillVetter": true,

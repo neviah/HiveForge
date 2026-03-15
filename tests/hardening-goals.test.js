@@ -37,6 +37,8 @@ const {
   evaluateMilestoneCompletion,
   verifyGoalDelivery,
   summarizeProjectAutomation,
+  buildProductionEvidenceBundle,
+  SUPPORTED_CREDENTIAL_SERVICES,
 } = require('../hiveforge_server');
 
 function projectId(prefix) {
@@ -1122,6 +1124,31 @@ test('goal prompt analysis adds runnable domain auto-actions for social marketpl
   assert.equal(hasLifecycleMessaging, true);
 });
 
+test('goal prompt analysis defaults to free-tier planning and adds Supabase for social web app workflows', () => {
+  const plan = goalActionPlanFromPrompt(
+    'business',
+    'Launch a dating web app with profile matching, moderation, and onboarding workflows.',
+    {},
+  );
+
+  assert.equal(Boolean(plan.planning), true);
+  assert.equal(plan.planning.preferFreeTierFirst, true);
+  assert.equal(plan.planning.requireApprovalForPaidTierUpgrade, true);
+  assert.equal(plan.requiredConnectors.includes('supabase'), true);
+  assert.equal(
+    plan.tasks.some((task) => String(task.title || '').toLowerCase().includes('free-tier infrastructure footprint')),
+    true,
+  );
+  assert.equal(
+    plan.tasks.some((task) => String(task.title || '').toLowerCase().includes('provision supabase database')),
+    true,
+  );
+});
+
+test('supported credential services include supabase', () => {
+  assert.equal(SUPPORTED_CREDENTIAL_SERVICES.includes('supabase'), true);
+});
+
 test('project automation summary exposes orchestration intelligence signals', () => {
   const now = new Date().toISOString();
   const state = {
@@ -1200,6 +1227,31 @@ test('project automation summary exposes orchestration intelligence signals', ()
   assert.equal(Array.isArray(summary.orchestration.assistanceRequests), true);
   assert.equal(Array.isArray(summary.orchestration.pendingConnectorReadiness), true);
   assert.equal(typeof summary.orchestration.recentPolicyDecisionCount, 'number');
+});
+
+test('production evidence bundle generates checklist and pass verdict', () => {
+  const result = { ok: true, exitCode: 0, durationMs: 321, stdout: 'ok', stderr: '' };
+  const bundle = buildProductionEvidenceBundle(result, {
+    projectSummaries: [{ id: 'P1', status: 'running' }],
+    preflightChecks: [{ projectId: 'P1', passed: true }],
+  });
+
+  assert.equal(bundle.passed, true);
+  assert.equal(Array.isArray(bundle.checklist), true);
+  assert.equal(bundle.checklist.length >= 3, true);
+  assert.equal(bundle.summary.certificationOk, true);
+  assert.equal(bundle.summary.preflightProjectCount, 1);
+});
+
+test('production evidence bundle fails checklist when certification fails', () => {
+  const result = { ok: false, exitCode: 2, durationMs: 111, stdout: '', stderr: 'failed' };
+  const bundle = buildProductionEvidenceBundle(result, {
+    projectSummaries: [{ id: 'P1', status: 'running' }],
+    preflightChecks: [{ projectId: 'P1', passed: true }],
+  });
+
+  assert.equal(bundle.passed, false);
+  assert.equal(bundle.checklist.some((entry) => entry.id === 'certification_script' && entry.ok === false), true);
 });
 
 test('buildGoalMilestones creates phase-grouped verification milestones', () => {

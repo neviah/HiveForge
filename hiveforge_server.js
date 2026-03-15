@@ -10,6 +10,7 @@ const OPENCLAW_SRC_ROOT = path.join(__dirname, 'openclaw');
 const CONFIG_PATH = path.join(SANDBOX_ROOT, 'config.json');
 const LOG_PATH = path.join(SANDBOX_ROOT, 'hiveforge.log');
 const PROJECTS_ROOT = path.join(SANDBOX_ROOT, 'projects');
+const WORKSPACE_ROOT = path.join(SANDBOX_ROOT, 'workspace');
 const TEMPLATES_ROOT = path.join(__dirname, 'templates');
 const CREDENTIALS_ROOT = path.join(SANDBOX_ROOT, 'credentials');
 const CREDENTIAL_POLICIES_ROOT = path.join(CREDENTIALS_ROOT, 'policies');
@@ -27,6 +28,11 @@ const DEFAULT_RUNTIME_SETTINGS = {
   maxAutoFixes: 5,
   countManualHeartbeatForStall: false,
 };
+const DEFAULT_PLANNING_SETTINGS = {
+  preferFreeTierFirst: true,
+  requireApprovalForPaidTierUpgrade: true,
+  preferredDatabaseService: 'supabase',
+};
 const AUTO_ACTION_RETRY_POLICY = {
   maxAttempts: 3,
   baseDelayMs: 30 * 1000,
@@ -41,6 +47,7 @@ const DEFAULT_CONNECTOR_RETRY_POLICIES = {
   google_ads: { maxAttempts: 4, baseDelayMs: 45 * 1000, maxDelayMs: 45 * 60 * 1000 },
   analytics: { maxAttempts: 3, baseDelayMs: 20 * 1000, maxDelayMs: 20 * 60 * 1000 },
   stripe: { maxAttempts: 2, baseDelayMs: 60 * 1000, maxDelayMs: 60 * 60 * 1000 },
+  supabase: { maxAttempts: 3, baseDelayMs: 30 * 1000, maxDelayMs: 20 * 60 * 1000 },
   email_provider: { maxAttempts: 3, baseDelayMs: 30 * 1000, maxDelayMs: 20 * 60 * 1000 },
   kdp: { maxAttempts: 3, baseDelayMs: 45 * 1000, maxDelayMs: 30 * 60 * 1000 },
   gumroad: { maxAttempts: 3, baseDelayMs: 30 * 1000, maxDelayMs: 20 * 60 * 1000 },
@@ -460,7 +467,7 @@ const DEFAULT_AUTO_STAFFING_POLICY = {
 };
 const DEFAULT_ROLE_CAPABILITIES = {
   'DevOps Automator': { canDeploy: true, canSpend: true, allowedConnectors: ['netlify', 'github'] },
-  'Backend Architect': { canDeploy: false, canSpend: false, allowedConnectors: ['github'] },
+  'Backend Architect': { canDeploy: false, canSpend: false, allowedConnectors: ['github', 'supabase'] },
   'Senior Project Manager': { canDeploy: false, canSpend: false, allowedConnectors: [] },
   'Growth Hacker': { canDeploy: true, canSpend: false, allowedConnectors: ['github', 'netlify', 'email_provider', 'analytics', 'kdp', 'gumroad', 'substack', 'custom_cms'] },
   'Reality Checker': { canDeploy: false, canSpend: false, allowedConnectors: ['analytics'] },
@@ -514,7 +521,7 @@ const appState = {
   }
 };
 
-const SUPPORTED_CREDENTIAL_SERVICES = ['github', 'netlify', 'stripe', 'google_ads', 'analytics', 'email_provider', 'support_chat', 'support_ticket', 'kdp', 'gumroad', 'substack', 'custom_cms'];
+const SUPPORTED_CREDENTIAL_SERVICES = ['github', 'netlify', 'stripe', 'google_ads', 'analytics', 'supabase', 'email_provider', 'support_chat', 'support_ticket', 'kdp', 'gumroad', 'substack', 'custom_cms'];
 const CONNECTOR_REGISTRY = {
   github: { id: 'github', label: 'GitHub', credentialService: 'github' },
   telegram: { id: 'telegram', label: 'Telegram', provider: 'telegram' },
@@ -523,6 +530,7 @@ const CONNECTOR_REGISTRY = {
   stripe: { id: 'stripe', label: 'Stripe', credentialService: 'stripe' },
   google_ads: { id: 'google_ads', label: 'Google Ads', credentialService: 'google_ads' },
   analytics: { id: 'analytics', label: 'Analytics', credentialService: 'analytics' },
+  supabase: { id: 'supabase', label: 'Supabase', credentialService: 'supabase' },
   email_provider: { id: 'email_provider', label: 'Email Provider', credentialService: 'email_provider' },
   support_chat: { id: 'support_chat', label: 'Support Chat', credentialService: 'support_chat' },
   support_ticket: { id: 'support_ticket', label: 'Support Ticketing', credentialService: 'support_ticket' },
@@ -535,6 +543,7 @@ const MUTATING_CONNECTOR_OPERATIONS = {
   netlify: new Set(['trigger_deploy']),
   github: new Set(['create_issue', 'create_pull_request', 'dispatch_workflow']),
   stripe: new Set(['create_payment_intent', 'create_refund', 'create_invoice']),
+  supabase: new Set(['create_table', 'apply_schema', 'enable_auth']),
   email_provider: new Set(['send_email', 'send_campaign']),
   google_ads: new Set(['create_campaign', 'update_campaign_budget', 'pause_campaign', 'resume_campaign']),
   support_chat: new Set(['reply_conversation', 'close_conversation', 'escalate_conversation', 'triage_conversations']),
@@ -575,6 +584,20 @@ const CONNECTOR_IDEMPOTENCY_PROFILES = {
       reconciliation: null,
     },
     create_invoice: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+  },
+  supabase: {
+    create_table: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    apply_schema: {
+      mode: 'native_token',
+      reconciliation: null,
+    },
+    enable_auth: {
       mode: 'native_token',
       reconciliation: null,
     },
@@ -2019,6 +2042,22 @@ function runtimeSettings() {
   };
 }
 
+function planningSettings() {
+  const raw = (appConfig && appConfig.planning) || {};
+  const preferredDatabaseService = String(raw.preferredDatabaseService || DEFAULT_PLANNING_SETTINGS.preferredDatabaseService).trim().toLowerCase();
+  return {
+    preferFreeTierFirst: typeof raw.preferFreeTierFirst === 'boolean'
+      ? raw.preferFreeTierFirst
+      : DEFAULT_PLANNING_SETTINGS.preferFreeTierFirst,
+    requireApprovalForPaidTierUpgrade: typeof raw.requireApprovalForPaidTierUpgrade === 'boolean'
+      ? raw.requireApprovalForPaidTierUpgrade
+      : DEFAULT_PLANNING_SETTINGS.requireApprovalForPaidTierUpgrade,
+    preferredDatabaseService: ['supabase', 'manual'].includes(preferredDatabaseService)
+      ? preferredDatabaseService
+      : DEFAULT_PLANNING_SETTINGS.preferredDatabaseService,
+  };
+}
+
 function persistAppConfig() {
   ensureDir(path.dirname(CONFIG_PATH));
   fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(appConfig, null, 2)}\n`, 'utf-8');
@@ -2048,6 +2087,26 @@ function applyRuntimeSettingsUpdate(partial = {}) {
   });
 }
 
+function applyPlanningSettingsUpdate(partial = {}) {
+  const merged = {
+    ...planningSettings(),
+    ...(partial && typeof partial === 'object' ? partial : {}),
+  };
+  const preferredDatabaseService = String(merged.preferredDatabaseService || DEFAULT_PLANNING_SETTINGS.preferredDatabaseService).trim().toLowerCase();
+  appConfig.planning = {
+    preferFreeTierFirst: typeof merged.preferFreeTierFirst === 'boolean'
+      ? merged.preferFreeTierFirst
+      : DEFAULT_PLANNING_SETTINGS.preferFreeTierFirst,
+    requireApprovalForPaidTierUpgrade: typeof merged.requireApprovalForPaidTierUpgrade === 'boolean'
+      ? merged.requireApprovalForPaidTierUpgrade
+      : DEFAULT_PLANNING_SETTINGS.requireApprovalForPaidTierUpgrade,
+    preferredDatabaseService: ['supabase', 'manual'].includes(preferredDatabaseService)
+      ? preferredDatabaseService
+      : DEFAULT_PLANNING_SETTINGS.preferredDatabaseService,
+  };
+  persistAppConfig();
+}
+
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
 }
@@ -2067,6 +2126,10 @@ function projectDir(projectId) {
   return path.join(PROJECTS_ROOT, projectId);
 }
 
+function projectWorkspaceDir(projectId) {
+  return path.join(WORKSPACE_ROOT, 'projects', String(projectId || '').trim());
+}
+
 function projectStatePath(projectId) {
   return path.join(projectDir(projectId), 'state.json');
 }
@@ -2077,6 +2140,130 @@ function projectTemplateSnapshotPath(projectId) {
 
 function projectApprovalAuditPath(projectId) {
   return path.join(projectDir(projectId), 'approval_audit.ndjson');
+}
+
+function resolveProjectWorkspacePath(projectId, relativePath = '') {
+  const root = path.resolve(projectWorkspaceDir(projectId));
+  const normalizedRelative = String(relativePath || '').replace(/^[\\/]+/, '');
+  const target = path.resolve(root, normalizedRelative || '.');
+  if (!target.startsWith(root)) return null;
+  return target;
+}
+
+function toWorkspaceRelativePath(projectId, absolutePath) {
+  const root = path.resolve(projectWorkspaceDir(projectId));
+  const rel = path.relative(root, absolutePath);
+  return rel === '' ? '' : rel.replace(/\\/g, '/');
+}
+
+function buildProjectWorkspaceBrief(projectState) {
+  const plan = projectState && projectState.goalPlan && typeof projectState.goalPlan === 'object' ? projectState.goalPlan : {};
+  const planConfig = plan.planning && typeof plan.planning === 'object' ? plan.planning : planningSettings();
+  const milestones = Array.isArray(plan.milestones) ? plan.milestones : [];
+  const tasks = Array.isArray(plan.tasks) ? plan.tasks : [];
+  const connectors = Array.isArray(plan.requiredConnectors) ? plan.requiredConnectors : [];
+  const assumptions = Array.isArray(plan.assumptions) ? plan.assumptions : [];
+
+  const lines = [
+    '# Project Brief',
+    '',
+    `- Project: ${String(projectState.name || projectState.id || 'Untitled')}`,
+    `- Template: ${String(projectState.template || 'unknown')}`,
+    `- Status: ${String(projectState.status || 'unknown')}`,
+    `- Goal: ${String(projectState.goal || 'N/A')}`,
+    `- Generated: ${String(plan.generatedAt || projectState.createdAt || nowIso())}`,
+    '',
+    '## Planning Policy',
+    '',
+    `- Prefer free tiers first: ${planConfig.preferFreeTierFirst ? 'yes' : 'no'}`,
+    `- Require approval for paid tier upgrades: ${planConfig.requireApprovalForPaidTierUpgrade ? 'yes' : 'no'}`,
+    `- Preferred database service: ${String(planConfig.preferredDatabaseService || 'manual')}`,
+    '',
+    '## Connector Plan',
+    '',
+    connectors.length ? connectors.map((entry) => `- ${entry}`).join('\n') : '- No connector dependencies identified yet.',
+    '',
+    '## Assumptions',
+    '',
+    assumptions.length ? assumptions.map((entry) => `- ${entry}`).join('\n') : '- No explicit assumptions captured.',
+    '',
+    '## Milestones',
+    '',
+    milestones.length
+      ? milestones.map((entry, index) => `${index + 1}. ${String(entry.title || entry.phase || `Milestone ${index + 1}`)}${entry.phase ? ` [${entry.phase}]` : ''}`).join('\n')
+      : '1. No milestones generated yet.',
+    '',
+    '## Task Outline',
+    '',
+    tasks.length
+      ? tasks.map((entry, index) => `${index + 1}. [${String(entry.phase || 'general')}] ${String(entry.title || `Task ${index + 1}`)}`).join('\n')
+      : '1. No tasks generated yet.',
+    '',
+  ];
+
+  return `${lines.join('\n')}\n`;
+}
+
+function writeProjectWorkspaceArtifacts(projectState) {
+  if (!projectState || !projectState.id) return;
+  const targetDir = projectWorkspaceDir(projectState.id);
+  ensureDir(targetDir);
+  const plan = projectState.goalPlan && typeof projectState.goalPlan === 'object' ? projectState.goalPlan : {};
+  fs.writeFileSync(path.join(targetDir, 'project_brief.md'), buildProjectWorkspaceBrief(projectState), 'utf-8');
+  fs.writeFileSync(path.join(targetDir, 'goal_plan.json'), `${JSON.stringify(plan, null, 2)}\n`, 'utf-8');
+  fs.writeFileSync(path.join(targetDir, 'milestones.json'), `${JSON.stringify(Array.isArray(plan.milestones) ? plan.milestones : [], null, 2)}\n`, 'utf-8');
+}
+
+function listProjectWorkspace(projectId, relativePath = '') {
+  const dirPath = resolveProjectWorkspacePath(projectId, relativePath);
+  if (!dirPath) {
+    throw new Error('Invalid workspace path.');
+  }
+  ensureDir(projectWorkspaceDir(projectId));
+  if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) {
+    throw new Error('Workspace directory not found.');
+  }
+  const entries = fs.readdirSync(dirPath, { withFileTypes: true })
+    .map((entry) => {
+      const absolutePath = path.join(dirPath, entry.name);
+      const stats = fs.statSync(absolutePath);
+      return {
+        name: entry.name,
+        path: toWorkspaceRelativePath(projectId, absolutePath),
+        type: entry.isDirectory() ? 'dir' : 'file',
+        size: entry.isDirectory() ? null : stats.size,
+        updatedAt: stats.mtime.toISOString(),
+      };
+    })
+    .sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+  return {
+    projectId,
+    path: String(relativePath || '').replace(/\\/g, '/'),
+    entries,
+  };
+}
+
+function readProjectWorkspaceFile(projectId, relativePath = '') {
+  const targetPath = resolveProjectWorkspacePath(projectId, relativePath);
+  if (!targetPath) {
+    throw new Error('Invalid workspace file path.');
+  }
+  if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isFile()) {
+    throw new Error('Workspace file not found.');
+  }
+  const raw = fs.readFileSync(targetPath, 'utf-8');
+  const maxChars = 200000;
+  const truncated = raw.length > maxChars;
+  return {
+    projectId,
+    path: toWorkspaceRelativePath(projectId, targetPath),
+    content: truncated ? `${raw.slice(0, maxChars)}\n\n...truncated...` : raw,
+    truncated,
+  };
 }
 
 function readLastLine(filePath) {
@@ -2615,6 +2802,9 @@ function connectorHealthCheckActionForService(connector) {
   if (key === 'netlify') {
     return { connector: 'netlify', operation: 'get_account', actorRole: 'Backend Architect', phase: 'deployment' };
   }
+  if (key === 'supabase') {
+    return { connector: 'supabase', operation: 'get_profile', actorRole: 'Backend Architect', phase: 'product_build' };
+  }
   if (key === 'stripe') {
     return { connector: 'stripe', operation: 'get_balance', actorRole: 'Finance Tracker', phase: 'finance' };
   }
@@ -2649,10 +2839,13 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   }
 
   const tags = normalizeGoalKeywordTags(goalText);
+  const planConfig = planningSettings();
+  const needsManagedDatabase = Boolean(tags.webApp || tags.social || tags.marketplace || tags.property || tags.healthcare || tags.ecommerce || tags.fintech);
   const connectorSet = new Set();
   if (tags.deployment || tags.webApp) connectorSet.add('netlify');
   if (tags.payments) connectorSet.add('stripe');
   if (tags.marketing) connectorSet.add('google_ads');
+  if (needsManagedDatabase && planConfig.preferredDatabaseService === 'supabase') connectorSet.add('supabase');
   if (tags.support || tags.property || tags.healthcare) {
     connectorSet.add('support_ticket');
     connectorSet.add('email_provider');
@@ -2712,6 +2905,18 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
     description: 'Produce execution milestones from point A to point B with owner roles and verification gates.',
   });
 
+  if (planConfig.preferFreeTierFirst) {
+    const databaseTier = planConfig.preferredDatabaseService === 'supabase' && needsManagedDatabase
+      ? 'Supabase free tier'
+      : 'manual database selection';
+    addTask({
+      title: 'Choose free-tier infrastructure footprint for MVP launch',
+      phase: 'strategy',
+      requiredRole: 'Senior Project Manager',
+      description: `Default to the lowest-cost launch stack first: Netlify free tier for hosting and ${databaseTier} for data/auth where applicable.`,
+    });
+  }
+
   if (tags.webApp) {
     addTask({
       title: 'Design system architecture, domain model, and API contracts',
@@ -2724,6 +2929,15 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       phase: 'product_build',
       requiredRole: 'UI Designer',
       description: 'Build production-ready UX for required personas and success paths.',
+    });
+  }
+
+  if (needsManagedDatabase && planConfig.preferredDatabaseService === 'supabase') {
+    addTask({
+      title: 'Provision Supabase database, auth, and storage baseline',
+      phase: 'product_build',
+      requiredRole: 'Backend Architect',
+      description: 'Set up the MVP data plane using Supabase first: relational schema, auth boundaries, storage buckets, and row-level access strategy.',
     });
   }
 
@@ -2868,6 +3082,14 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       requiredRole: 'Legal Compliance Checker',
       description: 'Implement user reporting, content moderation workflow, ban/block mechanics, and community policy enforcement.',
     });
+    if (planConfig.preferredDatabaseService === 'supabase') {
+      addTask({
+        title: 'Model relational schema for profiles, matches, chat, and moderation records',
+        phase: 'product_build',
+        requiredRole: 'Backend Architect',
+        description: 'Use a relational data model for profile visibility, matching state, conversations, blocks, reports, and moderation audit trails.',
+      });
+    }
   }
 
   if (tags.marketplace || tags.social) {
@@ -2958,18 +3180,38 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
     description: 'Document monitoring, escalation, and long-running business maintenance procedures.',
   });
 
+  if (planConfig.requireApprovalForPaidTierUpgrade && (tags.webApp || needsManagedDatabase || requiredConnectors.length > 0)) {
+    addTask({
+      title: 'Define provider upgrade thresholds and approval gate before moving off free tiers',
+      phase: 'maintenance',
+      requiredRole: 'Senior Project Manager',
+      description: 'Keep Netlify and data providers on free tiers until storage, bandwidth, performance, or compliance thresholds justify an upgrade, then request operator approval before any paid plan change.',
+    });
+  }
+
   const milestones = buildGoalMilestones(tasks, tags);
   const assumptions = [
     'Coordinator remains the only credential-broker and policy enforcer.',
     'Blocked connector actions trigger operator assistance notifications with context.',
     'Plan executes using currently available connectors and falls back to manual assistance where needed.',
   ];
+  if (planConfig.preferFreeTierFirst) {
+    assumptions.push('Infrastructure planning starts on free or hobby tiers before any paid provider plans are considered.');
+  }
+  if (planConfig.requireApprovalForPaidTierUpgrade) {
+    assumptions.push('Any provider tier upgrade beyond free defaults requires explicit operator approval before execution.');
+  }
 
   return {
     generatedAt: nowIso(),
     source: 'goal_prompt_analysis',
     goal: goalText,
     tags,
+    planning: {
+      ...planConfig,
+      recommendedHostingTier: planConfig.preferFreeTierFirst ? 'free' : 'operator_choice',
+      recommendedDatabaseService: needsManagedDatabase ? planConfig.preferredDatabaseService : null,
+    },
     assumptions,
     requiredConnectors,
     missingCredentialServices,
@@ -5427,6 +5669,7 @@ function createProjectFromTemplate({ name, template, goal }) {
   projectRuntimes.set(id, runtime);
 
   ensureDir(projectDir(id));
+  writeProjectWorkspaceArtifacts(state);
   fs.writeFileSync(projectTemplateSnapshotPath(id), `${JSON.stringify(tpl, null, 2)}\n`, 'utf-8');
   persistProjectState(state);
   startProjectLoop(id);
@@ -5452,6 +5695,10 @@ function removeProject(projectId) {
   const target = projectDir(projectId);
   if (fs.existsSync(target)) {
     fs.rmSync(target, { recursive: true, force: true });
+  }
+  const workspaceTarget = projectWorkspaceDir(projectId);
+  if (fs.existsSync(workspaceTarget)) {
+    fs.rmSync(workspaceTarget, { recursive: true, force: true });
   }
 }
 
@@ -7713,6 +7960,38 @@ async function executeStripeConnector(options = {}) {
   };
 }
 
+async function executeSupabaseConnector(options = {}) {
+  const operation = String(options.operation || 'list_projects').trim() || 'list_projects';
+  const token = readCredentialToken('supabase');
+  if (!token) {
+    return {
+      ok: false,
+      errorCode: 'SECRET_MISSING',
+      message: 'Supabase credential token is missing.',
+      operation,
+      actualCost: 0,
+      data: null,
+    };
+  }
+
+  const gateway = await executeViaApiGateway('supabase', operation, {
+    ...(options.input && typeof options.input === 'object' ? options.input : {}),
+    credentialToken: token,
+    idempotencyKey: options.idempotencyKey || null,
+    projectId: options.projectId || null,
+  }, 25000);
+  if (!gateway.ok) return gateway;
+  return {
+    ok: true,
+    message: gateway.message || `Supabase operation ${operation} completed via API gateway.`,
+    operation,
+    actualCost: Number.isFinite(Number(gateway.actualCost))
+      ? Number(gateway.actualCost)
+      : Number(options.estimatedCost || 0),
+    data: gateway.data || null,
+  };
+}
+
 async function executeEmailProviderConnector(options = {}) {
   const operation = String(options.operation || 'list_inbox').trim() || 'list_inbox';
   const token = readCredentialToken('email_provider');
@@ -8231,6 +8510,9 @@ async function executeLiveConnector(connectorId, options = {}) {
   }
   if (connectorKey === 'stripe') {
     return executeStripeConnector(options);
+  }
+  if (connectorKey === 'supabase') {
+    return executeSupabaseConnector(options);
   }
   if (connectorKey === 'email_provider') {
     return executeEmailProviderConnector(options);
@@ -9225,6 +9507,44 @@ async function main() {
       return;
     }
 
+    if (pathname === '/api/workspace' && req.method === 'GET') {
+      const projectId = String(urlObj.searchParams.get('projectId') || '').trim();
+      const relativePath = String(urlObj.searchParams.get('path') || '').trim();
+      if (!projectId) {
+        writeJson(res, { error: 'projectId is required' }, 400);
+        return;
+      }
+      const runtime = projectRuntimes.get(projectId);
+      if (runtime && runtime.state) {
+        writeProjectWorkspaceArtifacts(runtime.state);
+      }
+      try {
+        writeJson(res, listProjectWorkspace(projectId, relativePath));
+      } catch (err) {
+        writeJson(res, { error: err.message }, 404);
+      }
+      return;
+    }
+
+    if (pathname === '/api/workspace/file' && req.method === 'GET') {
+      const projectId = String(urlObj.searchParams.get('projectId') || '').trim();
+      const relativePath = String(urlObj.searchParams.get('path') || '').trim();
+      if (!projectId) {
+        writeJson(res, { error: 'projectId is required' }, 400);
+        return;
+      }
+      const runtime = projectRuntimes.get(projectId);
+      if (runtime && runtime.state) {
+        writeProjectWorkspaceArtifacts(runtime.state);
+      }
+      try {
+        writeJson(res, readProjectWorkspaceFile(projectId, relativePath));
+      } catch (err) {
+        writeJson(res, { error: err.message }, 404);
+      }
+      return;
+    }
+
     if (pathname === '/api/credentials' && req.method === 'GET') {
       writeJson(res, readCredentialMetadata());
       return;
@@ -9389,6 +9709,8 @@ async function main() {
       writeJson(res, {
         runtime: runtimeSettings(),
         defaults: DEFAULT_RUNTIME_SETTINGS,
+        planning: planningSettings(),
+        planningDefaults: DEFAULT_PLANNING_SETTINGS,
         retryPolicies: retryPoliciesSummary(),
         llm: {
           endpoint: appState.llm.endpoint,
@@ -9414,11 +9736,13 @@ async function main() {
         }
 
         const runtimePatch = payload.runtime && typeof payload.runtime === 'object' ? payload.runtime : {};
+        const planningPatch = payload.planning && typeof payload.planning === 'object' ? payload.planning : {};
         const retryPolicyPatch = payload.retryPolicies && typeof payload.retryPolicies === 'object' ? payload.retryPolicies : {};
         const nextEndpoint = payload.llm && typeof payload.llm === 'object' ? String(payload.llm.endpoint || '').trim() : '';
         const notificationPatch = payload.notifications && typeof payload.notifications === 'object' ? payload.notifications : {};
 
         applyRuntimeSettingsUpdate(runtimePatch);
+        applyPlanningSettingsUpdate(planningPatch);
 
         if (nextEndpoint) {
           appConfig.llm = appConfig.llm || {};
@@ -9468,6 +9792,8 @@ async function main() {
           ok: true,
           runtime: runtimeSettings(),
           defaults: DEFAULT_RUNTIME_SETTINGS,
+          planning: planningSettings(),
+          planningDefaults: DEFAULT_PLANNING_SETTINGS,
           retryPolicies: retryPoliciesSummary(),
           llm: {
             endpoint: appState.llm.endpoint,
@@ -9482,10 +9808,13 @@ async function main() {
 
     if (pathname === '/api/settings/reset' && req.method === 'POST') {
       applyRuntimeSettingsUpdate(DEFAULT_RUNTIME_SETTINGS);
+      applyPlanningSettingsUpdate(DEFAULT_PLANNING_SETTINGS);
       writeJson(res, {
         ok: true,
         runtime: runtimeSettings(),
         defaults: DEFAULT_RUNTIME_SETTINGS,
+        planning: planningSettings(),
+        planningDefaults: DEFAULT_PLANNING_SETTINGS,
         retryPolicies: retryPoliciesSummary(),
         llm: {
           endpoint: appState.llm.endpoint,

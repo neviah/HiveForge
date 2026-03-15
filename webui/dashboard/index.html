@@ -399,6 +399,7 @@
                 <option value="stripe">Stripe</option>
                 <option value="google_ads">Google Ads</option>
                 <option value="analytics">Google Analytics</option>
+                <option value="supabase">Supabase</option>
                 <option value="email_provider">Email Provider</option>
               </select>
               <div id="credServiceGuide" style="display:none;font-size:0.82rem;color:var(--muted);"></div>
@@ -452,6 +453,7 @@
                   <option value="stripe">Stripe</option>
                   <option value="google_ads">Google Ads</option>
                   <option value="analytics">Google Analytics</option>
+                  <option value="supabase">Supabase</option>
                   <option value="email_provider">Email Provider</option>
                 </select>
               </div>
@@ -630,6 +632,25 @@
             <span>Count manual heartbeat presses toward stall timeout</span>
           </label>
 
+          <div class="hf-card" style="background:var(--panel-bg);border:1px solid var(--border);padding:0.75rem;margin-bottom:1rem;">
+            <h4 style="margin:0 0 0.55rem 0;">Planning Defaults</h4>
+            <label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">
+              <input id="settingsPreferFreeTierFirst" type="checkbox" />
+              <span>Prefer free tiers first when planning infrastructure</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.7rem;">
+              <input id="settingsRequirePaidTierApproval" type="checkbox" />
+              <span>Require approval before upgrading providers to paid tiers</span>
+            </label>
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Preferred Managed Database</label>
+              <select id="settingsPreferredDatabase" style="width:100%;">
+                <option value="supabase">Supabase</option>
+                <option value="manual">Manual / operator choice</option>
+              </select>
+            </div>
+          </div>
+
           <div class="hf-btn-row" style="margin-bottom:0;">
             <button class="hf-btn" onclick="Dashboard.saveSettings()">Save Settings</button>
             <button class="hf-btn secondary" onclick="Dashboard.resetSettings()">Reset to Defaults</button>
@@ -643,10 +664,26 @@
           <div class="hf-btn-row" style="margin-bottom:0.4rem;">
             <button class="hf-btn" onclick="Dashboard.runProductionCertification()">Run Production Certification</button>
             <button class="hf-btn secondary" onclick="Dashboard.copyCertOutput()">Copy Output</button>
+            <button class="hf-btn secondary" onclick="Dashboard.refreshProductionEvidence()">Refresh Evidence</button>
+            <button class="hf-btn secondary" onclick="Dashboard.exportProductionEvidence()">Export Latest Evidence</button>
             <span id="productionCertificationStatus" class="hf-status" style="display:none;"></span>
           </div>
           <div style="margin-bottom:0.6rem;font-size:0.82rem;"><span id="lastCertBadge" style="display:none;"></span></div>
+          <div class="hf-grid-2" style="margin-bottom:0.65rem;">
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Evidence Runs</label>
+              <select id="productionEvidenceRunSelect" style="width:100%;" onchange="Dashboard.loadProductionEvidenceRun()">
+                <option value="">No runs yet</option>
+              </select>
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Checklist Status</label>
+              <div id="productionEvidenceChecklistSummary" style="font-size:0.84rem;color:var(--muted);padding:0.55rem 0.65rem;border:1px solid var(--border);border-radius:8px;background:var(--panel-bg);">No evidence loaded.</div>
+            </div>
+          </div>
           <pre id="productionCertificationOutput" class="hf-log-stream" style="max-height:220px;white-space:pre-wrap;color:var(--muted);">No certification run yet.</pre>
+          <div style="margin-top:0.6rem;font-size:0.82rem;color:var(--muted);">Latest evidence checklist</div>
+          <div id="productionEvidenceChecklist" class="hf-log-stream" style="max-height:160px;"><div style="color:var(--muted);">No checklist entries yet.</div></div>
         </div>
 
         </div>
@@ -813,6 +850,7 @@
                 <option value="stripe">Stripe</option>
                 <option value="google_ads">Google Ads</option>
                 <option value="analytics">Analytics</option>
+                <option value="supabase">Supabase</option>
                 <option value="email_provider">Email Provider</option>
               </select>
             </div>
@@ -833,7 +871,7 @@
               <input id="connectorCheckEstimatedCost" type="number" min="0" step="0.01" style="width:100%;" placeholder="0.00" />
             </div>
           </div>
-          <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.7rem;">Live execution is implemented for GitHub, Netlify, Google Ads, and Analytics. Uncheck dry run to call the live adapter.</div>
+          <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.7rem;">Live execution is implemented for GitHub, Netlify, Google Ads, Analytics, Supabase, and API-gateway-backed connectors. Uncheck dry run to call the live adapter.</div>
           <div class="hf-btn-row" style="margin-bottom:0.7rem;">
             <button class="hf-btn" onclick="Dashboard.runConnectorCheck()">Run Connector Check</button>
             <span id="connectorCheckStatus" class="hf-status" style="display:none;"></span>
