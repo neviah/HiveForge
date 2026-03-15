@@ -491,6 +491,15 @@ function renderProjectAutomation(data) {
   setText('automationPendingApprovals', Number(orchestration.pendingApprovalCount || 0));
   setText('automationAssistanceCount', Number(orchestration.assistanceRequestCount || 0));
 
+  // Readiness Checklist Card (Game Studio only)
+  const readinessList = document.getElementById('automationReadinessChecklist');
+  if (readinessList && state.activeProject?.template === 'game_studio') {
+    const checklist = Array.isArray(data?.goalPlan?.readinessChecklist) ? data.goalPlan.readinessChecklist : [];
+    readinessList.innerHTML = checklist.length
+      ? checklist.map((item) => `<div class="hf-log-line"><strong>${item.ok ? '✔️' : '⬜'}</strong> ${esc(item.title || item.id || 'check')}<div style="color:var(--muted);margin-top:0.15rem;">${esc(item.note || '')}</div></div>`).join('')
+      : '<div style="color:var(--muted);">No readiness checklist items.</div>';
+  }
+
   const blockers = document.getElementById('automationConnectorBlockers');
   if (blockers) {
     const missingServices = Array.isArray(data?.goalPlan?.missingCredentialServices)
@@ -501,20 +510,20 @@ function renderProjectAutomation(data) {
       : [];
     const lines = [];
     missingServices.forEach((svc) => {
-      lines.push(`<div class="hf-log-line"><strong>Missing credential:</strong> ${esc(String(svc))}</div>`);
+      lines.push(`<div class=\"hf-log-line\"><strong>Missing credential:</strong> ${esc(String(svc))}</div>`);
     });
     pendingReadiness.forEach((item) => {
-      lines.push(`<div class="hf-log-line"><strong>${esc(item.taskId || 'task')}</strong> ${esc(item.title || '')}<div style="color:var(--muted);margin-top:0.15rem;">${esc(item.phase || 'general')} · ${esc(item.status || 'backlog')}</div></div>`);
+      lines.push(`<div class=\"hf-log-line\"><strong>${esc(item.taskId || 'task')}</strong> ${esc(item.title || '')}<div style=\"color:var(--muted);margin-top:0.15rem;\">${esc(item.phase || 'general')} · ${esc(item.status || 'backlog')}</div></div>`);
     });
-    blockers.innerHTML = lines.length ? lines.join('') : '<div style="color:var(--muted);">No connector blockers detected.</div>';
+    blockers.innerHTML = lines.length ? lines.join('') : '<div style=\"color:var(--muted);\">No connector blockers detected.</div>';
   }
 
   const milestoneList = document.getElementById('automationMilestoneList');
   if (milestoneList) {
     const milestones = Array.isArray(milestone?.milestones) ? milestone.milestones : [];
     milestoneList.innerHTML = milestones.length
-      ? milestones.map((item) => `<div class="hf-log-line"><strong>${esc(item.id || 'MS')}</strong> ${esc(item.title || '')}<div style="color:var(--muted);margin-top:0.15rem;">${esc(item.doneTaskCount || 0)}/${esc(item.requiredTaskCount || 0)} tasks · ${item.completedAt ? 'complete' : 'pending'}</div></div>`).join('')
-      : '<div style="color:var(--muted);">No milestones generated yet.</div>';
+      ? milestones.map((item) => `<div class=\"hf-log-line\"><strong>${esc(item.id || 'MS')}</strong> ${esc(item.title || '')}<div style=\"color:var(--muted);margin-top:0.15rem;\">${esc(item.doneTaskCount || 0)}/${esc(item.requiredTaskCount || 0)} tasks · ${item.completedAt ? 'complete' : 'pending'}</div></div>`).join('')
+      : '<div style=\"color:var(--muted);\">No milestones generated yet.</div>';
   }
 
   const approvalsList = document.getElementById('automationApprovalsList');
@@ -523,8 +532,8 @@ function renderProjectAutomation(data) {
       ? orchestration.pendingApprovals
       : [];
     approvalsList.innerHTML = approvals.length
-      ? approvals.map((item) => `<div class="hf-log-line"><strong>${esc(item.taskId || 'task')}</strong> ${esc(item.title || '')}<div style="color:var(--muted);margin-top:0.15rem;">risk ${esc(String(item.riskScore || 0))} · ${esc(item.phase || 'general')}</div></div>`).join('')
-      : '<div style="color:var(--muted);">No approvals pending.</div>';
+      ? approvals.map((item) => `<div class=\"hf-log-line\"><strong>${esc(item.taskId || 'task')}</strong> ${esc(item.title || '')}<div style=\"color:var(--muted);margin-top:0.15rem;\">risk ${esc(String(item.riskScore || 0))} · ${esc(item.phase || 'general')}</div></div>`).join('')
+      : '<div style=\"color:var(--muted);\">No approvals pending.</div>';
   }
 
   const assistanceList = document.getElementById('automationAssistanceList');
@@ -533,8 +542,8 @@ function renderProjectAutomation(data) {
       ? orchestration.assistanceRequests
       : [];
     assistanceList.innerHTML = requests.length
-      ? requests.map((item) => `<div class="hf-log-line"><strong>${esc(item.taskId || 'task')}</strong> ${esc(item.title || '')}<div style="color:var(--muted);margin-top:0.15rem;">${esc(item.phase || 'general')} · ${esc(item.lastError || 'assistance requested')}</div></div>`).join('')
-      : '<div style="color:var(--muted);">No active assistance requests.</div>';
+      ? requests.map((item) => `<div class=\"hf-log-line\"><strong>${esc(item.taskId || 'task')}</strong> ${esc(item.title || '')}<div style=\"color:var(--muted);margin-top:0.15rem;\">${esc(item.phase || 'general')} · ${esc(item.lastError || 'assistance requested')}</div></div>`).join('')
+      : '<div style=\"color:var(--muted);\">No active assistance requests.</div>';
   }
 }
 
