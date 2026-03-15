@@ -9,9 +9,11 @@ sandbox/workspace/
 sandbox/hiveforge.log
 sandbox/projects/
 sandbox/credentials/*.enc
+sandbox/credentials/*.json
 sandbox/credentials/audit.log.ndjson
 sandbox/credentials/budget_counters.json
 sandbox/credentials/policies/
+sandbox/agents/
 node_modules/
 .clawhub/
 /skills/
