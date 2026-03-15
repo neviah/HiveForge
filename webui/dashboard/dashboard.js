@@ -63,13 +63,13 @@ const TEMPLATES = {
   game_studio:     {
     label: 'Game Studio (2D Web-First)',
     roster: ['Coordinator','2D Game Designer','Gameplay Engineer','Technical Artist','Game Audio Engineer','QA Engineer'],
-    summary: 'Build 2D web-first, auto-test deploy to Netlify, start with primitive square assets, then hand off to human art before itch.io and Steam tracks.',
+    summary: 'Build 2D web-first, lock a strong single-player loop first, auto-test deploy to Netlify, start with primitive square assets, then hand off to human art before itch.io and Steam tracks.',
     bullets: [
       'Default delivery: 2D browser game',
       'Automatic Netlify test deploy lane',
       'Primitive placeholders (squares/shapes) until human art arrives',
       'Dual release path: itch.io (web) and Steam (desktop wrapper)',
-      'Multiplayer default: P2P listen-server with relay only as fallback'
+      'Single-player first, with optional P2P multiplayer and relay fallback only when needed'
     ]
   },
   publishing_house:{ label: 'Publishing House', roster: ['Coordinator','Editor','Content Writer','Proofreader','Marketing Manager','Distribution Manager'] },

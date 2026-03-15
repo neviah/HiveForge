@@ -137,6 +137,31 @@ test('goal prompt analysis generates phased action plan with connector readiness
   assert.equal(plan.tasks.some((task) => /landlord\/tenant\/property lifecycle/i.test(String(task.title || ''))), true);
 });
 
+test('goal prompt analysis asks clarifying questions for ambiguous game studio prompts', () => {
+  const plan = goalActionPlanFromPrompt('game_studio', 'Build a 2D game prototype quickly.', {});
+
+  assert.equal(Array.isArray(plan.clarificationQuestions), true);
+  assert.equal(plan.clarificationQuestions.length >= 2, true);
+  assert.equal(
+    plan.clarificationQuestions.some((question) => /single-player, multiplayer, or both/i.test(String(question || ''))),
+    true,
+  );
+  assert.equal(
+    plan.clarificationQuestions.some((question) => /release lane should we prioritize first/i.test(String(question || ''))),
+    true,
+  );
+});
+
+test('goal prompt analysis asks auth clarification for web app goals without auth detail', () => {
+  const plan = goalActionPlanFromPrompt('business', 'Build a web app for tenant billing and payment reminders.', {});
+
+  assert.equal(Array.isArray(plan.clarificationQuestions), true);
+  assert.equal(
+    plan.clarificationQuestions.some((question) => /account-based authentication/i.test(String(question || ''))),
+    true,
+  );
+});
+
 test('publication incident dashboard tracks mttr, runbook hotspots, and cooldown trends', () => {
   const now = Date.now();
   const iso = (msAgo) => new Date(now - msAgo).toISOString();

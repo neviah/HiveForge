@@ -2,7 +2,7 @@
     "template_id":  "game_studio",
     "display_name":  "Game Studio (2D Web-First)",
     "version":  "1.0.0",
-    "goal_definition":  "Ship a playable 2D web-first game with automated Netlify test deployments, placeholder primitive assets, human-art handoff, and release-ready tracks for itch.io and Steam.",
+    "goal_definition":  "Ship a playable 2D web-first game with a polished single-player core loop, optional P2P multiplayer, automated Netlify test deployments, placeholder primitive assets, human-art handoff, and release-ready tracks for itch.io and Steam.",
     "coordinator_agent":  {
                               "required":  true,
                               "role":  "Coordinator Agent",
@@ -149,15 +149,17 @@
                                        }
                                    ],
                 "multiplayer_strategy":  {
-                                             "default_mode":  "p2p_listen_server",
+                                             "single_player_first":  true,
+                                             "default_mode":  "single_player",
+                                             "optional_multiplayer_mode":  "p2p_listen_server",
                                              "host_migration_required":  true,
                                              "relay_fallback":  "only_when_direct_connection_fails",
-                                             "notes":  "Use P2P by default to minimize hosting cost, with coordinator escalation when relay spend rises."
+                                             "notes":  "Ship single-player first, then add optional P2P multiplayer to minimize hosting cost, with coordinator escalation when relay spend rises."
                                          },
     "task_breakdown":  [
                            {
                                "id":  "GAME-1",
-                                           "title":  "Define 2D web-first scope, core loop, and P2P multiplayer assumptions",
+                                           "title":  "Define 2D web-first scope, single-player core loop, and optional P2P multiplayer assumptions",
                                "phase":  "concept"
                            },
                            {

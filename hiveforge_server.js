@@ -2823,6 +2823,35 @@ function connectorHealthCheckActionForService(connector) {
   return null;
 }
 
+function goalClarificationQuestions(templateId, goalText, tags = {}) {
+  const text = String(goalText || '').toLowerCase();
+  const templateKey = String(templateId || '').trim().toLowerCase();
+  const questions = [];
+
+  if (templateKey === 'game_studio') {
+    const mentionsSingle = /(single[\s-]?player|solo|offline\s*mode)/.test(text);
+    const mentionsMulti = /(multiplayer|co[-\s]?op|coop|pvp|online\s+match)/.test(text);
+    const mentionsTheme = /(theme|genre|setting|visual\s*style|art\s*direction|tone)/.test(text);
+    const mentionsPlatform = /(itch|itch\.io|steam|desktop|browser|web|mobile)/.test(text);
+
+    if (!mentionsSingle && !mentionsMulti) {
+      questions.push('Should this game be single-player, multiplayer, or both? If multiplayer, should we start with P2P listen-server to reduce hosting cost?');
+    }
+    if (!mentionsTheme) {
+      questions.push('What theme/genre and visual direction should we target (for example: pixel roguelite, cozy farming, arcade shooter)?');
+    }
+    if (!mentionsPlatform) {
+      questions.push('Which release lane should we prioritize first: browser/Netlify testing, itch.io launch, or Steam desktop packaging?');
+    }
+  }
+
+  if (tags.webApp && !/(auth|login|sign[\s-]?in|account)/.test(text)) {
+    questions.push('Do you want account-based authentication in the MVP, or should we start with guest-only access?');
+  }
+
+  return questions.slice(0, 5);
+}
+
 function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   const goalText = String(goal || '').trim();
   if (!goalText) {
@@ -2831,6 +2860,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       source: 'template_default',
       goal: '',
       assumptions: [],
+      clarificationQuestions: [],
       requiredConnectors: [],
       missingCredentialServices: [],
       tasks: [],
@@ -2839,6 +2869,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   }
 
   const tags = normalizeGoalKeywordTags(goalText);
+  const clarificationQuestions = goalClarificationQuestions(templateId, goalText, tags);
   const planConfig = planningSettings();
   const needsManagedDatabase = Boolean(tags.webApp || tags.social || tags.marketplace || tags.property || tags.healthcare || tags.ecommerce || tags.fintech);
   const connectorSet = new Set();
@@ -3213,6 +3244,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       recommendedDatabaseService: needsManagedDatabase ? planConfig.preferredDatabaseService : null,
     },
     assumptions,
+    clarificationQuestions,
     requiredConnectors,
     missingCredentialServices,
     tasks,
@@ -3538,6 +3570,7 @@ function summarizeProjectAutomation(projectState) {
           milestoneCount: Array.isArray(goalPlan.milestones) ? goalPlan.milestones.length : 0,
           requiredConnectors: Array.isArray(goalPlan.requiredConnectors) ? goalPlan.requiredConnectors : [],
           missingCredentialServices: Array.isArray(goalPlan.missingCredentialServices) ? goalPlan.missingCredentialServices : [],
+          clarificationQuestions: Array.isArray(goalPlan.clarificationQuestions) ? goalPlan.clarificationQuestions : [],
         }
       : null,
     milestoneCompletion,
@@ -4369,6 +4402,7 @@ function summarizeProject(projectState) {
           source: goalPlan.source || null,
           milestoneCount: Array.isArray(goalPlan.milestones) ? goalPlan.milestones.length : 0,
           missingCredentialServices: Array.isArray(goalPlan.missingCredentialServices) ? goalPlan.missingCredentialServices.length : 0,
+          clarificationQuestions: Array.isArray(goalPlan.clarificationQuestions) ? goalPlan.clarificationQuestions.length : 0,
         }
       : null,
     completedAt: projectState.completedAt || null,
@@ -5637,6 +5671,37 @@ function createProjectFromTemplate({ name, template, goal }) {
     });
   }
 
+  const clarificationQuestions = Array.isArray(goalPlan && goalPlan.clarificationQuestions)
+    ? goalPlan.clarificationQuestions.map((question) => String(question || '').trim()).filter(Boolean)
+    : [];
+  if (clarificationQuestions.length > 0) {
+    appendProjectLog(state, 'warning', {
+      kind: 'goal_plan_clarification_requested',
+      clarificationQuestions,
+      summary: `Coordinator needs answers to ${clarificationQuestions.length} goal clarification question(s) before execution scope is locked.`,
+    });
+    appendMessageBusEntry({
+      projectId: state.id,
+      from: 'coordinator',
+      to: 'operator',
+      kind: 'assistance_requested_goal_clarification',
+      payload: {
+        goal: state.goal,
+        clarificationQuestions,
+      },
+    });
+    notifyOperator(
+      state,
+      `Goal clarification needed: please answer ${clarificationQuestions.length} question(s) from the coordinator.`,
+      {
+        kind: 'goal_clarification',
+        clarificationQuestions,
+        projectId: state.id,
+        fallback: 'If messaging channels are unavailable, answer in dashboard Logs or Message Bus.',
+      },
+    ).catch(() => {});
+  }
+
   if (Array.isArray(goalPlan && goalPlan.missingCredentialServices) && goalPlan.missingCredentialServices.length > 0) {
     const missing = goalPlan.missingCredentialServices;
     appendProjectLog(state, 'warning', {
@@ -6097,6 +6162,7 @@ function makeAnalyticsSnapshot(projectState) {
           milestones: Array.isArray(goalPlan.milestones) ? goalPlan.milestones.slice(0, 25) : [],
           requiredConnectors: Array.isArray(goalPlan.requiredConnectors) ? goalPlan.requiredConnectors : [],
           missingCredentialServices: Array.isArray(goalPlan.missingCredentialServices) ? goalPlan.missingCredentialServices : [],
+          clarificationQuestions: Array.isArray(goalPlan.clarificationQuestions) ? goalPlan.clarificationQuestions : [],
         }
       : null,
     lastUpdated: nowIso()
