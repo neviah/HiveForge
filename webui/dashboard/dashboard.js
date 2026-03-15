@@ -60,7 +60,18 @@ const SECTION_TITLES = {
 const TEMPLATES = {
   business:        { label: 'Business', roster: ['Coordinator','Marketing Manager','Sales Manager','Financial Controller','Content Writer','Data Analyst'] },
   software_agency: { label: 'Software Agency', roster: ['Coordinator','Lead Developer','Frontend Dev','Backend Dev','QA Engineer','DevOps Engineer'] },
-  game_studio:     { label: 'Game Studio', roster: ['Coordinator','Game Designer','Lead Developer','Artist','Audio Engineer','QA Engineer'] },
+  game_studio:     {
+    label: 'Game Studio (2D Web-First)',
+    roster: ['Coordinator','2D Game Designer','Gameplay Engineer','Technical Artist','Game Audio Engineer','QA Engineer'],
+    summary: 'Build 2D web-first, auto-test deploy to Netlify, start with primitive square assets, then hand off to human art before itch.io and Steam tracks.',
+    bullets: [
+      'Default delivery: 2D browser game',
+      'Automatic Netlify test deploy lane',
+      'Primitive placeholders (squares/shapes) until human art arrives',
+      'Dual release path: itch.io (web) and Steam (desktop wrapper)',
+      'Multiplayer default: P2P listen-server with relay only as fallback'
+    ]
+  },
   publishing_house:{ label: 'Publishing House', roster: ['Coordinator','Editor','Content Writer','Proofreader','Marketing Manager','Distribution Manager'] },
   music_production:{ label: 'Music Production', roster: ['Coordinator','Producer','Audio Engineer','Lyricist','Marketing Manager','Distribution Manager'] },
   research_lab:    { label: 'Research Lab', roster: ['Coordinator','Research Lead','Data Scientist','Technical Writer','Literature Reviewer','Statistician'] },
@@ -1127,9 +1138,15 @@ function renderAgentPreview(templateKey) {
   if (!tpl) return;
   const el = document.getElementById('newProjectAgentPreview');
   el.style.display = 'block';
+  const summary = tpl.summary ? `<div style="color:var(--muted);margin-bottom:0.5rem;">${esc(tpl.summary)}</div>` : '';
+  const bullets = Array.isArray(tpl.bullets) && tpl.bullets.length
+    ? `<ul style="margin:0 0 0.65rem 1rem;color:var(--muted);">${tpl.bullets.map((b) => `<li>${esc(b)}</li>`).join('')}</ul>`
+    : '';
   el.innerHTML = `
     <div class="hf-card" style="max-width:700px;">
       <div style="font-weight:600;margin-bottom:0.5rem;">Default roster for <em>${tpl.label}</em>:</div>
+      ${summary}
+      ${bullets}
       <div style="display:flex;flex-wrap:wrap;gap:0.4rem;">
         ${tpl.roster.map(r => `<span class="hf-badge" style="background:var(--accent);color:#fff;">${r}</span>`).join('')}
       </div>

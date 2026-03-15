@@ -1,8 +1,8 @@
 {
     "template_id":  "game_studio",
-    "display_name":  "Game Studio",
+    "display_name":  "Game Studio (2D Web-First)",
     "version":  "1.0.0",
-    "goal_definition":  "Ship a playable game build with production-ready content pipeline, QA coverage, and community rollout plan.",
+    "goal_definition":  "Ship a playable 2D web-first game with automated Netlify test deployments, placeholder primitive assets, human-art handoff, and release-ready tracks for itch.io and Steam.",
     "coordinator_agent":  {
                               "required":  true,
                               "role":  "Coordinator Agent",
@@ -70,6 +70,7 @@
                             "Narrative Designer",
                             "Level Designer",
                             "Technical Artist",
+                            "Multiplayer Network Engineer",
                             "Reality Checker",
                             "Feedback Synthesizer",
                             "Sprint Prioritizer"
@@ -83,6 +84,32 @@
                                 "owner_role":  "Evidence Collector",
                                 "every_ms":  21600000,
                                 "enabled":  true
+                            },
+                            {
+                                "key":  "studio_netlify_test_deploy",
+                                "title":  "Trigger Netlify test deployment and publish smoke-check notes",
+                                "phase":  "release",
+                                "owner_role":  "Studio Producer",
+                                "every_ms":  28800000,
+                                "action":  {
+                                    "type":  "connector",
+                                    "connector":  "netlify",
+                                    "operation":  "trigger_deploy",
+                                    "estimated_cost":  0,
+                                    "requires_permission":  true,
+                                    "input":  {
+                                        "siteId":  "{{netlify_site_id}}"
+                                    }
+                                },
+                                "enabled":  true
+                            },
+                            {
+                                "key":  "studio_multiplayer_cost_guardrail",
+                                "title":  "Review P2P session health, relay usage, and cost guardrails",
+                                "phase":  "analysis",
+                                "owner_role":  "Studio Producer",
+                                "every_ms":  21600000,
+                                "enabled":  true
                             }
                         ],
     "auto_staffing_policy":  {
@@ -94,38 +121,63 @@
                              },
     "workflow_definition":  {
                                 "phases":  [
-                                               "concept",
-                                               "prototype",
-                                               "production",
-                                               "qa",
-                                               "release"
+                                            "concept",
+                                            "prototype",
+                                            "production",
+                                            "qa",
+                                            "release"
                                            ],
                                 "heartbeat_enabled":  true
                             },
+                "asset_strategy":  {
+                                       "bootstrap_mode":  "primitive_squares_and_shapes",
+                                       "human_art_handoff_required":  true,
+                                       "handoff_directory":  "workspace/assets/final_art"
+                                   },
+                "release_tracks":  [
+                                       {
+                                           "id":  "itch_io_web",
+                                           "title":  "itch.io Web Track",
+                                           "target":  "html5",
+                                           "deploy_source":  "netlify_test_build"
+                                       },
+                                       {
+                                           "id":  "steam_desktop",
+                                           "title":  "Steam Desktop Track",
+                                           "target":  "desktop_wrapper",
+                                           "deploy_source":  "electron_or_tauri_package"
+                                       }
+                                   ],
+                "multiplayer_strategy":  {
+                                             "default_mode":  "p2p_listen_server",
+                                             "host_migration_required":  true,
+                                             "relay_fallback":  "only_when_direct_connection_fails",
+                                             "notes":  "Use P2P by default to minimize hosting cost, with coordinator escalation when relay spend rises."
+                                         },
     "task_breakdown":  [
                            {
                                "id":  "GAME-1",
-                               "title":  "Finalize core loop and game pillars",
+                                           "title":  "Define 2D web-first scope, core loop, and P2P multiplayer assumptions",
                                "phase":  "concept"
                            },
                            {
                                "id":  "GAME-2",
-                               "title":  "Build vertical-slice prototype",
+                                           "title":  "Build vertical-slice prototype using placeholder squares/shapes UI and sprites",
                                "phase":  "prototype"
                            },
                            {
                                "id":  "GAME-3",
-                               "title":  "Produce art/audio content backlog",
+                                           "title":  "Automate Netlify test deploy lane and telemetry smoke checks",
                                "phase":  "production"
                            },
                            {
                                "id":  "GAME-4",
-                               "title":  "Execute QA test matrix and fixes",
+                                           "title":  "Integrate human-delivered art/audio assets and execute QA matrix",
                                "phase":  "qa"
                            },
                            {
                                "id":  "GAME-5",
-                               "title":  "Launch community campaign and release build",
+                                           "title":  "Ship release lanes for itch.io web build and Steam desktop packaging",
                                "phase":  "release"
                            }
                        ],
