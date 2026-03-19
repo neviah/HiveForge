@@ -2926,13 +2926,13 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   addTask({
     title: 'Coordinator + CEO convert goal into execution charter',
     phase: 'strategy',
-    requiredRole: 'Senior Project Manager',
+    requiredRole: 'Coordinator Agent',
     description: `Analyze goal prompt, constraints, and success metrics: ${goalText}`,
   });
   addTask({
     title: 'Define milestone roadmap, owners, and acceptance checks',
     phase: 'strategy',
-    requiredRole: 'Senior Project Manager',
+    requiredRole: 'Coordinator Agent',
     description: 'Produce execution milestones from point A to point B with owner roles and verification gates.',
   });
 
@@ -2943,7 +2943,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
     addTask({
       title: 'Choose free-tier infrastructure footprint for MVP launch',
       phase: 'strategy',
-      requiredRole: 'Senior Project Manager',
+      requiredRole: 'Coordinator Agent',
       description: `Default to the lowest-cost launch stack first: Netlify free tier for hosting and ${databaseTier} for data/auth where applicable.`,
     });
   }
@@ -3207,7 +3207,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   addTask({
     title: 'Publish coordinator operating runbook and autonomous maintenance policy',
     phase: 'maintenance',
-    requiredRole: 'Senior Project Manager',
+    requiredRole: 'Coordinator Agent',
     description: 'Document monitoring, escalation, and long-running business maintenance procedures.',
   });
 
@@ -3215,7 +3215,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
     addTask({
       title: 'Define provider upgrade thresholds and approval gate before moving off free tiers',
       phase: 'maintenance',
-      requiredRole: 'Senior Project Manager',
+      requiredRole: 'Coordinator Agent',
       description: 'Keep Netlify and data providers on free tiers until storage, bandwidth, performance, or compliance thresholds justify an upgrade, then request operator approval before any paid plan change.',
     });
   }
@@ -3459,7 +3459,7 @@ function verifyGoalDelivery(projectState) {
       assignee: null,
       blockedBy: null,
       dependencies: [],
-      requiredRole: 'Senior Project Manager',
+      requiredRole: 'Coordinator Agent',
       executionState: 'queued',
       retryCount: 0,
       lastFailedAt: null,
@@ -6049,7 +6049,7 @@ function refreshWeeklyKpiPlan(projectState, ts = nowIso()) {
   const weekEndMs = Date.parse(weekStart) + (7 * 24 * 60 * 60 * 1000);
   loops.generatedAt = ts;
   loops.objectives = objectiveSpecs.map((spec, idx) => {
-    const ownerRole = String(spec.ownerRole || 'Senior Project Manager');
+    const ownerRole = String(spec.ownerRole || 'Coordinator Agent');
     const kpiOwnerRole = String(spec.kpiOwnerRole || ownerRole);
     const ownerAgentId = findOwnerAgentId(projectState, ownerRole);
     const kpiOwnerAgentId = findOwnerAgentId(projectState, kpiOwnerRole);
