@@ -335,7 +335,7 @@ const WEEKLY_OBJECTIVES_BY_TEMPLATE = {
     {
       key: 'ops_throughput',
       title: 'Stabilize weekly throughput against KPI target',
-      ownerRole: 'Senior Project Manager',
+      ownerRole: 'Coordinator Agent',
       kpiOwnerRole: 'Analytics Reporter',
       slaHours: 48,
       metric: 'weeklyTasksDone',
@@ -468,7 +468,7 @@ const DEFAULT_AUTO_STAFFING_POLICY = {
 const DEFAULT_ROLE_CAPABILITIES = {
   'DevOps Automator': { canDeploy: true, canSpend: true, allowedConnectors: ['netlify', 'github'] },
   'Backend Architect': { canDeploy: false, canSpend: false, allowedConnectors: ['github', 'supabase'] },
-  'Senior Project Manager': { canDeploy: false, canSpend: false, allowedConnectors: [] },
+  'Coordinator Agent': { canDeploy: false, canSpend: false, allowedConnectors: [] },
   'Growth Hacker': { canDeploy: true, canSpend: false, allowedConnectors: ['github', 'netlify', 'email_provider', 'analytics', 'kdp', 'gumroad', 'substack', 'custom_cms'] },
   'Reality Checker': { canDeploy: false, canSpend: false, allowedConnectors: ['analytics'] },
   'Growth Hacker + Content Creator': { canDeploy: false, canSpend: true, allowedConnectors: ['google_ads', 'analytics'] },
@@ -3571,6 +3571,13 @@ function summarizeProjectAutomation(projectState) {
           requiredConnectors: Array.isArray(goalPlan.requiredConnectors) ? goalPlan.requiredConnectors : [],
           missingCredentialServices: Array.isArray(goalPlan.missingCredentialServices) ? goalPlan.missingCredentialServices : [],
           clarificationQuestions: Array.isArray(goalPlan.clarificationQuestions) ? goalPlan.clarificationQuestions : [],
+          readinessChecklist: (() => {
+            if (String(projectState.template).toLowerCase() === 'game_studio') {
+              const tpl = loadTemplateById('game_studio');
+              return Array.isArray(tpl && tpl.readiness_checklist) ? tpl.readiness_checklist : [];
+            }
+            return [];
+          })(),
         }
       : null,
     milestoneCompletion,
