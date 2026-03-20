@@ -4845,13 +4845,24 @@ function roleCapabilitiesFor(projectState, role) {
   return caps || { canDeploy: false, canSpend: false, allowedConnectors: [] };
 }
 
+function agentRoleMatchesRequired(agent, requiredRole) {
+  if (!requiredRole) return true;
+  const required = String(requiredRole).toLowerCase();
+  // Check display role, template role (original), and source role (alias may differ)
+  return [
+    String(agent.role || ''),
+    String(agent.templateRole || ''),
+    String(agent.sourceRole || ''),
+  ].some((r) => r.toLowerCase() === required);
+}
+
 function agentCanHandleTask(projectState, agent, task) {
   if (!agent || agent.isCoordinator || !task) return false;
   const req = taskCapabilityRequirements(task);
   const agentRole = String(agent.role || '').trim();
   const caps = roleCapabilitiesFor(projectState, agentRole);
 
-  if (req.requiredRole && agentRole.toLowerCase() !== String(req.requiredRole).toLowerCase()) {
+  if (req.requiredRole && !agentRoleMatchesRequired(agent, req.requiredRole)) {
     return false;
   }
   if (req.connector) {
@@ -4871,13 +4882,63 @@ function agentCanHandleTask(projectState, agent, task) {
   return true;
 }
 
+function agentCanHandleTaskCapabilitiesOnly(projectState, agent, task) {
+  // Like agentCanHandleTask but ignores requiredRole — used for fallback assignment
+  if (!agent || agent.isCoordinator || !task) return false;
+  const req = taskCapabilityRequirements(task);
+  const agentRole = String(agent.role || '').trim();
+  const caps = roleCapabilitiesFor(projectState, agentRole);
+  if (req.connector) {
+    const allowed = Array.isArray(caps.allowedConnectors)
+      ? caps.allowedConnectors.map((entry) => normalizeConnectorId(entry))
+      : [];
+    if (!allowed.includes(req.connector)) return false;
+  }
+  if (req.canDeploy && !caps.canDeploy) return false;
+  if (req.canSpend && !caps.canSpend) return false;
+  return true;
+}
+
 function pickWorkerAgent(projectState, task = null) {
-  const candidates = projectState.agents.filter((agent) => !agent.isCoordinator);
-  if (!candidates.length) return null;
-  const eligible = task ? candidates.filter((agent) => agentCanHandleTask(projectState, agent, task)) : candidates;
-  if (!eligible.length) return null;
-  const index = projectState.heartbeat?.cycleCount ? projectState.heartbeat.cycleCount % eligible.length : 0;
-  return eligible[index];
+  const candidates = projectState.agents.filter((agent) => !agent.isCoordinator && agent.status === 'idle');
+  const allCandidates = projectState.agents.filter((agent) => !agent.isCoordinator);
+  const pool = candidates.length ? candidates : allCandidates;
+  if (!pool.length) return null;
+
+  if (!task) {
+    const index = projectState.heartbeat?.cycleCount ? projectState.heartbeat.cycleCount % pool.length : 0;
+    return pool[index];
+  }
+
+  // Tier 1: exact role + capability match (preferred)
+  const exactMatch = pool.filter((agent) => agentCanHandleTask(projectState, agent, task));
+  if (exactMatch.length) {
+    const index = projectState.heartbeat?.cycleCount ? projectState.heartbeat.cycleCount % exactMatch.length : 0;
+    return exactMatch[index];
+  }
+
+  // Tier 2: capability match without role restriction (coordinator finds best available)
+  const capMatch = pool.filter((agent) => agentCanHandleTaskCapabilitiesOnly(projectState, agent, task));
+  if (capMatch.length) {
+    const index = projectState.heartbeat?.cycleCount ? projectState.heartbeat.cycleCount % capMatch.length : 0;
+    appendProjectLog(projectState, 'message', {
+      kind: 'agent_role_fallback_assignment',
+      taskId: task.id,
+      requiredRole: task.requiredRole || null,
+      assignedRole: capMatch[index % capMatch.length].role,
+    });
+    return capMatch[index];
+  }
+
+  // Tier 3: any available agent — coordinator picks whoever is free
+  const index = projectState.heartbeat?.cycleCount ? projectState.heartbeat.cycleCount % pool.length : 0;
+  appendProjectLog(projectState, 'message', {
+    kind: 'agent_any_available_assignment',
+    taskId: task.id,
+    requiredRole: task.requiredRole || null,
+    assignedRole: pool[index].role,
+  });
+  return pool[index];
 }
 
 function markTaskAwaitingApproval(projectState, task, reason, detail = {}) {
