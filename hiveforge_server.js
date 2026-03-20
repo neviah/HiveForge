@@ -3557,6 +3557,7 @@ function summarizeProjectAutomation(projectState) {
   ensurePublicationHealthState(projectState);
   ensureApprovalGovernanceState(projectState);
   ensureOperationalLoopState(projectState);
+  ensureProjectConnectorBindings(projectState);
   const publicationDashboard = buildPublicationIncidentDashboard(projectState, {
     windowHours: 24,
     extendedWindowHours: 24 * 7,
@@ -3670,6 +3671,14 @@ function summarizeProjectAutomation(projectState) {
       })),
       recentPolicyDecisionCount: recentPolicyDecisions.length,
       milestoneProgressPct: milestoneCompletion ? milestoneCompletion.pct : null,
+    },
+    connectorBootstrap: {
+      status: projectState.connectorBootstrap.status,
+      lastRunAt: projectState.connectorBootstrap.lastRunAt,
+      completedAt: projectState.connectorBootstrap.completedAt,
+      lastError: projectState.connectorBootstrap.lastError,
+      summary: projectState.connectorBootstrap.summary,
+      bindings: projectState.connectorBindings,
     },
   };
 }
@@ -4176,7 +4185,7 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
 
   const actorRole = String(action.actorRole || '').trim();
   const actor = actorRole ? findRuntimeAgentByRole(projectState, actorRole) : null;
-  const resolvedActionInput = resolveConnectorActionInput(action && action.input && typeof action.input === 'object' ? action.input : {});
+  const resolvedActionInput = resolveConnectorActionInput(action && action.input && typeof action.input === 'object' ? action.input : {}, projectState);
   const siteId = String(resolvedActionInput && resolvedActionInput.siteId ? resolvedActionInput.siteId : '').trim();
   const unresolvedInput = resolvedActionInput && typeof resolvedActionInput === 'object'
     ? hasUnresolvedTemplateValue(resolvedActionInput)
@@ -4710,7 +4719,7 @@ function applyTaskApprovalDecision(projectState, task, decision, note = '', acto
 
   if (decision === 'approve') {
     if (task.autoAction && task.autoAction.type === 'connector') {
-      const resolvedInput = resolveConnectorActionInput(task.autoAction.input && typeof task.autoAction.input === 'object' ? task.autoAction.input : {});
+      const resolvedInput = resolveConnectorActionInput(task.autoAction.input && typeof task.autoAction.input === 'object' ? task.autoAction.input : {}, projectState);
       const unresolvedInput = resolvedInput && typeof resolvedInput === 'object'
         ? hasUnresolvedTemplateValue(resolvedInput)
         : false;
@@ -5608,6 +5617,7 @@ function recoverProjectStateAfterRestart(state) {
   ensureFinanceExceptionState(state);
   ensurePublicationHealthState(state);
   ensureConnectorExecutionState(state);
+  ensureProjectConnectorBindings(state);
   if (!state.goalPlan || typeof state.goalPlan !== 'object') {
     state.goalPlan = goalActionPlanFromPrompt(state.template, state.goal || '', {});
   }
@@ -5787,6 +5797,7 @@ function createProjectFromTemplate({ name, template, goal }) {
       log: []
     }
   };
+  ensureProjectConnectorBindings(state);
 
   const appliedPolicyPack = applyIndustryApprovalPolicyPack(state, {
     templateId: template,
@@ -5905,6 +5916,7 @@ function createProjectFromTemplate({ name, template, goal }) {
   persistProjectState(state);
   startProjectLoop(id);
   runProjectHeartbeat(state, 'startup');
+  autoProvisionProjectConnectors(state).catch(() => {});
   return summarizeProject(state);
 }
 
@@ -6214,20 +6226,129 @@ function saveCredentialMetadata(service, token, budget, config = {}) {
   });
 }
 
-function connectorActionTemplateContext() {
+function projectResourceSlug(raw, fallback = 'project') {
+  const base = String(raw || '').trim().toLowerCase();
+  const slug = base
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+/, '')
+    .replace(/-+$/, '');
+  return slug || String(fallback || 'project');
+}
+
+function defaultProjectConnectorBindings(projectState = null) {
+  const projectName = projectState && projectState.name ? String(projectState.name) : 'project';
+  const projectId = projectState && projectState.id ? String(projectState.id) : crypto.randomUUID();
+  const shortId = projectId.slice(0, 8);
+  const slug = projectResourceSlug(projectName, `project-${shortId}`);
+  return {
+    netlify: {
+      siteId: null,
+      siteName: null,
+      source: null,
+      status: 'pending',
+      lastError: null,
+      updatedAt: null,
+    },
+    supabase: {
+      projectRef: null,
+      projectId: null,
+      projectName: null,
+      source: null,
+      status: 'pending',
+      lastError: null,
+      updatedAt: null,
+    },
+    googleAds: {
+      customerId: null,
+      campaignId: null,
+      campaignName: `${slug}-launch-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`,
+      source: null,
+      status: 'pending',
+      lastError: null,
+      updatedAt: null,
+    },
+    stripe: {
+      projectTag: `${slug}-${shortId}`,
+      workspaceId: crypto.randomUUID(),
+      source: 'project_generated',
+      status: 'ready',
+      lastError: null,
+      updatedAt: nowIso(),
+    },
+  };
+}
+
+function ensureProjectConnectorBindings(projectState) {
+  if (!projectState || typeof projectState !== 'object') return;
+  const defaults = defaultProjectConnectorBindings(projectState);
+  if (!projectState.connectorBindings || typeof projectState.connectorBindings !== 'object') {
+    projectState.connectorBindings = defaults;
+  } else {
+    projectState.connectorBindings = {
+      ...defaults,
+      ...projectState.connectorBindings,
+      netlify: { ...defaults.netlify, ...(projectState.connectorBindings.netlify || {}) },
+      supabase: { ...defaults.supabase, ...(projectState.connectorBindings.supabase || {}) },
+      googleAds: { ...defaults.googleAds, ...(projectState.connectorBindings.googleAds || {}) },
+      stripe: { ...defaults.stripe, ...(projectState.connectorBindings.stripe || {}) },
+    };
+  }
+  if (!projectState.connectorBootstrap || typeof projectState.connectorBootstrap !== 'object') {
+    projectState.connectorBootstrap = {
+      status: 'pending',
+      lastRunAt: null,
+      completedAt: null,
+      lastError: null,
+      summary: null,
+    };
+  }
+}
+
+function projectConnectorTemplateContext(projectState = null) {
+  if (!projectState || typeof projectState !== 'object') {
+    return {
+      netlify_site_id: '',
+      supabase_project_ref: '',
+      google_ads_customer_id: '',
+      google_ads_campaign_id: '',
+      google_ads_campaign_name: '',
+      stripe_project_tag: '',
+      stripe_workspace_id: '',
+    };
+  }
+  ensureProjectConnectorBindings(projectState);
+  const bindings = projectState.connectorBindings || {};
+  return {
+    netlify_site_id: String(bindings.netlify && bindings.netlify.siteId ? bindings.netlify.siteId : '').trim(),
+    supabase_project_ref: String(bindings.supabase && bindings.supabase.projectRef ? bindings.supabase.projectRef : '').trim(),
+    google_ads_customer_id: String(bindings.googleAds && bindings.googleAds.customerId ? bindings.googleAds.customerId : '').trim(),
+    google_ads_campaign_id: String(bindings.googleAds && bindings.googleAds.campaignId ? bindings.googleAds.campaignId : '').trim(),
+    google_ads_campaign_name: String(bindings.googleAds && bindings.googleAds.campaignName ? bindings.googleAds.campaignName : '').trim(),
+    stripe_project_tag: String(bindings.stripe && bindings.stripe.projectTag ? bindings.stripe.projectTag : '').trim(),
+    stripe_workspace_id: String(bindings.stripe && bindings.stripe.workspaceId ? bindings.stripe.workspaceId : '').trim(),
+  };
+}
+
+function connectorActionTemplateContext(projectState = null) {
   const metadata = readCredentialMetadata();
   const netlify = metadata.find((entry) => entry.service === 'netlify') || {};
   const googleAds = metadata.find((entry) => entry.service === 'google_ads') || {};
   const supabase = metadata.find((entry) => entry.service === 'supabase') || {};
+  const projectContext = projectConnectorTemplateContext(projectState);
   return {
-    netlify_site_id: String(netlify && netlify.config && netlify.config.defaultSiteId ? netlify.config.defaultSiteId : '').trim(),
-    google_ads_customer_id: String(googleAds && googleAds.config && googleAds.config.defaultCustomerId ? googleAds.config.defaultCustomerId : '').trim(),
-    supabase_project_ref: String(supabase && supabase.config && supabase.config.defaultProjectRef ? supabase.config.defaultProjectRef : '').trim(),
+    netlify_site_id: projectContext.netlify_site_id || String(netlify && netlify.config && netlify.config.defaultSiteId ? netlify.config.defaultSiteId : '').trim(),
+    google_ads_customer_id: projectContext.google_ads_customer_id || String(googleAds && googleAds.config && googleAds.config.defaultCustomerId ? googleAds.config.defaultCustomerId : '').trim(),
+    supabase_project_ref: projectContext.supabase_project_ref || String(supabase && supabase.config && supabase.config.defaultProjectRef ? supabase.config.defaultProjectRef : '').trim(),
+    google_ads_campaign_id: projectContext.google_ads_campaign_id,
+    google_ads_campaign_name: projectContext.google_ads_campaign_name,
+    stripe_project_tag: projectContext.stripe_project_tag,
+    stripe_workspace_id: projectContext.stripe_workspace_id,
   };
 }
 
-function resolveConnectorActionInput(input = {}) {
-  const context = connectorActionTemplateContext();
+function resolveConnectorActionInput(input = {}, projectState = null) {
+  const context = connectorActionTemplateContext(projectState);
   const resolveValue = (value) => {
     if (typeof value === 'string') {
       let out = value;
@@ -6249,6 +6370,26 @@ function resolveConnectorActionInput(input = {}) {
           .split('{{supabase.default_project_ref}}').join(context.supabase_project_ref)
           .split('{{supabase.project_ref}}').join(context.supabase_project_ref);
       }
+      if (context.google_ads_campaign_id) {
+        out = out
+          .split('{{google_ads_campaign_id}}').join(context.google_ads_campaign_id)
+          .split('{{google_ads.campaign_id}}').join(context.google_ads_campaign_id);
+      }
+      if (context.google_ads_campaign_name) {
+        out = out
+          .split('{{google_ads_campaign_name}}').join(context.google_ads_campaign_name)
+          .split('{{google_ads.campaign_name}}').join(context.google_ads_campaign_name);
+      }
+      if (context.stripe_project_tag) {
+        out = out
+          .split('{{stripe_project_tag}}').join(context.stripe_project_tag)
+          .split('{{stripe.project_tag}}').join(context.stripe_project_tag);
+      }
+      if (context.stripe_workspace_id) {
+        out = out
+          .split('{{stripe_workspace_id}}').join(context.stripe_workspace_id)
+          .split('{{stripe.workspace_id}}').join(context.stripe_workspace_id);
+      }
       return out;
     }
     if (Array.isArray(value)) {
@@ -6264,6 +6405,191 @@ function resolveConnectorActionInput(input = {}) {
     return value;
   };
   return resolveValue(input && typeof input === 'object' ? input : {});
+}
+
+async function autoProvisionProjectConnectors(projectState) {
+  if (!projectState || !projectState.id) return;
+  ensureProjectConnectorBindings(projectState);
+  const bootstrap = projectState.connectorBootstrap;
+  if (bootstrap.status === 'running') return;
+
+  bootstrap.status = 'running';
+  bootstrap.lastRunAt = nowIso();
+  bootstrap.lastError = null;
+  bootstrap.summary = null;
+  persistProjectState(projectState);
+
+  const bindings = projectState.connectorBindings;
+  const creds = readCredentialMetadata();
+  const byService = (service) => creds.find((entry) => entry.service === service) || { connected: false, config: {} };
+  const shortId = String(projectState.id).slice(0, 8);
+  const slug = projectResourceSlug(projectState.name, `project-${shortId}`);
+
+  const markBinding = (key, patch = {}) => {
+    bindings[key] = {
+      ...(bindings[key] || {}),
+      ...patch,
+      updatedAt: nowIso(),
+    };
+  };
+
+  const summarizeStatus = () => ({
+    netlify: bindings.netlify && bindings.netlify.status,
+    supabase: bindings.supabase && bindings.supabase.status,
+    googleAds: bindings.googleAds && bindings.googleAds.status,
+    stripe: bindings.stripe && bindings.stripe.status,
+  });
+
+  try {
+    if (readCredentialToken('netlify')) {
+      if (!String(bindings.netlify.siteId || '').trim()) {
+        const siteName = `${slug}-${shortId}`.slice(0, 60);
+        const createSite = await executeNetlifyConnector({ operation: 'create_site', name: siteName });
+        if (createSite.ok && createSite.data) {
+          markBinding('netlify', {
+            siteId: String(createSite.data.id || '').trim() || null,
+            siteName: String(createSite.data.name || siteName).trim() || siteName,
+            source: 'project_provisioned',
+            status: String(createSite.data.id || '').trim() ? 'ready' : 'needs_selection',
+            lastError: String(createSite.data.id || '').trim() ? null : 'Netlify site was created but no site id was returned.',
+          });
+        } else {
+          const fallback = String(byService('netlify').config && byService('netlify').config.defaultSiteId ? byService('netlify').config.defaultSiteId : '').trim();
+          markBinding('netlify', {
+            siteId: fallback || null,
+            source: fallback ? 'credential_default' : null,
+            status: fallback ? 'ready' : 'blocked',
+            lastError: createSite.message || 'Netlify site provisioning failed.',
+          });
+        }
+      }
+    } else {
+      markBinding('netlify', {
+        status: 'blocked',
+        lastError: 'Netlify token is missing.',
+      });
+    }
+
+    if (readCredentialToken('supabase')) {
+      if (!String(bindings.supabase.projectRef || '').trim()) {
+        const projectName = `${slug}-${shortId}`.slice(0, 63);
+        const createProject = await executeSupabaseConnector({ operation: 'create_project', name: projectName });
+        if (createProject.ok && createProject.data) {
+          const ref = String(createProject.data.ref || createProject.data.projectRef || '').trim();
+          markBinding('supabase', {
+            projectRef: ref || null,
+            projectId: String(createProject.data.id || '').trim() || null,
+            projectName: String(createProject.data.name || projectName).trim() || projectName,
+            source: 'project_provisioned',
+            status: ref ? 'ready' : 'needs_selection',
+            lastError: ref ? null : 'Supabase project was created but no project ref was returned.',
+          });
+        } else {
+          const fallback = String(byService('supabase').config && byService('supabase').config.defaultProjectRef ? byService('supabase').config.defaultProjectRef : '').trim();
+          markBinding('supabase', {
+            projectRef: fallback || null,
+            source: fallback ? 'credential_default' : null,
+            status: fallback ? 'ready' : 'blocked',
+            lastError: createProject.message || 'Supabase project provisioning failed.',
+          });
+        }
+      }
+    } else {
+      markBinding('supabase', {
+        status: 'blocked',
+        lastError: 'Supabase token is missing.',
+      });
+    }
+
+    if (readCredentialToken('google_ads')) {
+      const credentialDefaultCustomer = String(byService('google_ads').config && byService('google_ads').config.defaultCustomerId ? byService('google_ads').config.defaultCustomerId : '').trim();
+      let customerId = String(bindings.googleAds.customerId || '').trim() || credentialDefaultCustomer;
+      if (!customerId) {
+        const discoverCustomers = await executeGoogleAdsConnector({ operation: 'list_accessible_customers' });
+        if (discoverCustomers.ok && discoverCustomers.data && Array.isArray(discoverCustomers.data.resourceNames) && discoverCustomers.data.resourceNames.length > 0) {
+          const first = String(discoverCustomers.data.resourceNames[0] || '').trim();
+          customerId = first.includes('/') ? first.split('/').pop() : first;
+        }
+      }
+
+      const campaignName = String(bindings.googleAds.campaignName || `${slug}-launch-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`).trim();
+      let campaignId = String(bindings.googleAds.campaignId || '').trim();
+      let adsStatus = 'blocked';
+      let adsError = null;
+      if (customerId) {
+        const createCampaign = await executeGoogleAdsConnector({
+          operation: 'create_campaign',
+          projectId: projectState.id,
+          input: {
+            customerId,
+            campaignName,
+            dailyBudget: 20,
+            currency: 'USD',
+          },
+          estimatedCost: 0,
+        });
+        if (createCampaign.ok) {
+          const data = createCampaign.data && typeof createCampaign.data === 'object' ? createCampaign.data : {};
+          campaignId = String(data.campaignId || data.id || campaignId || '').trim();
+          adsStatus = 'ready';
+        } else {
+          adsStatus = 'partial';
+          adsError = createCampaign.message || 'Google Ads campaign provisioning failed.';
+        }
+      } else {
+        adsError = 'No Google Ads customer id available. Set default customer id or connect a developer token for discovery.';
+      }
+      markBinding('googleAds', {
+        customerId: customerId || null,
+        campaignName,
+        campaignId: campaignId || null,
+        source: customerId ? (credentialDefaultCustomer ? 'credential_default' : 'discovered_or_created') : null,
+        status: adsStatus,
+        lastError: adsError,
+      });
+    } else {
+      markBinding('googleAds', {
+        status: 'blocked',
+        lastError: 'Google Ads token is missing.',
+      });
+    }
+
+    const stripeTokenPresent = Boolean(readCredentialToken('stripe'));
+    markBinding('stripe', {
+      projectTag: String(bindings.stripe.projectTag || `${slug}-${shortId}`).trim(),
+      workspaceId: String(bindings.stripe.workspaceId || crypto.randomUUID()).trim(),
+      source: stripeTokenPresent ? 'project_generated' : null,
+      status: stripeTokenPresent ? 'ready' : 'blocked',
+      lastError: stripeTokenPresent ? null : 'Stripe token is missing.',
+    });
+
+    bootstrap.status = 'completed';
+    bootstrap.completedAt = nowIso();
+    bootstrap.summary = summarizeStatus();
+    appendProjectLog(projectState, 'message', {
+      kind: 'project_connector_bootstrap_completed',
+      summary: bootstrap.summary,
+      bindings: projectState.connectorBindings,
+    });
+    appendMessageBusEntry({
+      projectId: projectState.id,
+      from: 'coordinator',
+      to: 'automation_engine',
+      kind: 'project_connector_bootstrap_completed',
+      payload: {
+        summary: bootstrap.summary,
+      },
+    });
+  } catch (err) {
+    bootstrap.status = 'failed';
+    bootstrap.lastError = err.message;
+    appendProjectLog(projectState, 'warning', {
+      kind: 'project_connector_bootstrap_failed',
+      error: err.message,
+    });
+  }
+
+  persistProjectState(projectState);
 }
 
 function normalizeConnectorBootstrapCandidates(service, discovery = {}) {
@@ -7756,6 +8082,45 @@ async function executeNetlifyConnector(options = {}) {
     };
   }
 
+  if (operation === 'create_site') {
+    const requestedName = String(options.name || options.siteName || '').trim();
+    const payload = requestedName ? { name: requestedName } : {};
+    const resp = await fetchWithTimeout('https://api.netlify.com/api/v1/sites', {
+      method: 'POST',
+      headers: {
+        ...headers,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    }, 15000);
+    if (!resp.ok) {
+      return {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: resp.status === 401
+          ? 'Netlify create_site returned HTTP 401 (token is invalid, expired, or missing required scope).'
+          : `Netlify create_site failed with HTTP ${resp.status}.`,
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    const site = await resp.json().catch(() => ({}));
+    return {
+      ok: true,
+      message: `Created Netlify site ${site && site.name ? site.name : requestedName || 'unnamed'}.`,
+      operation,
+      actualCost: 0,
+      data: {
+        id: site?.id || null,
+        name: site?.name || requestedName || null,
+        url: site?.url || null,
+        sslUrl: site?.ssl_url || null,
+        state: site?.state || null,
+      },
+    };
+  }
+
   if (operation === 'trigger_deploy') {
     const siteId = String(options.siteId || '').trim();
     if (!siteId) {
@@ -8472,13 +8837,15 @@ async function executeSupabaseConnector(options = {}) {
     };
   }
 
+  const directHeaders = {
+    Authorization: `Bearer ${token}`,
+    'User-Agent': 'HiveForge',
+  };
+
   const directListProjects = async () => {
     const resp = await fetchWithTimeout('https://api.supabase.com/v1/projects', {
       method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'User-Agent': 'HiveForge',
-      },
+      headers: directHeaders,
     }, 12000);
 
     if (!resp.ok) {
@@ -8511,6 +8878,125 @@ async function executeSupabaseConnector(options = {}) {
       data: { projects },
     };
   };
+
+  const directListOrganizations = async () => {
+    const resp = await fetchWithTimeout('https://api.supabase.com/v1/organizations', {
+      method: 'GET',
+      headers: directHeaders,
+    }, 12000);
+    if (!resp.ok) {
+      return {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: `Supabase list_organizations failed with HTTP ${resp.status}.`,
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    const body = await resp.json().catch(() => []);
+    const organizations = (Array.isArray(body) ? body : []).slice(0, 20).map((org) => ({
+      id: org?.id || null,
+      name: org?.name || null,
+      slug: org?.slug || null,
+    }));
+    return {
+      ok: true,
+      message: `Fetched ${organizations.length} Supabase organization${organizations.length === 1 ? '' : 's'}.`,
+      operation,
+      actualCost: 0,
+      data: { organizations },
+    };
+  };
+
+  const directCreateProject = async () => {
+    const requestedName = String(options.name || (options.input && options.input.name) || '').trim();
+    const region = String(options.region || (options.input && options.input.region) || 'us-east-1').trim() || 'us-east-1';
+    const dbPass = String(options.databasePassword || (options.input && options.input.databasePassword) || `hf-${crypto.randomUUID().replace(/-/g, '').slice(0, 20)}A!`).trim();
+    if (!requestedName) {
+      return {
+        ok: false,
+        errorCode: 'VALIDATION_ERROR',
+        message: 'name is required for Supabase create_project.',
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+
+    let organizationId = String(options.organizationId || (options.input && options.input.organizationId) || '').trim();
+    if (!organizationId) {
+      const orgResult = await directListOrganizations();
+      if (!orgResult.ok) return orgResult;
+      const organizations = Array.isArray(orgResult.data && orgResult.data.organizations) ? orgResult.data.organizations : [];
+      organizationId = String(organizations[0] && organizations[0].id ? organizations[0].id : '').trim();
+      if (!organizationId) {
+        return {
+          ok: false,
+          errorCode: 'VALIDATION_ERROR',
+          message: 'No Supabase organization found for create_project.',
+          operation,
+          actualCost: 0,
+          data: null,
+        };
+      }
+    }
+
+    const resp = await fetchWithTimeout('https://api.supabase.com/v1/projects', {
+      method: 'POST',
+      headers: {
+        ...directHeaders,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: requestedName,
+        organization_id: organizationId,
+        db_pass: dbPass,
+        region,
+      }),
+    }, 25000);
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      return {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: `Supabase create_project failed with HTTP ${resp.status}${text ? `: ${redactSensitive(text).slice(0, 180)}` : ''}.`,
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+
+    const body = await resp.json().catch(() => ({}));
+    return {
+      ok: true,
+      message: `Created Supabase project ${body?.name || requestedName}.`,
+      operation,
+      actualCost: 0,
+      data: {
+        id: body?.id || null,
+        ref: body?.ref || null,
+        name: body?.name || requestedName,
+        status: body?.status || null,
+        organizationId: body?.organization_id || organizationId,
+        region: body?.region || region,
+      },
+    };
+  };
+
+  if (operation === 'list_organizations') {
+    return directListOrganizations();
+  }
+
+  if (operation === 'create_project') {
+    return directCreateProject();
+  }
+
+  if (operation === 'list_projects') {
+    const direct = await directListProjects();
+    if (direct.ok) return direct;
+  }
 
   const gateway = await executeViaApiGateway('supabase', operation, {
     ...(options.input && typeof options.input === 'object' ? options.input : {}),
