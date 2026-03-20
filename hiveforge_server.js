@@ -4569,7 +4569,9 @@ function taskCapabilityRequirements(task) {
     return req;
   }
 
-  const looksLikeDeploy = phase.includes('deploy') || phase.includes('release') || title.includes('deploy') || title.includes('release') || title.includes('launch');
+  // Avoid marking generic planning/strategy tasks as deploy-capability work.
+  // Only explicit deploy/release wording should require canDeploy when no connector action is attached.
+  const looksLikeDeploy = phase.includes('deploy') || phase.includes('release') || title.includes('deploy') || title.includes('release');
   if (looksLikeDeploy) req.canDeploy = true;
   return req;
 }
