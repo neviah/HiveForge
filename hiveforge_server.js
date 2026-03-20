@@ -2683,12 +2683,33 @@ function normalizeRecurringLoopSpec(spec, idx = 0) {
           type: String(spec.action.type || '').trim().toLowerCase(),
           connector: String(spec.action.connector || '').trim().toLowerCase(),
           operation: String(spec.action.operation || '').trim(),
-          estimatedCost: Number.isFinite(Number(spec.action.estimated_cost)) ? Number(spec.action.estimated_cost) : 0,
+          estimatedCost: Number.isFinite(Number(
+            typeof spec.action.estimated_cost !== 'undefined' ? spec.action.estimated_cost : spec.action.estimatedCost
+          ))
+            ? Number(typeof spec.action.estimated_cost !== 'undefined' ? spec.action.estimated_cost : spec.action.estimatedCost)
+            : 0,
           input: spec.action.input && typeof spec.action.input === 'object' ? spec.action.input : {},
-          requiresPermission: Boolean(spec.action.requires_permission),
+          requiresPermission: Boolean(
+            typeof spec.action.requires_permission !== 'undefined'
+              ? spec.action.requires_permission
+              : spec.action.requiresPermission
+          ),
         }
       : null,
   };
+}
+
+function hasUnresolvedTemplateValue(value) {
+  if (typeof value === 'string') {
+    return /\{\{[^{}]+\}\}/.test(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasUnresolvedTemplateValue(entry));
+  }
+  if (value && typeof value === 'object') {
+    return Object.values(value).some((entry) => hasUnresolvedTemplateValue(entry));
+  }
+  return false;
 }
 
 function recurringScheduleForTemplate(templateKey, templateData = null) {
@@ -4151,6 +4172,38 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
 
   const actorRole = String(action.actorRole || '').trim();
   const actor = actorRole ? findRuntimeAgentByRole(projectState, actorRole) : null;
+  const siteId = String(action && action.input && action.input.siteId ? action.input.siteId : '').trim();
+  const unresolvedInput = action && action.input && typeof action.input === 'object'
+    ? hasUnresolvedTemplateValue(action.input)
+    : false;
+  if ((action.connector === 'netlify' && action.operation === 'trigger_deploy' && (!siteId || unresolvedInput)) || unresolvedInput) {
+    const reason = action.connector === 'netlify' && action.operation === 'trigger_deploy'
+      ? 'Recurring deploy needs a concrete Netlify siteId. Configure credentials/settings before running trigger_deploy.'
+      : 'Recurring connector action has unresolved template placeholders in input. Provide concrete connector values before execution.';
+    markTaskAwaitingApproval(projectState, task, reason, {
+      connector: action.connector,
+      operation: action.operation,
+      actorRole,
+      source,
+      requiresPermission: true,
+      executionKey,
+      inputPreview: action.input,
+    });
+    markConnectorExecutionRecord(projectState, executionKey, {
+      status: 'awaiting_approval',
+      lastError: reason,
+    });
+    notifyOperator(projectState, `Approval needed: ${task.title}`, {
+      taskId: task.id,
+      reason,
+      connector: action.connector,
+      operation: action.operation,
+      actorRole,
+    }).catch(() => {});
+    persistProjectState(projectState);
+    return true;
+  }
+
   task.status = 'inprogress';
   task.assignee = actor ? actor.id : null;
   task.startedAt = nowIso();
@@ -5306,6 +5359,28 @@ function runProjectHeartbeat(projectState, source = 'interval') {
     // ── Start next available task ────────────────────────────────────────
     const nextTask = nextRunnableTask(projectState);
     if (nextTask) {
+      if (!appState.llm.reachable) {
+        const reason = `LM Studio is not reachable at ${appState.llm.endpoint}. Start LM Studio and load a model before task execution.`;
+        const lastNoticeMs = Date.parse(projectState.llmOfflineNotifiedAt || '');
+        const shouldNotify = Number.isNaN(lastNoticeMs) || (Date.now() - lastNoticeMs) >= (5 * 60 * 1000);
+        nextTask.lastError = 'llm_unavailable';
+        nextTask.lastProgressAt = beatTs;
+        emitProjectEvent(projectState.id, 'task_update', nextTask);
+        if (shouldNotify) {
+          projectState.llmOfflineNotifiedAt = beatTs;
+          appendProjectLog(projectState, 'warning', {
+            kind: 'llm_unavailable_blocking_task_start',
+            taskId: nextTask.id,
+            reason,
+            endpoint: appState.llm.endpoint,
+          });
+          notifyOperator(projectState, `Task start paused: ${nextTask.title}`, {
+            taskId: nextTask.id,
+            reason,
+            endpoint: appState.llm.endpoint,
+          }).catch(() => {});
+        }
+      } else {
       const assignee = pickWorkerAgent(projectState, nextTask);
       if (assignee) {
         nextTask.status = 'inprogress';
@@ -5379,6 +5454,7 @@ function runProjectHeartbeat(projectState, source = 'interval') {
           reason,
           requirement: req,
         }).catch(() => {});
+      }
       }
     } else {
       // No runnable backlog tasks and no inprogress — check if everything is done
