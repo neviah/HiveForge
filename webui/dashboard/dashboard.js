@@ -1374,7 +1374,6 @@ function resolveDeployUrlFromProjectSettings(data) {
     : null;
   const candidates = [
     netlify && netlify.lastDeployUrl,
-    netlify && netlify.siteUrl,
   ];
   for (const value of candidates) {
     const normalized = normalizeHttpUrl(value);
@@ -1388,11 +1387,40 @@ function resolveDeployUrlFromStatusFile(fileData) {
   if (!text) return '';
   try {
     const parsed = JSON.parse(text);
-    const candidates = [parsed.lastDeployUrl, parsed.siteUrl];
+    const candidates = [parsed.lastDeployUrl];
     for (const value of candidates) {
       const normalized = normalizeHttpUrl(value);
       if (normalized) return normalized;
     }
+  } catch {
+    return '';
+  }
+  return '';
+}
+
+function resolveNetlifyDashboardUrlFromProjectSettings(data) {
+  const bindings = data && data.connectorBootstrap && data.connectorBootstrap.bindings
+    ? data.connectorBootstrap.bindings
+    : null;
+  const netlify = bindings && typeof bindings.netlify === 'object'
+    ? bindings.netlify
+    : null;
+  const siteName = String(netlify && netlify.siteName ? netlify.siteName : '').trim();
+  const siteId = String(netlify && netlify.siteId ? netlify.siteId : '').trim();
+  if (siteName) return `https://app.netlify.com/projects/${encodeURIComponent(siteName)}/deploys`;
+  if (siteId) return `https://app.netlify.com/sites/${encodeURIComponent(siteId)}/deploys`;
+  return '';
+}
+
+function resolveNetlifyDashboardUrlFromStatusFile(fileData) {
+  const text = String(fileData && fileData.content ? fileData.content : '').trim();
+  if (!text) return '';
+  try {
+    const parsed = JSON.parse(text);
+    const siteName = String(parsed.siteName || '').trim();
+    const siteId = String(parsed.siteId || '').trim();
+    if (siteName) return `https://app.netlify.com/projects/${encodeURIComponent(siteName)}/deploys`;
+    if (siteId) return `https://app.netlify.com/sites/${encodeURIComponent(siteId)}/deploys`;
   } catch {
     return '';
   }
@@ -2148,28 +2176,41 @@ const Dashboard = {
     }
 
     let deployUrl = '';
+    let dashboardUrl = '';
+    let statusFile = null;
     try {
       const settings = await fetchProjectSettings(state.activeProject.id);
       deployUrl = resolveDeployUrlFromProjectSettings(settings);
+      dashboardUrl = resolveNetlifyDashboardUrlFromProjectSettings(settings);
     } catch (err) {
       console.warn('[HiveForge] Could not load project settings for deploy URL:', err);
     }
 
     if (!deployUrl) {
       try {
-        const statusFile = await fetchWorkspaceFile(state.activeProject.id, 'deploy_status.json');
+        statusFile = await fetchWorkspaceFile(state.activeProject.id, 'deploy_status.json');
         deployUrl = resolveDeployUrlFromStatusFile(statusFile);
       } catch {
         // Fallback failed; message shown below.
       }
     }
 
-    if (!deployUrl) {
-      showToast('No deploy URL found yet. Trigger a Netlify deploy first.', 'info');
+    if (!dashboardUrl && statusFile) {
+      dashboardUrl = resolveNetlifyDashboardUrlFromStatusFile(statusFile);
+    }
+
+    if (deployUrl) {
+      window.open(deployUrl, '_blank', 'noopener,noreferrer');
       return;
     }
 
-    window.open(deployUrl, '_blank', 'noopener,noreferrer');
+    if (dashboardUrl) {
+      showToast('No successful deploy URL yet. Opening Netlify deploy dashboard.', 'info');
+      window.open(dashboardUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
+    showToast('No Netlify target found yet. Run connector bootstrap first.', 'info');
   },
 
   async saveSettings() {

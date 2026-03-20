@@ -8411,10 +8411,13 @@ async function executeNetlifyConnector(options = {}) {
       15000,
     );
     if (!resp.ok) {
+      const detailedMessage = resp.status === 404
+        ? 'Netlify trigger_deploy failed with HTTP 404. This site likely has no build pipeline yet (for example, Netlify Drop style). Publish at least one deploy from the Netlify dashboard, then retry.'
+        : `Netlify trigger_deploy failed with HTTP ${resp.status}.`;
       return {
         ok: false,
         errorCode: 'CONNECTOR_FAILURE',
-        message: `Netlify trigger_deploy failed with HTTP ${resp.status}.`,
+        message: detailedMessage,
         operation,
         actualCost: 0,
         data: null,
