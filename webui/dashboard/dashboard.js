@@ -34,6 +34,7 @@ const API = {
   credentialPolicy: '/api/credential_policy',
   credentialBudget: '/api/credential_budget',
   credentialAudit: '/api/credential_audit',
+  connectorBootstrap: '/api/connector_bootstrap',
   connectorsExecute: '/api/connectors/execute',
   netlifyDeploy: '/api/netlify/deploy',
   netlifyDeploys: '/api/netlify/deploys',
@@ -185,6 +186,18 @@ const SERVICE_TOKEN_GUIDES = {
     where: 'Mailgun dashboard -> API Security -> API Keys.',
     what: 'Use the private API key (starts with key-).',
   },
+};
+
+const CONNECTOR_BOOTSTRAP_FIELDS = {
+  netlify: 'defaultSiteId',
+  google_ads: 'defaultCustomerId',
+  supabase: 'defaultProjectRef',
+};
+
+const CONNECTOR_BOOTSTRAP_LABELS = {
+  netlify: 'Netlify',
+  google_ads: 'Google Ads',
+  supabase: 'Supabase',
 };
 
 // ─── State ───────────────────────────────────────────────────────────────────
@@ -339,6 +352,17 @@ async function fetchCredentialBudget(projectId) {
 
 async function fetchCredentialAudit(projectId, limit = 80) {
   return apiFetch(`${API.credentialAudit}?projectId=${encodeURIComponent(projectId)}&limit=${encodeURIComponent(limit)}`);
+}
+
+async function fetchConnectorBootstrap(service) {
+  return apiFetch(`${API.connectorBootstrap}?service=${encodeURIComponent(service)}`);
+}
+
+async function saveConnectorBootstrap(service, selectedId) {
+  return apiFetch(API.connectorBootstrap, {
+    method: 'POST',
+    body: JSON.stringify({ service, selectedId }),
+  });
 }
 
 async function fetchWorkspace(projectId, relativePath = '') {
@@ -849,12 +873,28 @@ function renderCredentials(creds, budgetData = null) {
   const grid = document.getElementById('credGrid');
   state.credentials = Array.isArray(creds) ? creds : [];
   renderCredentialBudgetSummary(creds, budgetData);
+
+  const defaultSummary = (serviceId, config) => {
+    if (!config || typeof config !== 'object') return '';
+    if (serviceId === 'netlify') {
+      const value = String(config.defaultSiteId || '').trim();
+      return value ? `Default site: ${esc(value)}` : 'Default site: Not set';
+    }
+    if (serviceId === 'google_ads') {
+      const value = String(config.defaultCustomerId || '').trim();
+      return value ? `Default customer: ${esc(value)}` : 'Default customer: Not set';
+    }
+    if (serviceId === 'supabase') {
+      const value = String(config.defaultProjectRef || '').trim();
+      return value ? `Default project: ${esc(value)}` : 'Default project: Not set';
+    }
+    return '';
+  };
+
   grid.innerHTML = CREDENTIAL_SERVICES.map(svc => {
     const saved = (creds ?? []).find(c => c.service === svc.id);
     const isConnected = Boolean(saved?.connected);
-    const netlifyDefaultSiteId = svc.id === 'netlify'
-      ? String(saved?.config?.defaultSiteId || '').trim()
-      : '';
+    const defaultNote = defaultSummary(svc.id, saved?.config);
     const budget = typeof saved?.budget === 'number' && Number.isFinite(saved.budget)
       ? `$${saved.budget.toLocaleString()}/mo`
       : 'No monthly budget set';
@@ -865,7 +905,7 @@ function renderCredentials(creds, budgetData = null) {
         <div class="hf-cred-name">${svc.label}</div>
         <div class="hf-cred-desc">${svc.desc}</div>
         <div class="hf-cred-budget-note">${budget}</div>
-        ${svc.id === 'netlify' ? `<div class="hf-cred-budget-note">Default site: ${netlifyDefaultSiteId ? esc(netlifyDefaultSiteId) : 'Not set'}</div>` : ''}
+        ${defaultNote ? `<div class="hf-cred-budget-note">${defaultNote}</div>` : ''}
       </div>
       <div class="hf-cred-status">
         ${isConnected ? `<span class="hf-status-badge ok">Connected</span>` : `<span class="hf-status-badge idle">Not set</span>`}
@@ -919,6 +959,43 @@ function renderCredentialBudgetSummary(creds = [], budgetData = null) {
       <div class="hf-cred-summary-value">${svc.monthlySpent ? `$${svc.monthlySpent.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '$0'}${svc.monthlyCap !== null ? ` / $${svc.monthlyCap.toLocaleString()}` : (svc.budget !== null ? ` / $${svc.budget.toLocaleString()}` : '')}</div>
     </div>
   `).join('');
+}
+
+function renderConnectorBootstrapResult(result = null) {
+  const resultEl = document.getElementById('credBootstrapResult');
+  const selectEl = document.getElementById('credBootstrapSelection');
+  if (!resultEl || !selectEl) return;
+
+  if (!result || !Array.isArray(result.candidates)) {
+    resultEl.textContent = 'Pick a service and run discovery.';
+    selectEl.innerHTML = '<option value="">Run discovery first...</option>';
+    return;
+  }
+
+  const candidates = result.candidates;
+  const selectedId = String(result.selectedId || '').trim();
+  const selectedFromList = selectedId && candidates.some((entry) => String(entry.id || '').trim() === selectedId)
+    ? selectedId
+    : '';
+  selectEl.innerHTML = candidates.length
+    ? candidates.map((entry) => {
+      const id = String(entry.id || '').trim();
+      const label = String(entry.label || id || 'target').trim();
+      const suffix = entry.description ? ` — ${String(entry.description)}` : '';
+      const selectedAttr = selectedFromList && selectedFromList === id ? ' selected' : '';
+      return `<option value="${esc(id)}"${selectedAttr}>${esc(label + suffix)}</option>`;
+    }).join('')
+    : '<option value="">No targets discovered</option>';
+
+  const lines = [
+    result.message || `Discovered ${candidates.length} target${candidates.length === 1 ? '' : 's'}.`,
+  ];
+  if (result.autoSelected && selectedId) {
+    lines.push(`Auto-selected ${selectedId} because only one target is available.`);
+  } else if (selectedId) {
+    lines.push(`Current default: ${selectedId}.`);
+  }
+  resultEl.textContent = lines.join(' ');
 }
 
 function renderProjectCredentialPolicy(data) {
@@ -1301,6 +1378,7 @@ async function onSectionActivate(id) {
         const policy = pid ? await fetchCredentialPolicy(pid) : null;
         const audit = pid ? await fetchCredentialAudit(pid) : [];
         renderCredentials(creds, budget);
+        Dashboard.refreshConnectorBootstrapView();
         renderPlatformConnections(await fetchIntegrations());
         renderProjectCredentialPolicy(policy);
         renderCredentialAudit(audit);
@@ -1534,8 +1612,14 @@ const Dashboard = {
     const service = document.getElementById('credService').value;
     const guide   = document.getElementById('credServiceGuide');
     const netlifySiteIdInput = document.getElementById('credNetlifySiteId');
+    const googleAdsCustomerInput = document.getElementById('credGoogleAdsCustomerId');
+    const supabaseProjectInput = document.getElementById('credSupabaseProjectRef');
     const netlifySaved = state.credentials.find((entry) => entry.service === 'netlify');
+    const googleAdsSaved = state.credentials.find((entry) => entry.service === 'google_ads');
+    const supabaseSaved = state.credentials.find((entry) => entry.service === 'supabase');
     const savedDefaultSiteId = String(netlifySaved?.config?.defaultSiteId || '').trim();
+    const savedDefaultCustomerId = String(googleAdsSaved?.config?.defaultCustomerId || '').trim();
+    const savedDefaultProjectRef = String(supabaseSaved?.config?.defaultProjectRef || '').trim();
     if (!guide) return;
     const url   = CONNECTOR_WEBSITES[service];
     const label = SERVICE_LABELS[service];
@@ -1563,12 +1647,34 @@ const Dashboard = {
         netlifySiteIdInput.style.display = 'none';
       }
     }
+    if (googleAdsCustomerInput) {
+      if (service === 'google_ads') {
+        googleAdsCustomerInput.style.display = '';
+        if (!googleAdsCustomerInput.value.trim()) {
+          googleAdsCustomerInput.value = savedDefaultCustomerId;
+        }
+      } else {
+        googleAdsCustomerInput.style.display = 'none';
+      }
+    }
+    if (supabaseProjectInput) {
+      if (service === 'supabase') {
+        supabaseProjectInput.style.display = '';
+        if (!supabaseProjectInput.value.trim()) {
+          supabaseProjectInput.value = savedDefaultProjectRef;
+        }
+      } else {
+        supabaseProjectInput.style.display = 'none';
+      }
+    }
   },
 
   async saveCred() {
     const service = document.getElementById('credService').value;
     const token   = document.getElementById('credToken').value.trim();
     const netlifySiteId = document.getElementById('credNetlifySiteId')?.value.trim() || '';
+    const defaultCustomerId = document.getElementById('credGoogleAdsCustomerId')?.value.trim() || '';
+    const defaultProjectRef = document.getElementById('credSupabaseProjectRef')?.value.trim() || '';
     const budget  = document.getElementById('credBudget').value;
     const status  = document.getElementById('credStatus');
     const existing = state.credentials.find((entry) => entry.service === service);
@@ -1584,6 +1690,8 @@ const Dashboard = {
           token,
           budget: budget ? Number(budget) : null,
           defaultSiteId: service === 'netlify' ? netlifySiteId : undefined,
+          defaultCustomerId: service === 'google_ads' ? defaultCustomerId : undefined,
+          defaultProjectRef: service === 'supabase' ? defaultProjectRef : undefined,
         }),
       });
       document.getElementById('credToken').value   = '';
@@ -1592,12 +1700,104 @@ const Dashboard = {
       if (netlifySiteInput && service !== 'netlify') {
         netlifySiteInput.value = '';
       }
+      const googleAdsInput = document.getElementById('credGoogleAdsCustomerId');
+      if (googleAdsInput && service !== 'google_ads') {
+        googleAdsInput.value = '';
+      }
+      const supabaseInput = document.getElementById('credSupabaseProjectRef');
+      if (supabaseInput && service !== 'supabase') {
+        supabaseInput.value = '';
+      }
       document.getElementById('credService').value = '';
       Dashboard.updateCredServiceGuide();
       showStatus(status, 'Saved!', 'ok');
       onSectionActivate('credentials');
     } catch (err) {
       showStatus(status, `Failed: ${err.message}`, 'error');
+    }
+  },
+
+  refreshConnectorBootstrapView() {
+    const status = document.getElementById('credBootstrapStatus');
+    const resultEl = document.getElementById('credBootstrapResult');
+    const selectEl = document.getElementById('credBootstrapSelection');
+    if (status) status.style.display = 'none';
+    if (resultEl) {
+      const service = String(document.getElementById('credBootstrapService')?.value || 'netlify').trim();
+      const label = CONNECTOR_BOOTSTRAP_LABELS[service] || service;
+      resultEl.textContent = `Pick Discover Targets to load ${label} IDs.`;
+    }
+    if (selectEl) {
+      selectEl.innerHTML = '<option value="">Run discovery first...</option>';
+    }
+  },
+
+  async discoverConnectorBootstrap() {
+    const service = String(document.getElementById('credBootstrapService')?.value || '').trim();
+    const status = document.getElementById('credBootstrapStatus');
+    if (!service) {
+      showStatus(status, 'Select a service.', 'error');
+      return;
+    }
+    showStatus(status, 'Discovering...', 'running');
+    try {
+      const result = await fetchConnectorBootstrap(service);
+      renderConnectorBootstrapResult(result);
+      showStatus(status, result.autoSelected ? 'Discovered and auto-selected.' : 'Discovery complete.', 'ok');
+      if (state.activeProject?.id) {
+        renderCredentials(await fetchCredentials(), await fetchCredentialBudget(state.activeProject.id));
+      } else {
+        renderCredentials(await fetchCredentials(), null);
+      }
+      const inputMap = {
+        netlify: 'credNetlifySiteId',
+        google_ads: 'credGoogleAdsCustomerId',
+        supabase: 'credSupabaseProjectRef',
+      };
+      const inputId = inputMap[service];
+      const input = inputId ? document.getElementById(inputId) : null;
+      if (input && result.selectedId) {
+        input.value = String(result.selectedId);
+      }
+    } catch (err) {
+      showStatus(status, `Discovery failed: ${err.message}`, 'error');
+      renderConnectorBootstrapResult(null);
+    }
+  },
+
+  async applyConnectorBootstrapSelection() {
+    const service = String(document.getElementById('credBootstrapService')?.value || '').trim();
+    const selectedId = String(document.getElementById('credBootstrapSelection')?.value || '').trim();
+    const status = document.getElementById('credBootstrapStatus');
+    if (!service) {
+      showStatus(status, 'Select a service.', 'error');
+      return;
+    }
+    if (!selectedId) {
+      showStatus(status, 'Select a discovered target first.', 'error');
+      return;
+    }
+    showStatus(status, 'Saving default...', 'running');
+    try {
+      await saveConnectorBootstrap(service, selectedId);
+      showStatus(status, 'Default saved.', 'ok');
+      const creds = await fetchCredentials();
+      const budget = state.activeProject?.id ? await fetchCredentialBudget(state.activeProject.id) : null;
+      renderCredentials(creds, budget);
+      Dashboard.updateCredServiceGuide();
+      const field = CONNECTOR_BOOTSTRAP_FIELDS[service];
+      if (field) {
+        const result = {
+          service,
+          candidates: [{ id: selectedId, label: selectedId }],
+          selectedId,
+          autoSelected: false,
+          message: `Saved ${selectedId} as the default target.`,
+        };
+        renderConnectorBootstrapResult(result);
+      }
+    } catch (err) {
+      showStatus(status, `Save failed: ${err.message}`, 'error');
     }
   },
 

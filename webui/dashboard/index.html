@@ -405,6 +405,8 @@
               <div id="credServiceGuide" style="display:none;font-size:0.82rem;color:var(--muted);"></div>
               <input id="credToken" type="password" placeholder="API key / token" style="width:100%;" />
               <input id="credNetlifySiteId" type="text" placeholder="Default Netlify Site ID (recommended)" style="width:100%;display:none;" />
+              <input id="credGoogleAdsCustomerId" type="text" placeholder="Default Google Ads Customer ID (optional)" style="width:100%;display:none;" />
+              <input id="credSupabaseProjectRef" type="text" placeholder="Default Supabase Project Ref (optional)" style="width:100%;display:none;" />
               <input id="credBudget" type="number" placeholder="Spending limit (optional, USD/month)" style="width:100%;" />
               <div class="hf-btn-row" style="margin-bottom:0;">
                 <button class="hf-btn" onclick="Dashboard.saveCred()">Save</button>
@@ -429,6 +431,33 @@
             <div style="font-size:0.82rem;color:var(--muted);margin-bottom:0.75rem;">Connected services: <span id="credConnectedCount">0/6</span></div>
             <div id="credBudgetSummaryList" class="hf-cred-summary-list"></div>
           </div>
+        </div>
+
+        <div class="hf-card" style="max-width:920px;margin-top:1rem;">
+          <h3 style="margin-top:0;">Connector Bootstrap</h3>
+          <p style="color:var(--muted);margin-top:0;">Discover target IDs from connected services and set a default automatically when possible.</p>
+          <div class="hf-grid-2" style="margin-bottom:0.7rem;">
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Service</label>
+              <select id="credBootstrapService" style="width:100%;" onchange="Dashboard.refreshConnectorBootstrapView()">
+                <option value="netlify">Netlify</option>
+                <option value="google_ads">Google Ads</option>
+                <option value="supabase">Supabase</option>
+              </select>
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Discovered Targets</label>
+              <select id="credBootstrapSelection" style="width:100%;">
+                <option value="">Run discovery first…</option>
+              </select>
+            </div>
+          </div>
+          <div class="hf-btn-row" style="margin-bottom:0.8rem;">
+            <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.discoverConnectorBootstrap()">Discover Targets</button>
+            <button class="hf-btn hf-btn sm" onclick="Dashboard.applyConnectorBootstrapSelection()">Save As Default</button>
+            <span id="credBootstrapStatus" class="hf-status" style="display:none;"></span>
+          </div>
+          <div id="credBootstrapResult" style="font-size:0.85rem;color:var(--muted);">Pick a service and run discovery.</div>
         </div>
 
         <div class="hf-card" style="max-width:720px;margin-top:1rem;">

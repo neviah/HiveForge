@@ -6120,6 +6120,49 @@ function readCredentialAudit(projectId, limit = 100) {
   return filtered.slice(-clampInt(limit, 100, 1, 500)).reverse();
 }
 
+function credentialDefaultFieldForService(service) {
+  if (service === 'netlify') return 'defaultSiteId';
+  if (service === 'google_ads') return 'defaultCustomerId';
+  if (service === 'supabase') return 'defaultProjectRef';
+  return null;
+}
+
+function readCredentialDefaultValue(service, metadata = {}) {
+  const config = metadata && metadata.config && typeof metadata.config === 'object' ? metadata.config : {};
+  if (service === 'netlify') {
+    return String(config.defaultSiteId || config.siteId || metadata.defaultSiteId || metadata.siteId || '').trim();
+  }
+  if (service === 'google_ads') {
+    return String(config.defaultCustomerId || config.customerId || metadata.defaultCustomerId || metadata.customerId || '').trim();
+  }
+  if (service === 'supabase') {
+    return String(config.defaultProjectRef || config.projectRef || metadata.defaultProjectRef || metadata.projectRef || '').trim();
+  }
+  return '';
+}
+
+function readCredentialConfig(service, metadata = {}) {
+  return {
+    defaultSiteId: service === 'netlify' ? (readCredentialDefaultValue('netlify', metadata) || null) : null,
+    defaultCustomerId: service === 'google_ads' ? (readCredentialDefaultValue('google_ads', metadata) || null) : null,
+    defaultProjectRef: service === 'supabase' ? (readCredentialDefaultValue('supabase', metadata) || null) : null,
+  };
+}
+
+function applyCredentialDefaultConfig(meta, service, config = {}) {
+  const field = credentialDefaultFieldForService(service);
+  if (!field) return;
+  if (!meta.config || typeof meta.config !== 'object') {
+    meta.config = {};
+  }
+  const nextValue = typeof config[field] === 'string' ? config[field].trim() : null;
+  if (nextValue && nextValue.length > 0) {
+    meta.config[field] = nextValue;
+  } else if (typeof config[field] === 'string') {
+    delete meta.config[field];
+  }
+}
+
 function readCredentialMetadata() {
   ensureCredentialStorage();
   return SUPPORTED_CREDENTIAL_SERVICES.map((service) => {
@@ -6134,16 +6177,7 @@ function readCredentialMetadata() {
       connected,
       budget: monthlyBudget,
       lastUsed: metadata.last_used || metadata.lastUsed || metadata.updated_at || null,
-      config: {
-        defaultSiteId: service === 'netlify'
-          ? String(
-            (metadata.config && (metadata.config.defaultSiteId || metadata.config.siteId))
-              || metadata.defaultSiteId
-              || metadata.siteId
-              || ''
-          ).trim() || null
-          : null,
-      },
+      config: readCredentialConfig(service, metadata),
     };
   });
 }
@@ -6161,17 +6195,7 @@ function saveCredentialMetadata(service, token, budget, config = {}) {
     daily: meta.budget && typeof meta.budget.daily !== 'undefined' ? meta.budget.daily : null,
     monthly: typeof budget === 'number' && Number.isFinite(budget) ? budget : (meta.budget && typeof meta.budget.monthly !== 'undefined' ? meta.budget.monthly : null)
   };
-  if (!meta.config || typeof meta.config !== 'object') {
-    meta.config = {};
-  }
-  if (service === 'netlify') {
-    const defaultSiteId = String(config.defaultSiteId || '').trim();
-    if (defaultSiteId) {
-      meta.config.defaultSiteId = defaultSiteId;
-    } else if (typeof config.defaultSiteId === 'string') {
-      delete meta.config.defaultSiteId;
-    }
-  }
+  applyCredentialDefaultConfig(meta, service, config);
 
   fs.writeFileSync(credentialMetaPath(service), `${JSON.stringify(meta, null, 2)}\n`, 'utf-8');
   if (normalizedToken) {
@@ -6185,7 +6209,7 @@ function saveCredentialMetadata(service, token, budget, config = {}) {
     reason: 'Credential metadata updated.',
     meta: {
       monthlyBudget: meta.budget.monthly,
-      defaultSiteId: service === 'netlify' ? (meta.config.defaultSiteId || null) : null,
+      ...readCredentialConfig(service, meta),
     },
   });
 }
@@ -6193,8 +6217,12 @@ function saveCredentialMetadata(service, token, budget, config = {}) {
 function connectorActionTemplateContext() {
   const metadata = readCredentialMetadata();
   const netlify = metadata.find((entry) => entry.service === 'netlify') || {};
+  const googleAds = metadata.find((entry) => entry.service === 'google_ads') || {};
+  const supabase = metadata.find((entry) => entry.service === 'supabase') || {};
   return {
     netlify_site_id: String(netlify && netlify.config && netlify.config.defaultSiteId ? netlify.config.defaultSiteId : '').trim(),
+    google_ads_customer_id: String(googleAds && googleAds.config && googleAds.config.defaultCustomerId ? googleAds.config.defaultCustomerId : '').trim(),
+    supabase_project_ref: String(supabase && supabase.config && supabase.config.defaultProjectRef ? supabase.config.defaultProjectRef : '').trim(),
   };
 }
 
@@ -6208,6 +6236,18 @@ function resolveConnectorActionInput(input = {}) {
           .split('{{netlify_site_id}}').join(context.netlify_site_id)
           .split('{{netlify.default_site_id}}').join(context.netlify_site_id)
           .split('{{netlify.site_id}}').join(context.netlify_site_id);
+      }
+      if (context.google_ads_customer_id) {
+        out = out
+          .split('{{google_ads_customer_id}}').join(context.google_ads_customer_id)
+          .split('{{google_ads.default_customer_id}}').join(context.google_ads_customer_id)
+          .split('{{google_ads.customer_id}}').join(context.google_ads_customer_id);
+      }
+      if (context.supabase_project_ref) {
+        out = out
+          .split('{{supabase_project_ref}}').join(context.supabase_project_ref)
+          .split('{{supabase.default_project_ref}}').join(context.supabase_project_ref)
+          .split('{{supabase.project_ref}}').join(context.supabase_project_ref);
       }
       return out;
     }
@@ -6224,6 +6264,120 @@ function resolveConnectorActionInput(input = {}) {
     return value;
   };
   return resolveValue(input && typeof input === 'object' ? input : {});
+}
+
+function normalizeConnectorBootstrapCandidates(service, discovery = {}) {
+  const data = discovery && typeof discovery.data === 'object' ? discovery.data : {};
+  if (service === 'netlify') {
+    return (Array.isArray(data.sites) ? data.sites : [])
+      .map((site) => ({
+        id: String(site && site.id ? site.id : '').trim(),
+        label: String(site && site.name ? site.name : site && site.id ? site.id : 'Netlify Site').trim(),
+        description: String(site && (site.url || site.sslUrl || site.state) ? (site.url || site.sslUrl || site.state) : '').trim() || null,
+      }))
+      .filter((entry) => entry.id)
+      .slice(0, 25);
+  }
+
+  if (service === 'google_ads') {
+    return (Array.isArray(data.resourceNames) ? data.resourceNames : [])
+      .map((resourceName) => {
+        const raw = String(resourceName || '').trim();
+        const id = raw.includes('/') ? raw.split('/').pop() : raw;
+        return {
+          id: String(id || '').trim(),
+          label: `Customer ${String(id || '').trim()}`,
+          description: raw || null,
+        };
+      })
+      .filter((entry) => entry.id)
+      .slice(0, 25);
+  }
+
+  if (service === 'supabase') {
+    const projectRows = Array.isArray(data)
+      ? data
+      : (Array.isArray(data.projects)
+        ? data.projects
+        : (Array.isArray(data.items)
+          ? data.items
+          : []));
+    return projectRows
+      .map((row) => {
+        const id = String(row && (row.ref || row.projectRef || row.id || row.projectId) ? (row.ref || row.projectRef || row.id || row.projectId) : '').trim();
+        const label = String(row && (row.name || row.ref || row.id) ? (row.name || row.ref || row.id) : '').trim() || id;
+        const description = String(row && (row.region || row.organizationId || row.orgId) ? (row.region || row.organizationId || row.orgId) : '').trim() || null;
+        return { id, label, description };
+      })
+      .filter((entry) => entry.id)
+      .slice(0, 25);
+  }
+
+  return [];
+}
+
+function setCredentialBootstrapDefault(service, selectedId) {
+  const field = credentialDefaultFieldForService(service);
+  if (!field) {
+    throw new Error('Unsupported bootstrap service');
+  }
+  if (!readCredentialToken(service)) {
+    throw new Error(`Credential token is missing for ${service}.`);
+  }
+  const config = {};
+  config[field] = String(selectedId || '').trim();
+  saveCredentialMetadata(service, '', null, config);
+  const metadata = readCredentialMetadata().find((entry) => entry.service === service);
+  return metadata ? metadata.config : {};
+}
+
+async function discoverConnectorBootstrapTargets(service) {
+  const normalized = String(service || '').trim().toLowerCase();
+  if (!['netlify', 'google_ads', 'supabase'].includes(normalized)) {
+    return { ok: false, error: 'Unsupported bootstrap service' };
+  }
+  if (!readCredentialToken(normalized)) {
+    return { ok: false, error: `Credential token is missing for ${normalized}.` };
+  }
+
+  let discovery;
+  if (normalized === 'netlify') {
+    discovery = await executeNetlifyConnector({ operation: 'list_sites' });
+  } else if (normalized === 'google_ads') {
+    discovery = await executeGoogleAdsConnector({ operation: 'list_accessible_customers' });
+  } else {
+    discovery = await executeSupabaseConnector({ operation: 'list_projects' });
+  }
+
+  if (!discovery || !discovery.ok) {
+    return {
+      ok: false,
+      error: String(discovery && discovery.message ? discovery.message : `Discovery failed for ${normalized}.`),
+      errorCode: discovery && discovery.errorCode ? discovery.errorCode : 'CONNECTOR_FAILURE',
+      service: normalized,
+    };
+  }
+
+  const candidates = normalizeConnectorBootstrapCandidates(normalized, discovery);
+  const metadata = readCredentialMetadata().find((entry) => entry.service === normalized) || { config: {} };
+  const field = credentialDefaultFieldForService(normalized);
+  let selectedId = field && metadata && metadata.config ? String(metadata.config[field] || '').trim() : '';
+  let autoSelected = false;
+
+  if (!selectedId && candidates.length === 1) {
+    selectedId = candidates[0].id;
+    setCredentialBootstrapDefault(normalized, selectedId);
+    autoSelected = true;
+  }
+
+  return {
+    ok: true,
+    service: normalized,
+    candidates,
+    selectedId: selectedId || null,
+    autoSelected,
+    message: `Discovered ${candidates.length} target${candidates.length === 1 ? '' : 's'} for ${normalized}.`,
+  };
 }
 
 function deleteCredentialMetadata(service) {
@@ -9844,6 +9998,62 @@ async function main() {
       return;
     }
 
+    if (pathname === '/api/connector_bootstrap' && req.method === 'GET') {
+      const service = String(urlObj.searchParams.get('service') || '').trim().toLowerCase();
+      if (!['netlify', 'google_ads', 'supabase'].includes(service)) {
+        writeJson(res, { error: 'service must be one of netlify, google_ads, supabase' }, 400);
+        return;
+      }
+      discoverConnectorBootstrapTargets(service).then((result) => {
+        if (!result.ok) {
+          writeJson(res, result, 400);
+          return;
+        }
+        writeJson(res, result);
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
+    if (pathname === '/api/connector_bootstrap' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = parseJsonBodySafe(body);
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+
+        const service = String(payload.service || '').trim().toLowerCase();
+        const selectedId = String(payload.selectedId || payload.resourceId || '').trim();
+        if (!['netlify', 'google_ads', 'supabase'].includes(service)) {
+          writeJson(res, { error: 'service must be one of netlify, google_ads, supabase' }, 400);
+          return;
+        }
+        if (!selectedId) {
+          writeJson(res, { error: 'selectedId is required' }, 400);
+          return;
+        }
+
+        try {
+          const config = setCredentialBootstrapDefault(service, selectedId);
+          writeJson(res, {
+            ok: true,
+            service,
+            selectedId,
+            config,
+          });
+        } catch (err) {
+          writeJson(res, { error: err.message }, 400);
+        }
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
     if (pathname === '/api/credential_budget' && req.method === 'GET') {
       const projectId = String(urlObj.searchParams.get('projectId') || '').trim();
       if (!projectId) {
@@ -9892,6 +10102,8 @@ async function main() {
         const service = String(payload.service || '').trim();
         const token = String(payload.token || '').trim();
         const defaultSiteId = String(payload.defaultSiteId || payload.siteId || '').trim();
+        const defaultCustomerId = String(payload.defaultCustomerId || payload.customerId || '').trim();
+        const defaultProjectRef = String(payload.defaultProjectRef || payload.projectRef || '').trim();
         if (!SUPPORTED_CREDENTIAL_SERVICES.includes(service)) {
           writeJson(res, { error: 'Unsupported credential service' }, 400);
           return;
@@ -9904,11 +10116,17 @@ async function main() {
         const budget = typeof payload.budget === 'number' ? payload.budget : null;
         saveCredentialMetadata(service, token, budget, {
           defaultSiteId: service === 'netlify' ? defaultSiteId : undefined,
+          defaultCustomerId: service === 'google_ads' ? defaultCustomerId : undefined,
+          defaultProjectRef: service === 'supabase' ? defaultProjectRef : undefined,
         });
         writeJson(res, {
           service,
           connected: true,
-          config: service === 'netlify' ? { defaultSiteId: defaultSiteId || null } : {},
+          config: {
+            defaultSiteId: service === 'netlify' ? (defaultSiteId || null) : null,
+            defaultCustomerId: service === 'google_ads' ? (defaultCustomerId || null) : null,
+            defaultProjectRef: service === 'supabase' ? (defaultProjectRef || null) : null,
+          },
         });
       }).catch((err) => {
         writeJson(res, { error: err.message }, 400);
