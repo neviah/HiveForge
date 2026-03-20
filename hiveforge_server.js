@@ -3723,7 +3723,11 @@ function shouldKeepRunningForRecurring(projectState) {
 
 function hasPendingRecurringTask(projectState, recurringKey) {
   return projectState.tasks.some((task) =>
-    task.recurringKey === recurringKey && (task.status === 'backlog' || task.status === 'inprogress')
+    task.recurringKey === recurringKey && (
+      task.status === 'backlog'
+      || task.status === 'inprogress'
+      || (task.status === 'review' && task.executionState === 'awaiting_approval')
+    )
   );
 }
 
@@ -4704,6 +4708,42 @@ function applyTaskApprovalDecision(projectState, task, decision, note = '', acto
   };
 
   if (decision === 'approve') {
+    if (task.autoAction && task.autoAction.type === 'connector') {
+      const unresolvedInput = task.autoAction.input && typeof task.autoAction.input === 'object'
+        ? hasUnresolvedTemplateValue(task.autoAction.input)
+        : false;
+      const netlifySiteId = String(task.autoAction.input && task.autoAction.input.siteId ? task.autoAction.input.siteId : '').trim();
+      if (unresolvedInput || (task.autoAction.connector === 'netlify' && task.autoAction.operation === 'trigger_deploy' && !netlifySiteId)) {
+        const reason = task.autoAction.connector === 'netlify' && task.autoAction.operation === 'trigger_deploy' && !netlifySiteId
+          ? 'Cannot approve recurring deploy until a concrete Netlify siteId is configured.'
+          : 'Cannot approve task while connector input still contains unresolved template placeholders.';
+        task.status = 'review';
+        task.executionState = 'awaiting_approval';
+        task.lastError = reason;
+        task.lastProgressAt = decidedAt;
+        task.pendingApproval = {
+          ...task.pendingApproval,
+          decision: null,
+          decidedAt: null,
+          note: reason,
+          reason,
+        };
+        appendProjectLog(projectState, 'task', {
+          kind: 'task_approval_blocked_missing_connector_config',
+          taskId: task.id,
+          reason,
+        });
+        appendMessageBusEntry({
+          projectId: projectState.id,
+          from: actor,
+          to: 'coordinator',
+          kind: 'task_approval_blocked_missing_connector_config',
+          payload: { taskId: task.id, reason },
+        });
+        emitProjectEvent(projectState.id, 'task_update', task);
+        return;
+      }
+    }
     if (task.autoAction && task.autoAction.type === 'connector') {
       task.autoAction.requiresPermission = false;
     }
