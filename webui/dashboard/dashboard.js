@@ -2413,7 +2413,10 @@ const Dashboard = {
     try {
       const result = await apiFetch(API.netlifyDeploy, {
         method: 'POST',
-        body: JSON.stringify({ siteId }),
+        body: JSON.stringify({
+          siteId,
+          projectId: state.activeProject && state.activeProject.id ? state.activeProject.id : undefined,
+        }),
       });
       if (output) {
         output.textContent = result.ok

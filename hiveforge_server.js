@@ -8387,6 +8387,7 @@ async function executeNetlifyConnector(options = {}) {
 
   if (operation === 'trigger_deploy') {
     const siteId = String(options.siteId || input.siteId || '').trim();
+    const projectId = String(options.projectId || input.projectId || '').trim();
     if (!siteId) {
       return {
         ok: false,
@@ -8411,6 +8412,34 @@ async function executeNetlifyConnector(options = {}) {
       15000,
     );
     if (!resp.ok) {
+      if (resp.status === 404 && projectId) {
+        const workspaceDeploy = await deployProjectWorkspaceToNetlify({
+          siteId,
+          projectId,
+          headers: triggerHeaders,
+          timeoutMs: 20000,
+        });
+        if (workspaceDeploy.ok) {
+          return {
+            ok: true,
+            message: `Workspace deploy published for site ${siteId}.`,
+            operation,
+            actualCost: 0,
+            data: {
+              id: workspaceDeploy.data && workspaceDeploy.data.id ? workspaceDeploy.data.id : null,
+              state: workspaceDeploy.data && workspaceDeploy.data.state ? workspaceDeploy.data.state : 'processing',
+              createdAt: workspaceDeploy.data && workspaceDeploy.data.createdAt ? workspaceDeploy.data.createdAt : null,
+              idempotencyKey: options.idempotencyKey || null,
+              deployUrl: workspaceDeploy.data && workspaceDeploy.data.deployUrl ? workspaceDeploy.data.deployUrl : `https://app.netlify.com/sites/${siteId}/deploys`,
+              siteUrl: workspaceDeploy.data && workspaceDeploy.data.siteUrl ? workspaceDeploy.data.siteUrl : null,
+              publishMode: 'workspace_files',
+              fileCount: workspaceDeploy.data && Number.isFinite(Number(workspaceDeploy.data.fileCount))
+                ? Number(workspaceDeploy.data.fileCount)
+                : null,
+            },
+          };
+        }
+      }
       const detailedMessage = resp.status === 404
         ? 'Netlify trigger_deploy failed with HTTP 404. This site likely has no build pipeline yet (for example, Netlify Drop style). Publish at least one deploy from the Netlify dashboard, then retry.'
         : `Netlify trigger_deploy failed with HTTP ${resp.status}.`;
@@ -8495,6 +8524,163 @@ async function executeNetlifyConnector(options = {}) {
     actualCost: 0,
     data: null,
   };
+}
+
+function collectWorkspaceFilesRecursive(rootDir) {
+  const files = [];
+  const walk = (currentDir) => {
+    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    entries.forEach((entry) => {
+      const abs = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        walk(abs);
+        return;
+      }
+      if (!entry.isFile()) return;
+      const rel = path.relative(rootDir, abs).replace(/\\/g, '/');
+      files.push({ abs, rel });
+    });
+  };
+  walk(rootDir);
+  return files;
+}
+
+function chooseNetlifyPublishDir(projectId) {
+  const rootDir = projectWorkspaceDir(projectId);
+  const gameDir = path.join(rootDir, 'game');
+  const gameIndex = path.join(gameDir, 'index.html');
+  const rootIndex = path.join(rootDir, 'index.html');
+  if (fs.existsSync(gameIndex)) return gameDir;
+  if (fs.existsSync(rootIndex)) return rootDir;
+  return rootDir;
+}
+
+function encodePathForNetlifyUrl(filePath) {
+  return String(filePath || '')
+    .split('/')
+    .map((part) => encodeURIComponent(part))
+    .join('/');
+}
+
+async function deployProjectWorkspaceToNetlify({ siteId, projectId, headers, timeoutMs = 20000 }) {
+  try {
+    const publishDir = chooseNetlifyPublishDir(projectId);
+    if (!fs.existsSync(publishDir) || !fs.statSync(publishDir).isDirectory()) {
+      return {
+        ok: false,
+        error: `Publish directory does not exist: ${publishDir}`,
+      };
+    }
+
+    const files = collectWorkspaceFilesRecursive(publishDir);
+    if (!files.length) {
+      return {
+        ok: false,
+        error: 'Publish directory has no files to deploy.',
+      };
+    }
+
+    const fileDigestMap = {};
+    const digestToFile = new Map();
+    const digestToPaths = new Map();
+    files.forEach(({ abs, rel }) => {
+      const raw = fs.readFileSync(abs);
+      const sha = crypto.createHash('sha1').update(raw).digest('hex');
+      fileDigestMap[rel] = sha;
+      if (!digestToFile.has(sha)) digestToFile.set(sha, abs);
+      const list = digestToPaths.get(sha) || [];
+      list.push(rel);
+      digestToPaths.set(sha, list);
+    });
+
+    const createDeployResp = await fetchWithTimeout(
+      `https://api.netlify.com/api/v1/sites/${encodeURIComponent(siteId)}/deploys`,
+      {
+        method: 'POST',
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ files: fileDigestMap }),
+      },
+      timeoutMs,
+    );
+
+    if (!createDeployResp.ok) {
+      return {
+        ok: false,
+        error: `Netlify file deploy init failed with HTTP ${createDeployResp.status}.`,
+      };
+    }
+
+    const deployBody = await createDeployResp.json().catch(() => ({}));
+    const deployId = String(deployBody && deployBody.id ? deployBody.id : '').trim();
+    if (!deployId) {
+      return {
+        ok: false,
+        error: 'Netlify file deploy did not return a deploy id.',
+      };
+    }
+
+    const requiredDigests = Array.isArray(deployBody && deployBody.required)
+      ? deployBody.required
+      : [];
+
+    for (const digest of requiredDigests) {
+      const digestKey = String(digest || '').trim();
+      if (!digestKey) continue;
+      const sourceFile = digestToFile.get(digestKey);
+      const targetPaths = digestToPaths.get(digestKey) || [];
+      if (!sourceFile || !targetPaths.length) continue;
+      const fileContent = fs.readFileSync(sourceFile);
+      for (const relPath of targetPaths) {
+        const uploadResp = await fetchWithTimeout(
+          `https://api.netlify.com/api/v1/deploys/${encodeURIComponent(deployId)}/files/${encodePathForNetlifyUrl(relPath)}`,
+          {
+            method: 'PUT',
+            headers: {
+              ...headers,
+              'Content-Type': 'application/octet-stream',
+            },
+            body: fileContent,
+          },
+          timeoutMs,
+        );
+        if (!uploadResp.ok) {
+          return {
+            ok: false,
+            error: `Netlify file upload failed for ${relPath} (HTTP ${uploadResp.status}).`,
+          };
+        }
+      }
+    }
+
+    const verifyResp = await fetchWithTimeout(
+      `https://api.netlify.com/api/v1/deploys/${encodeURIComponent(deployId)}`,
+      { headers },
+      timeoutMs,
+    );
+    const verifyBody = verifyResp.ok ? await verifyResp.json().catch(() => ({})) : {};
+    const siteUrl = String((verifyBody && (verifyBody.ssl_url || verifyBody.url)) || '').trim();
+    const deployUrl = String((verifyBody && (verifyBody.deploy_url || verifyBody.ssl_url || verifyBody.url)) || '').trim();
+
+    return {
+      ok: true,
+      data: {
+        id: deployId,
+        state: verifyBody && verifyBody.state ? verifyBody.state : 'processing',
+        createdAt: verifyBody && verifyBody.created_at ? verifyBody.created_at : null,
+        deployUrl: deployUrl || `https://app.netlify.com/sites/${siteId}/deploys/${deployId}`,
+        siteUrl: siteUrl || null,
+        fileCount: files.length,
+      },
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: redactSensitive(err.message || 'Netlify workspace deploy failed.'),
+    };
+  }
 }
 
 async function executeGithubConnector(options = {}) {
@@ -11413,7 +11599,7 @@ async function main() {
           }
         }
         try {
-          const result = await executeNetlifyConnector({ operation: 'trigger_deploy', siteId, idempotencyKey });
+          const result = await executeNetlifyConnector({ operation: 'trigger_deploy', siteId, idempotencyKey, projectId: projectId || undefined });
           const reconciliation = result.ok
             ? await reconcileConnectorExecution('netlify', 'trigger_deploy', result, { siteId, projectId, idempotencyKey })
             : null;
