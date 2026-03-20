@@ -5922,7 +5922,62 @@ function createProjectFromTemplate({ name, template, goal }) {
   return summarizeProject(state);
 }
 
+async function cleanupProjectConnectorResources(projectSnapshot = null) {
+  if (!projectSnapshot || typeof projectSnapshot !== 'object') return;
+  const bindings = projectSnapshot.connectorBindings && typeof projectSnapshot.connectorBindings === 'object'
+    ? projectSnapshot.connectorBindings
+    : {};
+
+  if (bindings.netlify && bindings.netlify.source === 'project_provisioned' && bindings.netlify.siteId) {
+    const netlifyDelete = await executeNetlifyConnector({
+      operation: 'delete_site',
+      siteId: String(bindings.netlify.siteId || '').trim(),
+    });
+    if (!netlifyDelete.ok) {
+      appendLog(`Cleanup warning: failed to delete Netlify site ${bindings.netlify.siteId} for project ${projectSnapshot.id}: ${netlifyDelete.message}`);
+    }
+  }
+
+  if (bindings.supabase && bindings.supabase.source === 'project_provisioned' && (bindings.supabase.projectRef || bindings.supabase.projectId)) {
+    const supabaseDelete = await executeSupabaseConnector({
+      operation: 'delete_project',
+      projectRef: String(bindings.supabase.projectRef || bindings.supabase.projectId || '').trim(),
+    });
+    if (!supabaseDelete.ok) {
+      appendLog(`Cleanup warning: failed to delete Supabase project ${bindings.supabase.projectRef || bindings.supabase.projectId} for project ${projectSnapshot.id}: ${supabaseDelete.message}`);
+    }
+  }
+
+  if (bindings.googleAds && bindings.googleAds.campaignId && bindings.googleAds.customerId && bindings.googleAds.status === 'ready') {
+    const adsPause = await executeGoogleAdsConnector({
+      operation: 'pause_campaign',
+      projectId: String(projectSnapshot.id || '').trim(),
+      input: {
+        customerId: String(bindings.googleAds.customerId || '').trim(),
+        campaignId: String(bindings.googleAds.campaignId || '').trim(),
+      },
+      estimatedCost: 0,
+    });
+    if (!adsPause.ok) {
+      appendLog(`Cleanup warning: failed to pause Google Ads campaign ${bindings.googleAds.campaignId} for project ${projectSnapshot.id}: ${adsPause.message}`);
+    }
+  }
+}
+
 function removeProject(projectId) {
+  const runtime = projectRuntimes.get(projectId);
+  const projectSnapshot = runtime && runtime.state
+    ? {
+        id: runtime.state.id,
+        name: runtime.state.name,
+        connectorBindings: runtime.state.connectorBindings,
+      }
+    : null;
+
+  cleanupProjectConnectorResources(projectSnapshot).catch((err) => {
+    appendLog(`Cleanup warning: project ${projectId} connector cleanup failed: ${err.message}`);
+  });
+
   cancelProjectExecution(projectId, 'project_deleted', false);
   stopProjectLoop(projectId);
   projectRuntimes.delete(projectId);
@@ -8123,6 +8178,42 @@ async function executeNetlifyConnector(options = {}) {
     };
   }
 
+  if (operation === 'delete_site') {
+    const siteId = String(options.siteId || '').trim();
+    if (!siteId) {
+      return {
+        ok: false,
+        errorCode: 'VALIDATION_ERROR',
+        message: 'siteId is required for delete_site.',
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    const resp = await fetchWithTimeout(
+      `https://api.netlify.com/api/v1/sites/${encodeURIComponent(siteId)}`,
+      { method: 'DELETE', headers },
+      15000,
+    );
+    if (!resp.ok) {
+      return {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: `Netlify delete_site failed with HTTP ${resp.status}.`,
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    return {
+      ok: true,
+      message: `Deleted Netlify site ${siteId}.`,
+      operation,
+      actualCost: 0,
+      data: { siteId },
+    };
+  }
+
   if (operation === 'trigger_deploy') {
     const siteId = String(options.siteId || '').trim();
     if (!siteId) {
@@ -8987,12 +9078,52 @@ async function executeSupabaseConnector(options = {}) {
     };
   };
 
+  const directDeleteProject = async () => {
+    const projectRef = String(options.projectRef || (options.input && options.input.projectRef) || '').trim();
+    if (!projectRef) {
+      return {
+        ok: false,
+        errorCode: 'VALIDATION_ERROR',
+        message: 'projectRef is required for delete_project.',
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    const resp = await fetchWithTimeout(`https://api.supabase.com/v1/projects/${encodeURIComponent(projectRef)}`, {
+      method: 'DELETE',
+      headers: directHeaders,
+    }, 25000);
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      return {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: `Supabase delete_project failed with HTTP ${resp.status}${text ? `: ${redactSensitive(text).slice(0, 180)}` : ''}.`,
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    return {
+      ok: true,
+      message: `Deleted Supabase project ${projectRef}.`,
+      operation,
+      actualCost: 0,
+      data: { projectRef },
+    };
+  };
+
   if (operation === 'list_organizations') {
     return directListOrganizations();
   }
 
   if (operation === 'create_project') {
     return directCreateProject();
+  }
+
+  if (operation === 'delete_project') {
+    return directDeleteProject();
   }
 
   if (operation === 'list_projects') {
