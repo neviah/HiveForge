@@ -1350,6 +1350,55 @@ function renderWorkspacePreview(data) {
   preview.textContent = String(data.content || '').trim() || 'File is empty.';
 }
 
+function normalizeHttpUrl(candidate) {
+  const raw = String(candidate || '').trim();
+  if (!raw) return '';
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const parsed = new URL(withProtocol);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return '';
+    }
+    return parsed.toString();
+  } catch {
+    return '';
+  }
+}
+
+function resolveDeployUrlFromProjectSettings(data) {
+  const bindings = data && data.connectorBootstrap && data.connectorBootstrap.bindings
+    ? data.connectorBootstrap.bindings
+    : null;
+  const netlify = bindings && typeof bindings.netlify === 'object'
+    ? bindings.netlify
+    : null;
+  const candidates = [
+    netlify && netlify.lastDeployUrl,
+    netlify && netlify.siteUrl,
+  ];
+  for (const value of candidates) {
+    const normalized = normalizeHttpUrl(value);
+    if (normalized) return normalized;
+  }
+  return '';
+}
+
+function resolveDeployUrlFromStatusFile(fileData) {
+  const text = String(fileData && fileData.content ? fileData.content : '').trim();
+  if (!text) return '';
+  try {
+    const parsed = JSON.parse(text);
+    const candidates = [parsed.lastDeployUrl, parsed.siteUrl];
+    for (const value of candidates) {
+      const normalized = normalizeHttpUrl(value);
+      if (normalized) return normalized;
+    }
+  } catch {
+    return '';
+  }
+  return '';
+}
+
 // ─── Navigation ───────────────────────────────────────────────────────────────
 
 function activateSection(id) {
@@ -2090,6 +2139,37 @@ const Dashboard = {
     } catch (err) {
       showToast(`Could not preview file: ${err.message}`, 'error');
     }
+  },
+
+  async openActiveProjectDeployUrl() {
+    if (!state.activeProject) {
+      showToast('No active project selected.', 'error');
+      return;
+    }
+
+    let deployUrl = '';
+    try {
+      const settings = await fetchProjectSettings(state.activeProject.id);
+      deployUrl = resolveDeployUrlFromProjectSettings(settings);
+    } catch (err) {
+      console.warn('[HiveForge] Could not load project settings for deploy URL:', err);
+    }
+
+    if (!deployUrl) {
+      try {
+        const statusFile = await fetchWorkspaceFile(state.activeProject.id, 'deploy_status.json');
+        deployUrl = resolveDeployUrlFromStatusFile(statusFile);
+      } catch {
+        // Fallback failed; message shown below.
+      }
+    }
+
+    if (!deployUrl) {
+      showToast('No deploy URL found yet. Trigger a Netlify deploy first.', 'info');
+      return;
+    }
+
+    window.open(deployUrl, '_blank', 'noopener,noreferrer');
   },
 
   async saveSettings() {
