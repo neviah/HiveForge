@@ -972,11 +972,13 @@ function renderCredentialBudgetSummary(creds = [], budgetData = null) {
 function renderConnectorBootstrapResult(result = null) {
   const resultEl = document.getElementById('credBootstrapResult');
   const selectEl = document.getElementById('credBootstrapSelection');
+  const tableEl = document.getElementById('credBootstrapTable');
   if (!resultEl || !selectEl) return;
 
   if (!result || !Array.isArray(result.candidates)) {
     resultEl.textContent = 'Pick a service and run discovery.';
     selectEl.innerHTML = '<option value="">Run discovery first...</option>';
+    if (tableEl) tableEl.innerHTML = '';
     return;
   }
 
@@ -1004,6 +1006,43 @@ function renderConnectorBootstrapResult(result = null) {
     lines.push(`Current default: ${selectedId}.`);
   }
   resultEl.textContent = lines.join(' ');
+
+  if (tableEl) {
+    const serviceLabel = CONNECTOR_BOOTSTRAP_LABELS[String(result.service || '').trim()] || String(result.service || 'Service');
+    const rows = [{
+      service: serviceLabel,
+      status: result.autoSelected ? 'auto-selected' : (selectedId ? 'selected' : 'needs selection'),
+      selectedId: selectedId || '—',
+      candidates: String(candidates.length),
+    }];
+    tableEl.innerHTML = renderConnectorBootstrapTable(rows);
+  }
+}
+
+function renderConnectorBootstrapTable(rows = []) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  if (!safeRows.length) return '';
+  const body = safeRows.map((row) => `
+    <tr>
+      <td style="padding:0.4rem 0.5rem;border-bottom:1px solid var(--card-border);">${esc(String(row.service || 'Service'))}</td>
+      <td style="padding:0.4rem 0.5rem;border-bottom:1px solid var(--card-border);">${esc(String(row.status || 'unknown'))}</td>
+      <td style="padding:0.4rem 0.5rem;border-bottom:1px solid var(--card-border);">${esc(String(row.selectedId || '—'))}</td>
+      <td style="padding:0.4rem 0.5rem;border-bottom:1px solid var(--card-border);text-align:right;">${esc(String(row.candidates || '0'))}</td>
+    </tr>
+  `).join('');
+  return `
+    <table style="width:100%;border-collapse:collapse;font-size:0.82rem;">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:0.38rem 0.5rem;border-bottom:1px solid var(--card-border);">Service</th>
+          <th style="text-align:left;padding:0.38rem 0.5rem;border-bottom:1px solid var(--card-border);">Status</th>
+          <th style="text-align:left;padding:0.38rem 0.5rem;border-bottom:1px solid var(--card-border);">Selected Default</th>
+          <th style="text-align:right;padding:0.38rem 0.5rem;border-bottom:1px solid var(--card-border);">Candidates</th>
+        </tr>
+      </thead>
+      <tbody>${body}</tbody>
+    </table>
+  `;
 }
 
 function renderProjectCredentialPolicy(data) {
@@ -1729,6 +1768,7 @@ const Dashboard = {
     const status = document.getElementById('credBootstrapStatus');
     const resultEl = document.getElementById('credBootstrapResult');
     const selectEl = document.getElementById('credBootstrapSelection');
+    const tableEl = document.getElementById('credBootstrapTable');
     if (status) status.style.display = 'none';
     if (resultEl) {
       const service = String(document.getElementById('credBootstrapService')?.value || 'netlify').trim();
@@ -1737,6 +1777,9 @@ const Dashboard = {
     }
     if (selectEl) {
       selectEl.innerHTML = '<option value="">Run discovery first...</option>';
+    }
+    if (tableEl) {
+      tableEl.innerHTML = '';
     }
   },
 
@@ -1812,6 +1855,7 @@ const Dashboard = {
   async autoBootstrapAllConnectors() {
     const status = document.getElementById('credBootstrapStatus');
     const resultEl = document.getElementById('credBootstrapResult');
+    const tableEl = document.getElementById('credBootstrapTable');
     showStatus(status, 'Running auto bootstrap...', 'running');
     try {
       const result = await autoBootstrapConnectors();
@@ -1835,6 +1879,23 @@ const Dashboard = {
         const header = `Auto bootstrap finished (${Number(summary.selected || 0)}/${Number(summary.total || rows.length || 3)} defaults set).`;
         resultEl.textContent = [header, ...lineItems].join(' ');
       }
+      if (tableEl) {
+        const tableRows = rows.map((entry) => {
+          const service = CONNECTOR_BOOTSTRAP_LABELS[String(entry.service || '').trim()] || String(entry.service || 'service');
+          const statusLabel = !entry.ok
+            ? 'blocked'
+            : (entry.autoSelected
+              ? 'auto-selected'
+              : (entry.selectedId ? 'selected' : 'needs selection'));
+          return {
+            service,
+            status: statusLabel,
+            selectedId: entry.selectedId || '—',
+            candidates: Number(entry.candidatesCount || 0),
+          };
+        });
+        tableEl.innerHTML = renderConnectorBootstrapTable(tableRows);
+      }
 
       const creds = await fetchCredentials();
       const budget = state.activeProject?.id ? await fetchCredentialBudget(state.activeProject.id) : null;
@@ -1846,6 +1907,9 @@ const Dashboard = {
       showStatus(status, `Auto bootstrap failed: ${err.message}`, 'error');
       if (resultEl) {
         resultEl.textContent = `Auto bootstrap failed: ${err.message}`;
+      }
+      if (tableEl) {
+        tableEl.innerHTML = '';
       }
     }
   },
