@@ -6380,6 +6380,54 @@ async function discoverConnectorBootstrapTargets(service) {
   };
 }
 
+async function autoBootstrapConnectorTargets() {
+  const services = ['netlify', 'google_ads', 'supabase'];
+  const results = [];
+
+  for (const service of services) {
+    try {
+      const result = await discoverConnectorBootstrapTargets(service);
+      results.push({
+        service,
+        ok: Boolean(result && result.ok),
+        candidatesCount: Array.isArray(result && result.candidates) ? result.candidates.length : 0,
+        selectedId: result && result.selectedId ? String(result.selectedId) : null,
+        autoSelected: Boolean(result && result.autoSelected),
+        message: result && result.message ? String(result.message) : null,
+        error: result && result.ok ? null : String((result && (result.error || result.message)) || 'Discovery failed.'),
+        errorCode: result && result.errorCode ? String(result.errorCode) : null,
+      });
+    } catch (err) {
+      results.push({
+        service,
+        ok: false,
+        candidatesCount: 0,
+        selectedId: null,
+        autoSelected: false,
+        message: null,
+        error: err.message,
+        errorCode: 'UNEXPECTED_ERROR',
+      });
+    }
+  }
+
+  const succeeded = results.filter((entry) => entry.ok).length;
+  const autoSelected = results.filter((entry) => entry.autoSelected).length;
+  const selected = results.filter((entry) => Boolean(entry.selectedId)).length;
+  return {
+    ok: true,
+    results,
+    summary: {
+      total: results.length,
+      succeeded,
+      failed: results.length - succeeded,
+      autoSelected,
+      selected,
+    },
+    message: `Auto bootstrap completed: ${selected}/${results.length} services now have a selected default (${autoSelected} newly auto-selected).`,
+  };
+}
+
 function deleteCredentialMetadata(service) {
   const meta = safeJsonRead(credentialMetaPath(service), { service });
   meta.connected = false;
@@ -10048,6 +10096,15 @@ async function main() {
         } catch (err) {
           writeJson(res, { error: err.message }, 400);
         }
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
+    if (pathname === '/api/connector_bootstrap/auto' && req.method === 'POST') {
+      autoBootstrapConnectorTargets().then((result) => {
+        writeJson(res, result);
       }).catch((err) => {
         writeJson(res, { error: err.message }, 400);
       });

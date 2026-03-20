@@ -35,6 +35,7 @@ const API = {
   credentialBudget: '/api/credential_budget',
   credentialAudit: '/api/credential_audit',
   connectorBootstrap: '/api/connector_bootstrap',
+  connectorBootstrapAuto: '/api/connector_bootstrap/auto',
   connectorsExecute: '/api/connectors/execute',
   netlifyDeploy: '/api/netlify/deploy',
   netlifyDeploys: '/api/netlify/deploys',
@@ -362,6 +363,13 @@ async function saveConnectorBootstrap(service, selectedId) {
   return apiFetch(API.connectorBootstrap, {
     method: 'POST',
     body: JSON.stringify({ service, selectedId }),
+  });
+}
+
+async function autoBootstrapConnectors() {
+  return apiFetch(API.connectorBootstrapAuto, {
+    method: 'POST',
+    body: JSON.stringify({}),
   });
 }
 
@@ -1798,6 +1806,47 @@ const Dashboard = {
       }
     } catch (err) {
       showStatus(status, `Save failed: ${err.message}`, 'error');
+    }
+  },
+
+  async autoBootstrapAllConnectors() {
+    const status = document.getElementById('credBootstrapStatus');
+    const resultEl = document.getElementById('credBootstrapResult');
+    showStatus(status, 'Running auto bootstrap...', 'running');
+    try {
+      const result = await autoBootstrapConnectors();
+      const rows = Array.isArray(result?.results) ? result.results : [];
+      const summary = result?.summary || {};
+      const lineItems = rows.map((entry) => {
+        const service = CONNECTOR_BOOTSTRAP_LABELS[String(entry.service || '').trim()] || String(entry.service || 'service');
+        if (!entry.ok) {
+          return `${service}: blocked (${entry.error || 'discovery failed'})`;
+        }
+        if (entry.autoSelected && entry.selectedId) {
+          return `${service}: auto-selected ${entry.selectedId}`;
+        }
+        if (entry.selectedId) {
+          return `${service}: existing default ${entry.selectedId}`;
+        }
+        return `${service}: ${Number(entry.candidatesCount || 0)} candidates, selection required`;
+      });
+
+      if (resultEl) {
+        const header = `Auto bootstrap finished (${Number(summary.selected || 0)}/${Number(summary.total || rows.length || 3)} defaults set).`;
+        resultEl.textContent = [header, ...lineItems].join(' ');
+      }
+
+      const creds = await fetchCredentials();
+      const budget = state.activeProject?.id ? await fetchCredentialBudget(state.activeProject.id) : null;
+      renderCredentials(creds, budget);
+      Dashboard.updateCredServiceGuide();
+      showStatus(status, result?.message || 'Auto bootstrap complete.', 'ok');
+      showToast(`Auto bootstrap complete: ${Number(summary.autoSelected || 0)} newly auto-selected.`, 'ok');
+    } catch (err) {
+      showStatus(status, `Auto bootstrap failed: ${err.message}`, 'error');
+      if (resultEl) {
+        resultEl.textContent = `Auto bootstrap failed: ${err.message}`;
+      }
     }
   },
 
