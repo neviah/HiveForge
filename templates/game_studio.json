@@ -75,6 +75,17 @@
                             "Feedback Synthesizer",
                             "Sprint Prioritizer"
                         ],
+    "role_capabilities":  {
+                              "Backend Architect":  {
+                                                          "can_deploy":  true,
+                                                          "can_spend":  false,
+                                                          "allowed_connectors":  [
+                                                                                     "github",
+                                                                                     "netlify",
+                                                                                     "supabase"
+                                                                                 ]
+                                                      }
+                          },
     "operating_mode":  "finite_delivery",
     "recurring_loops":  [
                             {
@@ -89,7 +100,7 @@
                                 "key":  "studio_netlify_test_deploy",
                                 "title":  "Trigger Netlify test deployment and publish smoke-check notes",
                                 "phase":  "release",
-                                "owner_role":  "Studio Producer",
+                                "owner_role":  "Backend Architect",
                                 "every_ms":  28800000,
                                 "action":  {
                                     "type":  "connector",
@@ -183,6 +194,38 @@
                                "phase":  "release"
                            }
                        ],
+    "readiness_checklist": [
+        {
+            "id": "nat_traversal",
+            "title": "NAT Traversal/Relay Fallback",
+            "description": "STUN/TURN relay fallback tested, relay budget alarms configured, P2P connection success rate tracked."
+        },
+        {
+            "id": "host_migration",
+            "title": "Host Migration",
+            "description": "Session continuity rules defined and tested for host disconnects."
+        },
+        {
+            "id": "relay_budget",
+            "title": "Relay Budget Guardrail",
+            "description": "Relay usage tracked, coordinator escalation on spend spikes."
+        },
+        {
+            "id": "steam_compliance",
+            "title": "Steam Compliance Checklist",
+            "description": "Build signing, store assets, QA, and compliance requirements met for Steam release."
+        },
+        {
+            "id": "itch_lane",
+            "title": "itch.io Release Lane",
+            "description": "Web build tested and ready for itch.io deployment."
+        },
+        {
+            "id": "telemetry",
+            "title": "Multiplayer Telemetry Minimum",
+            "description": "Match success, disconnect reasons, relay usage, host churn, crash-free sessions tracked."
+        }
+    ],
     "dependency_graph":  {
                              "GAME-1":  [
 

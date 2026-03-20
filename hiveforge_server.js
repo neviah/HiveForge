@@ -2533,11 +2533,57 @@ function ensureOperationalLoopState(projectState) {
   }
 }
 
+function projectLeadRoleFromRoles(roles = []) {
+  const unique = Array.from(new Set((Array.isArray(roles) ? roles : [])
+    .map((role) => String(role || '').trim())
+    .filter(Boolean)));
+  if (!unique.length) return null;
+  const priorityKeywords = ['project manager', 'producer', 'ceo', 'chief', 'director', 'lead', 'head', 'manager'];
+  const preferred = unique.find((roleName) => {
+    const normalized = roleName.toLowerCase();
+    return priorityKeywords.some((keyword) => normalized.includes(keyword));
+  });
+  return preferred || unique[0];
+}
+
+function projectLeadRoleForTemplate(templateData = null) {
+  const subordinates = Array.isArray(templateData && templateData.subordinate_agents)
+    ? templateData.subordinate_agents
+    : [];
+  const roles = subordinates.map((spec) => String(spec && (spec.alias || spec.role) ? (spec.alias || spec.role) : '').trim());
+  return projectLeadRoleFromRoles(roles);
+}
+
+function projectLeadRoleForProject(projectState) {
+  const roles = Array.isArray(projectState && projectState.agents)
+    ? projectState.agents
+      .filter((agent) => !agent.isCoordinator)
+      .map((agent) => String(agent.role || '').trim())
+    : [];
+  return projectLeadRoleFromRoles(roles);
+}
+
+function resolveExecutionOwnerRole(projectState, preferredRole) {
+  const wanted = String(preferredRole || '').trim().toLowerCase();
+  if (wanted) {
+    const exact = Array.isArray(projectState && projectState.agents)
+      ? projectState.agents.find((agent) => !agent.isCoordinator && String(agent.role || '').trim().toLowerCase() === wanted)
+      : null;
+    if (exact) return exact.role;
+  }
+  return projectLeadRoleForProject(projectState);
+}
+
 function findOwnerAgentId(projectState, roleName) {
   const wanted = String(roleName || '').trim().toLowerCase();
   if (!wanted) return null;
-  const exact = projectState.agents.find((agent) => !agent.isCoordinator && String(agent.role || '').trim().toLowerCase() === wanted);
+  const exact = projectState.agents.find((agent) => String(agent.role || '').trim().toLowerCase() === wanted);
   if (exact) return exact.id;
+  const projectLeadRole = projectLeadRoleForProject(projectState);
+  if (projectLeadRole) {
+    const projectLead = projectState.agents.find((agent) => !agent.isCoordinator && String(agent.role || '').trim().toLowerCase() === projectLeadRole.toLowerCase());
+    if (projectLead) return projectLead.id;
+  }
   const fallback = projectState.agents.find((agent) => !agent.isCoordinator);
   return fallback ? fallback.id : null;
 }
@@ -2724,7 +2770,7 @@ function templateRoleCapabilities(templateData = null, agents = []) {
 function findRuntimeAgentByRole(projectState, role) {
   const wanted = String(role || '').trim().toLowerCase();
   if (!wanted) return null;
-  return projectState.agents.find((agent) => !agent.isCoordinator && String(agent.role || '').trim().toLowerCase() === wanted) || null;
+  return projectState.agents.find((agent) => String(agent.role || '').trim().toLowerCase() === wanted) || null;
 }
 
 function optionalAgentPersonalityPaths(role) {
@@ -2902,6 +2948,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   const GOAL_PHASE_SEQUENCE = ['strategy', 'product_build', 'finance', 'compliance', 'deployment', 'growth', 'analytics', 'marketing', 'support', 'maintenance'];
   const lastIdxByPhase = {};
   const tasks = [];
+  const strategyOwnerRole = projectLeadRoleForTemplate(templateData) || 'Senior Project Manager';
   const addTask = (task) => {
     if (!task || !task.title) return;
     const phase = String(task.phase || 'general');
@@ -2926,13 +2973,13 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   addTask({
     title: 'Coordinator + CEO convert goal into execution charter',
     phase: 'strategy',
-    requiredRole: 'Senior Project Manager',
+    requiredRole: strategyOwnerRole,
     description: `Analyze goal prompt, constraints, and success metrics: ${goalText}`,
   });
   addTask({
     title: 'Define milestone roadmap, owners, and acceptance checks',
     phase: 'strategy',
-    requiredRole: 'Senior Project Manager',
+    requiredRole: strategyOwnerRole,
     description: 'Produce execution milestones from point A to point B with owner roles and verification gates.',
   });
 
@@ -2943,7 +2990,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
     addTask({
       title: 'Choose free-tier infrastructure footprint for MVP launch',
       phase: 'strategy',
-      requiredRole: 'Senior Project Manager',
+      requiredRole: strategyOwnerRole,
       description: `Default to the lowest-cost launch stack first: Netlify free tier for hosting and ${databaseTier} for data/auth where applicable.`,
     });
   }
@@ -3207,7 +3254,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   addTask({
     title: 'Publish coordinator operating runbook and autonomous maintenance policy',
     phase: 'maintenance',
-    requiredRole: 'Senior Project Manager',
+    requiredRole: strategyOwnerRole,
     description: 'Document monitoring, escalation, and long-running business maintenance procedures.',
   });
 
@@ -3215,7 +3262,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
     addTask({
       title: 'Define provider upgrade thresholds and approval gate before moving off free tiers',
       phase: 'maintenance',
-      requiredRole: 'Senior Project Manager',
+      requiredRole: strategyOwnerRole,
       description: 'Keep Netlify and data providers on free tiers until storage, bandwidth, performance, or compliance thresholds justify an upgrade, then request operator approval before any paid plan change.',
     });
   }
@@ -3459,7 +3506,7 @@ function verifyGoalDelivery(projectState) {
       assignee: null,
       blockedBy: null,
       dependencies: [],
-      requiredRole: 'Senior Project Manager',
+      requiredRole: resolveExecutionOwnerRole(projectState, 'Senior Project Manager') || 'Senior Project Manager',
       executionState: 'queued',
       retryCount: 0,
       lastFailedAt: null,
@@ -6042,7 +6089,7 @@ function refreshWeeklyKpiPlan(projectState, ts = nowIso()) {
   const weekEndMs = Date.parse(weekStart) + (7 * 24 * 60 * 60 * 1000);
   loops.generatedAt = ts;
   loops.objectives = objectiveSpecs.map((spec, idx) => {
-    const ownerRole = String(spec.ownerRole || 'Senior Project Manager');
+    const ownerRole = resolveExecutionOwnerRole(projectState, spec.ownerRole || 'Senior Project Manager') || String(spec.ownerRole || 'Senior Project Manager');
     const kpiOwnerRole = String(spec.kpiOwnerRole || ownerRole);
     const ownerAgentId = findOwnerAgentId(projectState, ownerRole);
     const kpiOwnerAgentId = findOwnerAgentId(projectState, kpiOwnerRole);
