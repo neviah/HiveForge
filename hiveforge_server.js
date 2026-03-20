@@ -2948,7 +2948,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   const GOAL_PHASE_SEQUENCE = ['strategy', 'product_build', 'finance', 'compliance', 'deployment', 'growth', 'analytics', 'marketing', 'support', 'maintenance'];
   const lastIdxByPhase = {};
   const tasks = [];
-  const strategyOwnerRole = projectLeadRoleForTemplate(templateData) || 'Senior Project Manager';
+  const strategyOwnerRole = projectLeadRoleForTemplate(template) || 'Senior Project Manager';
   const addTask = (task) => {
     if (!task || !task.title) return;
     const phase = String(task.phase || 'general');
