@@ -7731,7 +7731,9 @@ async function executeNetlifyConnector(options = {}) {
       return {
         ok: false,
         errorCode: 'CONNECTOR_FAILURE',
-        message: `Netlify sites request failed with HTTP ${resp.status}.`,
+        message: resp.status === 401
+          ? 'Netlify sites request returned HTTP 401 (token is invalid, expired, or missing required scope). Reconnect Netlify credential with a fresh personal access token.'
+          : `Netlify sites request failed with HTTP ${resp.status}.`,
         operation,
         actualCost: 0,
         data: null,
@@ -8470,12 +8472,61 @@ async function executeSupabaseConnector(options = {}) {
     };
   }
 
+  const directListProjects = async () => {
+    const resp = await fetchWithTimeout('https://api.supabase.com/v1/projects', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'User-Agent': 'HiveForge',
+      },
+    }, 12000);
+
+    if (!resp.ok) {
+      return {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: resp.status === 401
+          ? 'Supabase list_projects returned HTTP 401 (token is invalid or expired). Reconnect Supabase credential with a fresh personal access token.'
+          : `Supabase list_projects failed with HTTP ${resp.status}.`,
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+
+    const body = await resp.json().catch(() => []);
+    const projects = (Array.isArray(body) ? body : []).slice(0, 30).map((project) => ({
+      id: project?.id || null,
+      ref: project?.ref || null,
+      name: project?.name || null,
+      region: project?.region || null,
+      organizationId: project?.organization_id || project?.organizationId || null,
+      status: project?.status || null,
+    }));
+    return {
+      ok: true,
+      message: `Fetched ${projects.length} Supabase project${projects.length === 1 ? '' : 's'} via direct API.`,
+      operation,
+      actualCost: 0,
+      data: { projects },
+    };
+  };
+
   const gateway = await executeViaApiGateway('supabase', operation, {
     ...(options.input && typeof options.input === 'object' ? options.input : {}),
     credentialToken: token,
     idempotencyKey: options.idempotencyKey || null,
     projectId: options.projectId || null,
   }, 25000);
+
+  if (!gateway.ok && operation === 'list_projects') {
+    const gatewayReason = String(gateway.message || '').toLowerCase();
+    const endpointMissing = gatewayReason.includes('api gateway endpoint is not configured');
+    if (endpointMissing) {
+      return directListProjects();
+    }
+  }
+
   if (!gateway.ok) return gateway;
   return {
     ok: true,
