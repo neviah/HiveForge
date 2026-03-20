@@ -200,6 +200,7 @@ const state = {
   credentialPolicies: [],
   credentialBudget: [],
   credentialAudit: [],
+  credentials: [],
   workspacePath: '',
   messageBusPoller: null,
   messageBusFilter: { kind: '', actor: '', q: '' },
@@ -846,10 +847,14 @@ function renderAnalytics(data) {
 // Credential cards
 function renderCredentials(creds, budgetData = null) {
   const grid = document.getElementById('credGrid');
+  state.credentials = Array.isArray(creds) ? creds : [];
   renderCredentialBudgetSummary(creds, budgetData);
   grid.innerHTML = CREDENTIAL_SERVICES.map(svc => {
     const saved = (creds ?? []).find(c => c.service === svc.id);
     const isConnected = Boolean(saved?.connected);
+    const netlifyDefaultSiteId = svc.id === 'netlify'
+      ? String(saved?.config?.defaultSiteId || '').trim()
+      : '';
     const budget = typeof saved?.budget === 'number' && Number.isFinite(saved.budget)
       ? `$${saved.budget.toLocaleString()}/mo`
       : 'No monthly budget set';
@@ -860,12 +865,20 @@ function renderCredentials(creds, budgetData = null) {
         <div class="hf-cred-name">${svc.label}</div>
         <div class="hf-cred-desc">${svc.desc}</div>
         <div class="hf-cred-budget-note">${budget}</div>
+        ${svc.id === 'netlify' ? `<div class="hf-cred-budget-note">Default site: ${netlifyDefaultSiteId ? esc(netlifyDefaultSiteId) : 'Not set'}</div>` : ''}
       </div>
       <div class="hf-cred-status">
         ${isConnected ? `<span class="hf-status-badge ok">Connected</span>` : `<span class="hf-status-badge idle">Not set</span>`}
       </div>
     </div>`;
   }).join('');
+
+  const netlifySaved = state.credentials.find((entry) => entry.service === 'netlify');
+  const netlifySiteId = String(netlifySaved?.config?.defaultSiteId || '').trim();
+  const deploySiteInput = document.getElementById('netlifyDeploySiteId');
+  if (deploySiteInput && !deploySiteInput.value.trim() && netlifySiteId) {
+    deploySiteInput.value = netlifySiteId;
+  }
 }
 
 function renderCredentialBudgetSummary(creds = [], budgetData = null) {
@@ -1520,6 +1533,9 @@ const Dashboard = {
   updateCredServiceGuide() {
     const service = document.getElementById('credService').value;
     const guide   = document.getElementById('credServiceGuide');
+    const netlifySiteIdInput = document.getElementById('credNetlifySiteId');
+    const netlifySaved = state.credentials.find((entry) => entry.service === 'netlify');
+    const savedDefaultSiteId = String(netlifySaved?.config?.defaultSiteId || '').trim();
     if (!guide) return;
     const url   = CONNECTOR_WEBSITES[service];
     const label = SERVICE_LABELS[service];
@@ -1537,22 +1553,45 @@ const Dashboard = {
       guide.style.display = 'none';
       guide.innerHTML = '';
     }
+    if (netlifySiteIdInput) {
+      if (service === 'netlify') {
+        netlifySiteIdInput.style.display = '';
+        if (!netlifySiteIdInput.value.trim()) {
+          netlifySiteIdInput.value = savedDefaultSiteId;
+        }
+      } else {
+        netlifySiteIdInput.style.display = 'none';
+      }
+    }
   },
 
   async saveCred() {
     const service = document.getElementById('credService').value;
     const token   = document.getElementById('credToken').value.trim();
+    const netlifySiteId = document.getElementById('credNetlifySiteId')?.value.trim() || '';
     const budget  = document.getElementById('credBudget').value;
     const status  = document.getElementById('credStatus');
-    if (!service || !token) { showStatus(status, 'Service and token are required.', 'error'); return; }
+    const existing = state.credentials.find((entry) => entry.service === service);
+    const canUpdateWithoutToken = Boolean(existing?.connected);
+    if (!service) { showStatus(status, 'Select a service first.', 'error'); return; }
+    if (!token && !canUpdateWithoutToken) { showStatus(status, 'Token is required for first-time setup.', 'error'); return; }
     showStatus(status, 'Saving…', 'running');
     try {
       await apiFetch(API.credentials, {
         method: 'POST',
-        body: JSON.stringify({ service, token, budget: budget ? Number(budget) : null }),
+        body: JSON.stringify({
+          service,
+          token,
+          budget: budget ? Number(budget) : null,
+          defaultSiteId: service === 'netlify' ? netlifySiteId : undefined,
+        }),
       });
       document.getElementById('credToken').value   = '';
       document.getElementById('credBudget').value  = '';
+      const netlifySiteInput = document.getElementById('credNetlifySiteId');
+      if (netlifySiteInput && service !== 'netlify') {
+        netlifySiteInput.value = '';
+      }
       document.getElementById('credService').value = '';
       Dashboard.updateCredServiceGuide();
       showStatus(status, 'Saved!', 'ok');

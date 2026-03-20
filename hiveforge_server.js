@@ -4176,9 +4176,10 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
 
   const actorRole = String(action.actorRole || '').trim();
   const actor = actorRole ? findRuntimeAgentByRole(projectState, actorRole) : null;
-  const siteId = String(action && action.input && action.input.siteId ? action.input.siteId : '').trim();
-  const unresolvedInput = action && action.input && typeof action.input === 'object'
-    ? hasUnresolvedTemplateValue(action.input)
+  const resolvedActionInput = resolveConnectorActionInput(action && action.input && typeof action.input === 'object' ? action.input : {});
+  const siteId = String(resolvedActionInput && resolvedActionInput.siteId ? resolvedActionInput.siteId : '').trim();
+  const unresolvedInput = resolvedActionInput && typeof resolvedActionInput === 'object'
+    ? hasUnresolvedTemplateValue(resolvedActionInput)
     : false;
   if ((action.connector === 'netlify' && action.operation === 'trigger_deploy' && (!siteId || unresolvedInput)) || unresolvedInput) {
     const reason = action.connector === 'netlify' && action.operation === 'trigger_deploy'
@@ -4191,7 +4192,7 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
       source,
       requiresPermission: true,
       executionKey,
-      inputPreview: action.input,
+      inputPreview: resolvedActionInput,
     });
     markConnectorExecutionRecord(projectState, executionKey, {
       status: 'awaiting_approval',
@@ -4288,7 +4289,7 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
     const supportRouting = evaluateSupportAutonomyRouting({
       connector: action.connector,
       operation: action.operation,
-      input: action.input || {},
+      input: resolvedActionInput || {},
       actorRole,
     });
     if (!supportRouting.ok) {
@@ -4312,7 +4313,7 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
     const financeGuardrail = evaluateFinanceAutonomyGuardrails({
       connector: action.connector,
       operation: action.operation,
-      input: action.input || {},
+      input: resolvedActionInput || {},
       actorRole,
       projectState,
     });
@@ -4335,7 +4336,7 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
     }
 
     const actionInput = {
-      ...(action.input && typeof action.input === 'object' ? action.input : {}),
+      ...(resolvedActionInput && typeof resolvedActionInput === 'object' ? resolvedActionInput : {}),
       supportRouting: supportRouting.route,
       financeGuardrail: financeGuardrail.route,
     };
@@ -4368,7 +4369,7 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
     const actualCost = Number.isFinite(Number(execution.actualCost)) ? Number(execution.actualCost) : Number(action.estimatedCost || 0);
     const reconciliation = await reconcileConnectorExecution(action.connector, action.operation, execution, {
       projectId: projectState.id,
-      siteId: String(action?.input?.siteId || ''),
+      siteId: String(actionInput.siteId || ''),
       executionKey,
     });
     const publicationDriftSelfHeal = await executePublicationDriftSelfHeal(projectState, {
@@ -4709,10 +4710,11 @@ function applyTaskApprovalDecision(projectState, task, decision, note = '', acto
 
   if (decision === 'approve') {
     if (task.autoAction && task.autoAction.type === 'connector') {
-      const unresolvedInput = task.autoAction.input && typeof task.autoAction.input === 'object'
-        ? hasUnresolvedTemplateValue(task.autoAction.input)
+      const resolvedInput = resolveConnectorActionInput(task.autoAction.input && typeof task.autoAction.input === 'object' ? task.autoAction.input : {});
+      const unresolvedInput = resolvedInput && typeof resolvedInput === 'object'
+        ? hasUnresolvedTemplateValue(resolvedInput)
         : false;
-      const netlifySiteId = String(task.autoAction.input && task.autoAction.input.siteId ? task.autoAction.input.siteId : '').trim();
+      const netlifySiteId = String(resolvedInput && resolvedInput.siteId ? resolvedInput.siteId : '').trim();
       if (unresolvedInput || (task.autoAction.connector === 'netlify' && task.autoAction.operation === 'trigger_deploy' && !netlifySiteId)) {
         const reason = task.autoAction.connector === 'netlify' && task.autoAction.operation === 'trigger_deploy' && !netlifySiteId
           ? 'Cannot approve recurring deploy until a concrete Netlify siteId is configured.'
@@ -4743,6 +4745,7 @@ function applyTaskApprovalDecision(projectState, task, decision, note = '', acto
         emitProjectEvent(projectState.id, 'task_update', task);
         return;
       }
+      task.autoAction.input = resolvedInput;
     }
     if (task.autoAction && task.autoAction.type === 'connector') {
       task.autoAction.requiresPermission = false;
@@ -6130,26 +6133,51 @@ function readCredentialMetadata() {
       service,
       connected,
       budget: monthlyBudget,
-      lastUsed: metadata.last_used || metadata.lastUsed || metadata.updated_at || null
+      lastUsed: metadata.last_used || metadata.lastUsed || metadata.updated_at || null,
+      config: {
+        defaultSiteId: service === 'netlify'
+          ? String(
+            (metadata.config && (metadata.config.defaultSiteId || metadata.config.siteId))
+              || metadata.defaultSiteId
+              || metadata.siteId
+              || ''
+          ).trim() || null
+          : null,
+      },
     };
   });
 }
 
-function saveCredentialMetadata(service, token, budget) {
+function saveCredentialMetadata(service, token, budget, config = {}) {
   ensureCredentialStorage();
   const meta = safeJsonRead(credentialMetaPath(service), {});
+  const normalizedToken = typeof token === 'string' ? token.trim() : '';
+  const hasToken = Boolean(normalizedToken) || Boolean(readCredentialToken(service));
   meta.service = service;
-  meta.connected = true;
+  meta.connected = hasToken;
   meta.updated_at = nowIso();
   meta.last_used = meta.last_used || null;
   meta.budget = {
     daily: meta.budget && typeof meta.budget.daily !== 'undefined' ? meta.budget.daily : null,
     monthly: typeof budget === 'number' && Number.isFinite(budget) ? budget : (meta.budget && typeof meta.budget.monthly !== 'undefined' ? meta.budget.monthly : null)
   };
+  if (!meta.config || typeof meta.config !== 'object') {
+    meta.config = {};
+  }
+  if (service === 'netlify') {
+    const defaultSiteId = String(config.defaultSiteId || '').trim();
+    if (defaultSiteId) {
+      meta.config.defaultSiteId = defaultSiteId;
+    } else if (typeof config.defaultSiteId === 'string') {
+      delete meta.config.defaultSiteId;
+    }
+  }
 
   fs.writeFileSync(credentialMetaPath(service), `${JSON.stringify(meta, null, 2)}\n`, 'utf-8');
-  const encoded = Buffer.from(String(token), 'utf-8').toString('base64');
-  fs.writeFileSync(credentialTokenPath(service), `${encoded}\n`, 'utf-8');
+  if (normalizedToken) {
+    const encoded = Buffer.from(normalizedToken, 'utf-8').toString('base64');
+    fs.writeFileSync(credentialTokenPath(service), `${encoded}\n`, 'utf-8');
+  }
   appendCredentialAudit({
     service,
     action: 'credential_upsert',
@@ -6157,8 +6185,45 @@ function saveCredentialMetadata(service, token, budget) {
     reason: 'Credential metadata updated.',
     meta: {
       monthlyBudget: meta.budget.monthly,
+      defaultSiteId: service === 'netlify' ? (meta.config.defaultSiteId || null) : null,
     },
   });
+}
+
+function connectorActionTemplateContext() {
+  const metadata = readCredentialMetadata();
+  const netlify = metadata.find((entry) => entry.service === 'netlify') || {};
+  return {
+    netlify_site_id: String(netlify && netlify.config && netlify.config.defaultSiteId ? netlify.config.defaultSiteId : '').trim(),
+  };
+}
+
+function resolveConnectorActionInput(input = {}) {
+  const context = connectorActionTemplateContext();
+  const resolveValue = (value) => {
+    if (typeof value === 'string') {
+      let out = value;
+      if (context.netlify_site_id) {
+        out = out
+          .split('{{netlify_site_id}}').join(context.netlify_site_id)
+          .split('{{netlify.default_site_id}}').join(context.netlify_site_id)
+          .split('{{netlify.site_id}}').join(context.netlify_site_id);
+      }
+      return out;
+    }
+    if (Array.isArray(value)) {
+      return value.map((entry) => resolveValue(entry));
+    }
+    if (value && typeof value === 'object') {
+      const next = {};
+      Object.entries(value).forEach(([key, entry]) => {
+        next[key] = resolveValue(entry);
+      });
+      return next;
+    }
+    return value;
+  };
+  return resolveValue(input && typeof input === 'object' ? input : {});
 }
 
 function deleteCredentialMetadata(service) {
@@ -9826,17 +9891,25 @@ async function main() {
 
         const service = String(payload.service || '').trim();
         const token = String(payload.token || '').trim();
+        const defaultSiteId = String(payload.defaultSiteId || payload.siteId || '').trim();
         if (!SUPPORTED_CREDENTIAL_SERVICES.includes(service)) {
           writeJson(res, { error: 'Unsupported credential service' }, 400);
           return;
         }
-        if (!token) {
+        const hasExistingToken = Boolean(readCredentialToken(service));
+        if (!token && !hasExistingToken) {
           writeJson(res, { error: 'token is required' }, 400);
           return;
         }
         const budget = typeof payload.budget === 'number' ? payload.budget : null;
-        saveCredentialMetadata(service, token, budget);
-        writeJson(res, { service, connected: true });
+        saveCredentialMetadata(service, token, budget, {
+          defaultSiteId: service === 'netlify' ? defaultSiteId : undefined,
+        });
+        writeJson(res, {
+          service,
+          connected: true,
+          config: service === 'netlify' ? { defaultSiteId: defaultSiteId || null } : {},
+        });
       }).catch((err) => {
         writeJson(res, { error: err.message }, 400);
       });
