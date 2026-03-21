@@ -3507,6 +3507,23 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
         'End with TASK_DONE only after confirming all three files are complete with no scaffold placeholder.',
       ].join('\n'),
     });
+    addTask({
+      title: 'Deploy finalized game build to Netlify',
+      phase: 'deployment',
+      requiredRole: 'Backend Architect',
+      description: 'Trigger a fresh Netlify deploy using the configured site binding after game files are fully implemented and validated.',
+      autoAction: {
+        type: 'connector',
+        connector: 'netlify',
+        operation: 'trigger_deploy',
+        input: {
+          siteId: '{{netlify_site_id}}',
+        },
+        estimatedCost: 0,
+        actorRole: 'Backend Architect',
+        requiresPermission: false,
+      },
+    });
   }
 
   addTask({
@@ -3742,6 +3759,26 @@ function hasGameStudioDeployEvidence(projectState) {
   return Boolean(String(netlify.lastDeployUrl || '').trim());
 }
 
+function latestGameArtifactUpdatedAt(projectState) {
+  if (!projectState || String(projectState.template || '').toLowerCase() !== 'game_studio') return 0;
+  const root = projectWorkspaceDir(projectState.id);
+  const required = [
+    path.join(root, 'game', 'index.html'),
+    path.join(root, 'game', 'game.js'),
+    path.join(root, 'game', 'style.css'),
+  ];
+  let latest = 0;
+  required.forEach((target) => {
+    try {
+      const stat = fs.statSync(target);
+      const ms = Number(stat && stat.mtimeMs ? stat.mtimeMs : 0);
+      if (ms > latest) latest = ms;
+    } catch {
+    }
+  });
+  return latest;
+}
+
 function verifyGoalDelivery(projectState) {
   const goalPlan = projectState.goalPlan;
   if (!goalPlan || !Array.isArray(goalPlan.tasks) || goalPlan.tasks.length === 0) {
@@ -3793,6 +3830,15 @@ function verifyGoalDelivery(projectState) {
   }
   if (!hasGameStudioDeployEvidence(projectState)) {
     gaps.push('Game Studio deploy evidence missing: no deploy URL recorded for project Netlify site yet.');
+  } else if (String(projectState.template || '').toLowerCase() === 'game_studio') {
+    const netlify = projectState.connectorBindings && projectState.connectorBindings.netlify
+      ? projectState.connectorBindings.netlify
+      : {};
+    const deployAtMs = Date.parse(String(netlify.lastDeployAt || ''));
+    const latestArtifactMs = latestGameArtifactUpdatedAt(projectState);
+    if (latestArtifactMs > 0 && (!Number.isFinite(deployAtMs) || deployAtMs < latestArtifactMs)) {
+      gaps.push('Game Studio deploy is stale: last Netlify deploy happened before latest game artifact updates. Trigger a fresh Netlify deploy after game file validation.');
+    }
   }
   if (gaps.length === 0) {
     return { verified: true, gaps: [] };
