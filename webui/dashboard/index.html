@@ -657,14 +657,38 @@
               <input id="settingsMaxAutoFixes" type="number" min="1" max="1000" step="1" style="width:100%;" />
             </div>
             <div>
-              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">LM Studio Endpoint</label>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">LLM Provider</label>
+              <select id="settingsLlmProvider" style="width:100%;">
+                <option value="lmstudio">LM Studio (Local)</option>
+                <option value="openai_compatible">OpenAI-Compatible (Cloud/Remote)</option>
+              </select>
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">LLM Endpoint</label>
               <input id="settingsLlmEndpoint" type="text" style="width:100%;" placeholder="http://127.0.0.1:1234/v1" />
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Model Name</label>
+              <input id="settingsLlmModel" type="text" style="width:100%;" placeholder="e.g. qwen2.5-coder-32b-instruct" />
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">API Key Env Var</label>
+              <input id="settingsLlmApiKeyEnv" type="text" style="width:100%;" placeholder="e.g. OPENROUTER_API_KEY" />
+            </div>
+            <div style="grid-column:1 / -1;">
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">API Key (Optional direct value)</label>
+              <input id="settingsLlmApiKey" type="password" style="width:100%;" placeholder="Leave blank to keep existing key" autocomplete="off" />
             </div>
           </div>
 
           <label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;">
             <input id="settingsCountManualHeartbeat" type="checkbox" />
             <span>Count manual heartbeat presses toward stall timeout</span>
+          </label>
+
+          <label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;">
+            <input id="settingsLlmCloudProviders" type="checkbox" />
+            <span>Allow cloud/remote LLM providers (required for OpenAI-compatible provider)</span>
           </label>
 
           <div class="hf-card" style="background:var(--panel-bg);border:1px solid var(--border);padding:0.75rem;margin-bottom:1rem;">

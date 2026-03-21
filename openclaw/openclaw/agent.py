@@ -1,10 +1,11 @@
 ﻿import sys
 import json
+import os
 from pathlib import Path
 from typing import Dict, Any, Iterable, Generator
 
 from .config import load_config, AppConfig
-from .provider import LMStudioProvider
+from .provider import LMStudioProvider, OpenAICompatibleProvider
 from .sandbox_fs import assert_path_allowed, SandboxViolation
 from .tools import TOOLS
 
@@ -12,12 +13,29 @@ from .tools import TOOLS
 class Agent:
     def __init__(self, config: AppConfig):
         self.config = config
-        self.provider = LMStudioProvider(
-            endpoint=config.llm.endpoint,
-            model=config.llm.model,
-            timeout=config.llm.timeout_sec,
-            read_timeout=config.llm.read_timeout_sec,
-        )
+        if config.llm.provider == 'lmstudio':
+            self.provider = LMStudioProvider(
+                endpoint=config.llm.endpoint,
+                model=config.llm.model,
+                timeout=config.llm.timeout_sec,
+                read_timeout=config.llm.read_timeout_sec,
+            )
+            self._provider_policy = 'Use the configured local LM Studio model for reasoning and tool use.'
+        elif config.llm.provider == 'openai_compatible':
+            api_key = (config.llm.api_key or '').strip()
+            if not api_key and (config.llm.api_key_env or '').strip():
+                api_key = str(os.environ.get(config.llm.api_key_env.strip(), '') or '').strip()
+            self.provider = OpenAICompatibleProvider(
+                endpoint=config.llm.endpoint,
+                model=config.llm.model,
+                timeout=config.llm.timeout_sec,
+                read_timeout=config.llm.read_timeout_sec,
+                headers=config.llm.extra_headers,
+                api_key=api_key,
+            )
+            self._provider_policy = 'Use the configured OpenAI-compatible endpoint and model for reasoning and tool use.'
+        else:
+            raise ValueError(f"Unsupported provider: {config.llm.provider}")
         self.tools = TOOLS
         self.tool_schemas = [
             {
@@ -106,7 +124,7 @@ class Agent:
         return {
             "role": "system",
             "content": (
-                "You are HiveForge. You run fully locally, use LM Studio only, never call cloud models. "
+                f"You are HiveForge. {self._provider_policy} "
                 "All file writes must remain inside /sandbox/workspace. "
                 "Do not claim filesystem actions unless they were executed via the file tool and returned success. "
                 "If tool execution fails, state the failure explicitly."

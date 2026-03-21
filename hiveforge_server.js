@@ -514,7 +514,9 @@ const taskHistory = [];
 let appConfig = null;
 const appState = {
   llm: {
+    provider: 'lmstudio',
     endpoint: 'http://127.0.0.1:1234/v1',
+    cloudProviders: false,
     reachable: false,
     model: null,
     lastCheckedAt: null
@@ -733,6 +735,23 @@ function normalizeLlmModelLabel(modelValue) {
   if (!raw) return null;
   if (raw.toUpperCase() === 'REPLACE_WITH_LOCAL_MODEL_NAME') return null;
   return raw;
+}
+
+function normalizeLlmProvider(providerValue) {
+  const raw = String(providerValue || '').trim().toLowerCase();
+  return raw === 'openai_compatible' ? 'openai_compatible' : 'lmstudio';
+}
+
+function resolveLlmApiKey(llmConfig) {
+  const direct = String(llmConfig?.apiKey || '').trim();
+  if (direct) return direct;
+  const envName = String(llmConfig?.apiKeyEnv || '').trim();
+  if (envName) return String(process.env[envName] || '').trim();
+  return '';
+}
+
+function llmProviderLabel(providerValue) {
+  return normalizeLlmProvider(providerValue) === 'openai_compatible' ? 'OpenAI-compatible LLM' : 'LM Studio';
 }
 
 function clampInt(value, fallback, min, max) {
@@ -5919,7 +5938,7 @@ function runProjectHeartbeat(projectState, source = 'interval') {
     const nextTask = nextRunnableTask(projectState);
     if (nextTask) {
       if (!appState.llm.reachable) {
-        const reason = `LM Studio is not reachable at ${appState.llm.endpoint}. Start LM Studio and load a model before task execution.`;
+        const reason = `${llmProviderLabel(appState.llm.provider)} is not reachable at ${appState.llm.endpoint}. Configure and verify the endpoint before task execution.`;
         const lastNoticeMs = Date.parse(projectState.llmOfflineNotifiedAt || '');
         const shouldNotify = Number.isNaN(lastNoticeMs) || (Date.now() - lastNoticeMs) >= (5 * 60 * 1000);
         nextTask.lastError = 'llm_unavailable';
@@ -10416,7 +10435,7 @@ function venvPython() {
   return path.join(venv, bin, exe);
 }
 
-async function pingLMStudio(endpoint) {
+async function pingLLMEndpoint(provider, endpoint, apiKey) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2500);
   try {
@@ -10431,7 +10450,11 @@ async function pingLMStudio(endpoint) {
 
     for (const url of candidates) {
       try {
-        const resp = await fetch(url, { signal: controller.signal });
+        const headers = {};
+        if (apiKey && normalizeLlmProvider(provider) === 'openai_compatible') {
+          headers.Authorization = `Bearer ${apiKey}`;
+        }
+        const resp = await fetch(url, { signal: controller.signal, headers });
         if (resp.ok) {
           clearTimeout(timeout);
           let model = null;
@@ -10872,17 +10895,24 @@ async function main() {
   }
 
   appConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+  appConfig.llm = appConfig.llm || {};
+  appConfig.llm.provider = normalizeLlmProvider(appConfig.llm.provider);
+  appConfig.llm.cloudProviders = Boolean(appConfig.llm.cloudProviders);
   appConfig.runtime = runtimeSettings();
   persistAppConfig();
   ensureMessageBus();
   const endpoint = appConfig.llm?.endpoint || 'http://127.0.0.1:1234/v1';
+  const provider = normalizeLlmProvider(appConfig.llm?.provider);
+  const apiKey = resolveLlmApiKey(appConfig.llm);
+  appState.llm.provider = provider;
+  appState.llm.cloudProviders = Boolean(appConfig.llm?.cloudProviders);
   appState.llm.endpoint = endpoint;
-  const lmResult = await pingLMStudio(endpoint);
+  const lmResult = await pingLLMEndpoint(provider, endpoint, apiKey);
   appState.llm.reachable = lmResult.reachable;
   if (lmResult.model) appState.llm.model = lmResult.model;
   appState.llm.lastCheckedAt = new Date().toISOString();
   if (!lmResult.reachable) {
-    log(`Warning: LM Studio is not reachable at ${endpoint}. UI will still start; tasks may fail until LM Studio API is enabled.`);
+    log(`Warning: ${llmProviderLabel(provider)} is not reachable at ${endpoint}. UI will still start; tasks may fail until the endpoint is reachable.`);
   }
 
   loadProjectsFromDisk();
@@ -11658,7 +11688,14 @@ async function main() {
         planningDefaults: DEFAULT_PLANNING_SETTINGS,
         retryPolicies: retryPoliciesSummary(),
         llm: {
+          provider: appState.llm.provider,
           endpoint: appState.llm.endpoint,
+          model: normalizeLlmModelLabel(appState.llm.model)
+            || normalizeLlmModelLabel(appConfig && appConfig.llm && appConfig.llm.model)
+            || null,
+          cloudProviders: Boolean(appConfig?.llm?.cloudProviders),
+          apiKeyEnv: String(appConfig?.llm?.apiKeyEnv || ''),
+          apiKeyConfigured: Boolean(resolveLlmApiKey(appConfig?.llm || {})),
         },
         lastCertification: (appConfig && appConfig.lastCertification) || null,
         productionEvidence: {
@@ -11683,16 +11720,40 @@ async function main() {
         const runtimePatch = payload.runtime && typeof payload.runtime === 'object' ? payload.runtime : {};
         const planningPatch = payload.planning && typeof payload.planning === 'object' ? payload.planning : {};
         const retryPolicyPatch = payload.retryPolicies && typeof payload.retryPolicies === 'object' ? payload.retryPolicies : {};
-        const nextEndpoint = payload.llm && typeof payload.llm === 'object' ? String(payload.llm.endpoint || '').trim() : '';
+        const llmPatch = payload.llm && typeof payload.llm === 'object' ? payload.llm : {};
+        const nextEndpoint = String(llmPatch.endpoint || '').trim();
+        const nextProvider = normalizeLlmProvider(llmPatch.provider);
+        const nextModel = String(llmPatch.model || '').trim();
+        const nextCloudProviders = typeof llmPatch.cloudProviders === 'boolean' ? llmPatch.cloudProviders : null;
+        const nextApiKeyEnv = typeof llmPatch.apiKeyEnv !== 'undefined' ? String(llmPatch.apiKeyEnv || '').trim() : null;
+        const nextApiKey = typeof llmPatch.apiKey !== 'undefined' ? String(llmPatch.apiKey || '').trim() : null;
         const notificationPatch = payload.notifications && typeof payload.notifications === 'object' ? payload.notifications : {};
 
         applyRuntimeSettingsUpdate(runtimePatch);
         applyPlanningSettingsUpdate(planningPatch);
 
-        if (nextEndpoint) {
+        if (nextEndpoint || nextModel || typeof llmPatch.provider !== 'undefined' || nextCloudProviders !== null || nextApiKeyEnv !== null || nextApiKey !== null) {
           appConfig.llm = appConfig.llm || {};
-          appConfig.llm.endpoint = nextEndpoint;
-          appState.llm.endpoint = nextEndpoint;
+          if (nextEndpoint) {
+            appConfig.llm.endpoint = nextEndpoint;
+            appState.llm.endpoint = nextEndpoint;
+          }
+          appConfig.llm.provider = nextProvider;
+          appState.llm.provider = nextProvider;
+          if (nextModel) {
+            appConfig.llm.model = nextModel;
+            appState.llm.model = nextModel;
+          }
+          if (nextCloudProviders !== null) {
+            appConfig.llm.cloudProviders = Boolean(nextCloudProviders);
+          }
+          if (nextApiKeyEnv !== null) {
+            appConfig.llm.apiKeyEnv = nextApiKeyEnv;
+          }
+          if (nextApiKey !== null) {
+            appConfig.llm.apiKey = nextApiKey;
+          }
+          appState.llm.cloudProviders = Boolean(appConfig.llm.cloudProviders);
           persistAppConfig();
         }
 
@@ -11741,7 +11802,14 @@ async function main() {
           planningDefaults: DEFAULT_PLANNING_SETTINGS,
           retryPolicies: retryPoliciesSummary(),
           llm: {
+            provider: appState.llm.provider,
             endpoint: appState.llm.endpoint,
+            model: normalizeLlmModelLabel(appState.llm.model)
+              || normalizeLlmModelLabel(appConfig && appConfig.llm && appConfig.llm.model)
+              || null,
+            cloudProviders: Boolean(appConfig?.llm?.cloudProviders),
+            apiKeyEnv: String(appConfig?.llm?.apiKeyEnv || ''),
+            apiKeyConfigured: Boolean(resolveLlmApiKey(appConfig?.llm || {})),
           },
           notifications: notificationSettingsSummary(),
         });
@@ -11762,7 +11830,14 @@ async function main() {
         planningDefaults: DEFAULT_PLANNING_SETTINGS,
         retryPolicies: retryPoliciesSummary(),
         llm: {
+          provider: appState.llm.provider,
           endpoint: appState.llm.endpoint,
+          model: normalizeLlmModelLabel(appState.llm.model)
+            || normalizeLlmModelLabel(appConfig && appConfig.llm && appConfig.llm.model)
+            || null,
+          cloudProviders: Boolean(appConfig?.llm?.cloudProviders),
+          apiKeyEnv: String(appConfig?.llm?.apiKeyEnv || ''),
+          apiKeyConfigured: Boolean(resolveLlmApiKey(appConfig?.llm || {})),
         },
         notifications: notificationSettingsSummary(),
       });
@@ -12669,8 +12744,8 @@ async function main() {
         || normalizeLlmModelLabel(appConfig && appConfig.llm && appConfig.llm.model)
         || 'connected';
       writeJson(res, appState.llm.reachable
-        ? { status: 'ok', model, endpoint: appState.llm.endpoint }
-        : { status: 'error', message: 'LM Studio not reachable', endpoint: appState.llm.endpoint });
+        ? { status: 'ok', provider: appState.llm.provider, model, endpoint: appState.llm.endpoint }
+        : { status: 'error', provider: appState.llm.provider, message: `${llmProviderLabel(appState.llm.provider)} not reachable`, endpoint: appState.llm.endpoint });
       return;
     }
 
@@ -12774,7 +12849,13 @@ async function main() {
     }
 
     if (req.url === '/api/llm/check') {
-      pingLMStudio(appState.llm.endpoint).then((result) => {
+      const provider = normalizeLlmProvider(appConfig?.llm?.provider || appState.llm.provider);
+      const endpoint = String(appConfig?.llm?.endpoint || appState.llm.endpoint || '').trim();
+      const apiKey = resolveLlmApiKey(appConfig?.llm || {});
+      pingLLMEndpoint(provider, endpoint, apiKey).then((result) => {
+        appState.llm.provider = provider;
+        appState.llm.endpoint = endpoint;
+        appState.llm.cloudProviders = Boolean(appConfig?.llm?.cloudProviders);
         appState.llm.reachable = result.reachable;
         if (result.model) appState.llm.model = result.model;
         appState.llm.lastCheckedAt = new Date().toISOString();
@@ -12784,6 +12865,9 @@ async function main() {
             || normalizeLlmModelLabel(appConfig && appConfig.llm && appConfig.llm.model),
         });
       }).catch(() => {
+        appState.llm.provider = provider;
+        appState.llm.endpoint = endpoint;
+        appState.llm.cloudProviders = Boolean(appConfig?.llm?.cloudProviders);
         appState.llm.reachable = false;
         appState.llm.lastCheckedAt = new Date().toISOString();
         writeJson(res, {
