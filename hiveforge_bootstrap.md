@@ -624,6 +624,154 @@ This is the active short-list to drive HiveForge from advanced prototype to full
 1. Dashboard-native policy pack controls and policy simulation UI for preflight "what-if" approval decisions.
 2. Extend industry packs with regulator-specific runbooks and deeper role-aware escalation templates as verticals require.
 
+## **Planned Near-Future Initiative — Internal Asset Generation Subsystem**
+
+Goal: allow HiveForge to request, generate, catalog, and deliver visual assets internally for templates that need art, covers, thumbnails, UI graphics, concept art, or placeholder production assets, without requiring the user to manually operate a separate detached app.
+
+### **Problem Statement**
+
+Current state:
+
+1. Game Studio assumes primitive placeholder art first and a human-art handoff later.
+2. Publishing, Content Creator, Music, and Business templates all have legitimate visual-asset needs.
+3. Agents can plan asset work today, but they cannot autonomously generate, review, and hand off images inside the HiveForge runtime.
+
+Target state:
+
+1. Coordinator can broker asset-generation jobs the same way it brokers connector actions.
+2. Subordinate agents request assets through the Coordinator instead of directly invoking an external image stack.
+3. HiveForge manages a local image worker internally as part of the product experience.
+4. Outputs are stored inside sandbox project directories with metadata, approval state, and reuse history.
+
+### **Architectural Direction**
+
+HiveForge should NOT couple agents directly to a third-party image UI.
+
+Instead implement:
+
+1. **Asset Broker**
+   - Coordinator-owned broker that accepts structured asset requests.
+   - Request types include: `sprite`, `character_portrait`, `card_face`, `background`, `ui_icon`, `book_cover`, `chapter_header`, `thumbnail`, `marketing_banner`, `logo_concept`.
+
+2. **Asset Worker**
+   - A local, HiveForge-managed image worker process.
+   - May use a Z-Fusion-inspired backend or selectively adapted components, but must remain subordinate to HiveForge lifecycle, sandbox policy, and coordinator routing.
+
+3. **Asset Registry**
+   - Persist metadata for each asset request and output.
+   - Record prompt, seed, workflow, model, dimensions, style tags, output path, project id, requesting task id, and approval status.
+
+4. **Sandbox Output Layout**
+   - `/sandbox/workspace/projects/{projectId}/assets/generated/`
+   - `/sandbox/workspace/projects/{projectId}/assets/review/`
+   - `/sandbox/workspace/projects/{projectId}/assets/final/`
+   - `/sandbox/workspace/projects/{projectId}/assets/metadata/`
+
+5. **Agent Tool Surface**
+   - Coordinator-mediated tools only.
+   - Example tool families: `asset.generate`, `asset.upscale`, `asset.caption`, `asset.list`, `asset.promote_to_final`, `asset.reject`.
+
+### **Operational Constraints**
+
+1. LM Studio and image generation may contend for VRAM on low-memory systems.
+2. Coordinator must serialize or schedule GPU-heavy work when necessary.
+3. Asset generation must remain local-only and sandbox-compatible.
+4. High-risk production assets (for example release covers, logos, store capsules, branding-critical art) may still require human approval.
+5. Draft or placeholder assets should be allowed to auto-generate with policy guardrails.
+
+### **Recommended Modes**
+
+Each template should be able to choose one of three asset modes:
+
+1. `placeholder`
+   - Primitive boxes, colors, layout mock assets only.
+
+2. `draft_ai`
+   - Local image generation allowed for draft and iteration assets.
+
+3. `final_human_or_approved_ai`
+   - Release-critical assets require explicit approval or human replacement before final delivery.
+
+### **Reference Project Guidance**
+
+Z-Fusion is a strong reference point because it demonstrates:
+
+1. Local image generation workflows.
+2. Prompt assistance and captioning.
+3. Image-to-image and upscaling flows.
+4. Pinokio-friendly local execution patterns.
+
+However, HiveForge should treat it as a reference architecture or selectively integrated worker backend, NOT as a UI that agents directly drive.
+
+### **Implementation Track**
+
+#### **Stage 1 — Asset Planning Layer**
+
+Implement:
+
+1. Add template-level `asset_strategy` modes beyond human-only handoff.
+2. Add asset request schema to project state and message bus.
+3. Allow Coordinator to create structured asset jobs from agent requests.
+4. Add dashboard views for pending asset jobs and generated asset history.
+
+Exit criteria:
+
+1. HiveForge can represent and track asset jobs even before generation backend is enabled.
+2. Templates can declare whether assets are placeholder-only, AI-draft-capable, or approval-gated.
+
+#### **Stage 2 — Internal Asset Worker**
+
+Implement:
+
+1. Add a local image worker managed by HiveForge lifecycle.
+2. Add text-to-image generation for draft assets.
+3. Add output persistence and metadata capture.
+4. Add VRAM-aware scheduling so generation does not trample LLM execution.
+
+Exit criteria:
+
+1. Coordinator can request draft assets and receive saved images in sandbox project outputs.
+2. Generated asset metadata is queryable from dashboard and project logs.
+
+#### **Stage 3 — Asset Review and Promotion**
+
+Implement:
+
+1. Add human approval or coordinator policy approval for final assets.
+2. Add asset promotion flow from `generated` -> `review` -> `final`.
+3. Add regenerated variant tracking for prompt/seed iteration.
+4. Add template hooks so generated assets can be referenced by code/content tasks.
+
+Exit criteria:
+
+1. Agents can request assets, receive variants, and reference approved final assets in downstream tasks.
+2. Release-critical templates can enforce final-asset approval gates.
+
+#### **Stage 4 — Cross-Template Expansion**
+
+Implement:
+
+1. Game Studio: sprites, card faces, UI icons, backgrounds, promo art.
+2. Publishing House: covers, chapter headers, social banners.
+3. Content Creator: thumbnails, episode art, channel banners.
+4. Music Production: cover art, teaser graphics, release creatives.
+5. Business: ad creatives, landing page hero images, concept branding boards.
+
+Exit criteria:
+
+1. Visual-asset workflows are reusable across templates.
+2. Asset generation becomes a first-class HiveForge subsystem instead of a manual external dependency.
+
+### **Definition of Success**
+
+This initiative is complete when:
+
+1. HiveForge can autonomously generate draft-quality visual assets locally.
+2. Assets are brokered through the Coordinator and never bypass policy controls.
+3. Outputs remain fully inside sandbox project directories.
+4. GPU/VRAM scheduling prevents image tasks from destabilizing LM Studio task execution.
+5. Templates can choose whether generated art is acceptable as draft-only or eligible for final release after approval.
+
 ## **Remaining to Complete Project (Tracking)**
 
 1. **Industry policy-pack coverage — COMPLETE**
