@@ -725,7 +725,7 @@ function renderKanban(tasks) {
     count.textContent = items.length;
     el.innerHTML = items.map((t) => {
       const canApprove = t.status === 'review' && t.executionState === 'awaiting_approval';
-      const approvalReason = t.pendingApproval?.reason || t.lastError || '';
+      const approvalReason = canApprove ? (t.pendingApproval?.reason || t.lastError || '') : '';
       return `
       <div class="hf-kanban-card">
         <div style="font-weight:600;font-size:0.88rem;">${esc(t.title)}</div>

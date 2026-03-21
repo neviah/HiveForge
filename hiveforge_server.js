@@ -3443,7 +3443,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       ].join('\n'),
     });
     addTask({
-      title: 'Implement playable game in HTML, CSS, and JavaScript',
+      title: 'Implement game HTML structure (index.html)',
       phase: 'product_build',
       requiredRole: 'Backend Architect',
       description: [
@@ -3909,7 +3909,7 @@ function validateGameStudioTaskArtifacts(projectState, task) {
       return { ok: false, reason: 'index_html_missing_or_scaffold' };
     }
   }
-  if (title.includes('javascript logic') || title.includes('playable game')) {
+  if (title.includes('javascript logic')) {
     if (isScaffoldOrThin(gameJs, 60)) {
       return { ok: false, reason: 'game_js_missing_or_scaffold' };
     }
