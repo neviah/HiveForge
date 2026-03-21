@@ -4,7 +4,7 @@
     "endpoint": "http://127.0.0.1:1234/api/v1",
     "model": null,
     "timeoutSec": 300,
-    "readTimeoutSec": 300,
+    "readTimeoutSec": 900,
     "streaming": true,
     "cloudProviders": false,
     "remoteTools": false
