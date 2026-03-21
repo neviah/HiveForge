@@ -15,6 +15,11 @@ class FileTool:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         text = self._as_text(content)
+        if 'HIVEFORGE_SCAFFOLD_PLACEHOLDER' in text:
+            raise ValueError(
+                'Write rejected: content still contains the HIVEFORGE_SCAFFOLD_PLACEHOLDER marker. '
+                'You must replace ALL scaffold content with a real, complete implementation before calling write.'
+            )
         target.write_text(text, encoding='utf-8')
         return f"Wrote {len(text)} bytes to {target}"
 

@@ -3447,29 +3447,64 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       phase: 'product_build',
       requiredRole: 'Developer',
       description: [
-        `Implement a complete, playable, self-contained browser game for: "${goalText}".`,
+        `Write the HTML page for the browser game: "${goalText}".`,
+        'Write ONLY this one file using the file tool (action=write):',
+        '  /sandbox/workspace/projects/{projectId}/game/index.html',
         'Requirements:',
-        '  - Use only vanilla HTML, CSS, and JavaScript — no build step, no npm packages required.',
-        '  - The game must be fully functional: player input, game loop, win/lose detection, score/restart.',
-        '  - Write ALL THREE files using the file tool (action=write):',
-        '      /sandbox/workspace/projects/{projectId}/game/index.html',
-        '      /sandbox/workspace/projects/{projectId}/game/game.js',
-        '      /sandbox/workspace/projects/{projectId}/game/style.css',
-        '  - Replace the scaffold placeholder files. Do NOT include "HIVEFORGE_SCAFFOLD_PLACEHOLDER" anywhere in your output.',
-        '  - The game title shown in <title> and <h1> must match the project name.',
-        'Write all three files before ending with TASK_DONE.',
+        '  - Include <link rel="stylesheet" href="./style.css"> and <script src="./game.js"></script>.',
+        '  - Include a #game-container div, a score/status area, card play areas, and a #restartBtn button.',
+        '  - The <title> and main <h1> must match the project name exactly.',
+        '  - Do NOT include HIVEFORGE_SCAFFOLD_PLACEHOLDER anywhere.',
+        'Write only index.html, then end with TASK_DONE.',
       ].join('\n'),
     });
     addTask({
-      title: 'Run gameplay validation, fix bugs, and polish UI',
+      title: 'Implement game JavaScript logic (game.js)',
+      phase: 'product_build',
+      requiredRole: 'Developer',
+      description: [
+        `Write the complete, playable game logic for: "${goalText}".`,
+        'Optionally read for context: /sandbox/workspace/projects/{projectId}/game_design.md',
+        'Write ONLY this one file using the file tool (action=write):',
+        '  /sandbox/workspace/projects/{projectId}/game/game.js',
+        'Requirements:',
+        '  - Vanilla JavaScript only — no imports, no npm packages.',
+        '  - Full game loop: initialization, player input, AI turns, win/lose detection, scoring, restart.',
+        '  - Use getElementById/querySelector to interact with DOM elements from index.html.',
+        '  - Do NOT include HIVEFORGE_SCAFFOLD_PLACEHOLDER anywhere.',
+        'Write only game.js, then end with TASK_DONE.',
+      ].join('\n'),
+    });
+    addTask({
+      title: 'Implement game CSS styles (style.css)',
+      phase: 'product_build',
+      requiredRole: 'UI Designer',
+      description: [
+        `Write the complete visual styles for the browser game: "${goalText}".`,
+        'Write ONLY this one file using the file tool (action=write):',
+        '  /sandbox/workspace/projects/{projectId}/game/style.css',
+        'Requirements:',
+        '  - Dark-themed, polished card-game aesthetic.',
+        '  - Style the card table, player areas, score panel, buttons, and status messages.',
+        '  - Responsive layout that works at 900px+ width.',
+        '  - Do NOT include HIVEFORGE_SCAFFOLD_PLACEHOLDER anywhere.',
+        'Write only style.css, then end with TASK_DONE.',
+      ].join('\n'),
+    });
+    addTask({
+      title: 'Validate game files and fix any remaining scaffold',
       phase: 'product_build',
       requiredRole: 'QA',
       description: [
-        `Review and validate the implemented game at: /sandbox/workspace/projects/{projectId}/game/`,
-        'Check: game starts, player can interact, win/lose states trigger, restart works.',
-        'Fix any logic errors found in game.js. Ensure style.css provides a polished, on-theme UI.',
-        'Confirm NO file contains "HIVEFORGE_SCAFFOLD_PLACEHOLDER".',
-        'Use the file tool to read the current files and write corrected versions as needed.',
+        `Validate all three game files for: "${goalText}".`,
+        'Use the file tool (action=read) to read each file:',
+        '  /sandbox/workspace/projects/{projectId}/game/index.html',
+        '  /sandbox/workspace/projects/{projectId}/game/game.js',
+        '  /sandbox/workspace/projects/{projectId}/game/style.css',
+        'For EACH file: if it contains "HIVEFORGE_SCAFFOLD_PLACEHOLDER" or has fewer than 30 lines of real content,',
+        '  immediately rewrite that file from scratch with a complete, working implementation using the file tool (action=write).',
+        'game.js MUST contain full game logic. style.css MUST contain complete styles. index.html MUST have proper structure.',
+        'End with TASK_DONE only after confirming all three files are complete with no scaffold placeholder.',
       ].join('\n'),
     });
   }
@@ -3743,7 +3778,16 @@ function verifyGoalDelivery(projectState) {
     try {
       const gameJsContent = fs.readFileSync(gameJsPath, 'utf-8');
       if (gameJsContent.includes('HIVEFORGE_SCAFFOLD_PLACEHOLDER')) {
-        gaps.push(`Game implementation pending: game.js still contains the scaffold placeholder. The Developer agent must write actual ${String(projectState.name || 'game')} code into /game/game.js, /game/index.html, and /game/style.css.`);
+        const gameSandboxPath = `/sandbox/workspace/projects/${projectState.id}/game`;
+        const scaffoldFiles = [];
+        for (const fname of ['game.js', 'style.css', 'index.html']) {
+          try {
+            const content = fs.readFileSync(path.join(projectWorkspaceDir(projectState.id), 'game', fname), 'utf-8');
+            if (content.includes('HIVEFORGE_SCAFFOLD_PLACEHOLDER')) scaffoldFiles.push(fname);
+          } catch { scaffoldFiles.push(fname); }
+        }
+        const fileList = scaffoldFiles.map((f) => `  ${gameSandboxPath}/${f}`).join('\n');
+        gaps.push(`Game files still contain scaffold placeholder. Use the file tool (action=write) to write real ${String(projectState.name || 'game')} implementation to each of these files:\n${fileList}`);
       }
     } catch { /* file unreadable — existence already confirmed above */ }
   }
@@ -3763,7 +3807,7 @@ function verifyGoalDelivery(projectState) {
       assignee: null,
       blockedBy: null,
       dependencies: [],
-      requiredRole: resolveExecutionOwnerRole(projectState, 'Senior Project Manager') || 'Senior Project Manager',
+      requiredRole: resolveExecutionOwnerRole(projectState, 'Developer') || 'Developer',
       executionState: 'queued',
       retryCount: 0,
       lastFailedAt: null,
@@ -3778,7 +3822,7 @@ function verifyGoalDelivery(projectState) {
       completedAt: null,
       startedAt: null,
       assistanceRequestedAt: null,
-      description: `Delivery gaps found before project close:\n${gaps.map((g) => `- ${g}`).join('\n')}`,
+      description: `Delivery gaps found before project close:\n${gaps.map((g) => `- ${g}`).join('\n')}\n\nIf any game file paths are listed above, you MUST use the file tool (action=write) to write complete, real implementation code to each listed file. Do NOT output HIVEFORGE_SCAFFOLD_PLACEHOLDER.`,
     });
     appendProjectLog(projectState, 'message', { kind: 'delivery_gap_task_created', gaps });
     notifyOperator(projectState, 'Delivery gap review required before project close', { gaps }).catch(() => {});
