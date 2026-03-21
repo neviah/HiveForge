@@ -3445,7 +3445,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
     addTask({
       title: 'Implement playable game in HTML, CSS, and JavaScript',
       phase: 'product_build',
-      requiredRole: 'Developer',
+      requiredRole: 'Backend Architect',
       description: [
         `Write the HTML page for the browser game: "${goalText}".`,
         'Write ONLY this one file using the file tool (action=write):',
@@ -3461,7 +3461,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
     addTask({
       title: 'Implement game JavaScript logic (game.js)',
       phase: 'product_build',
-      requiredRole: 'Developer',
+      requiredRole: 'Backend Architect',
       description: [
         `Write the complete, playable game logic for: "${goalText}".`,
         'Optionally read for context: /sandbox/workspace/projects/{projectId}/game_design.md',
@@ -3807,7 +3807,7 @@ function verifyGoalDelivery(projectState) {
       assignee: null,
       blockedBy: null,
       dependencies: [],
-      requiredRole: resolveExecutionOwnerRole(projectState, 'Developer') || 'Developer',
+      requiredRole: 'Backend Architect',
       executionState: 'queued',
       retryCount: 0,
       lastFailedAt: null,
@@ -3828,6 +3828,58 @@ function verifyGoalDelivery(projectState) {
     notifyOperator(projectState, 'Delivery gap review required before project close', { gaps }).catch(() => {});
   }
   return { verified: false, gaps, deliveryTaskCreated: !gapTaskExists };
+}
+
+function readWorkspaceGameFile(projectState, name) {
+  const filePath = path.join(projectWorkspaceDir(projectState.id), 'game', String(name || ''));
+  try {
+    return fs.readFileSync(filePath, 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
+function isScaffoldOrThin(content, minLines = 30) {
+  if (typeof content !== 'string') return true;
+  if (content.includes('HIVEFORGE_SCAFFOLD_PLACEHOLDER')) return true;
+  const lines = content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return lines.length < minLines;
+}
+
+function validateGameStudioTaskArtifacts(projectState, task) {
+  if (String(projectState?.template || '').toLowerCase() !== 'game_studio') {
+    return { ok: true };
+  }
+  const title = String(task?.title || '').toLowerCase();
+  const taskId = String(task?.id || '');
+  const needsFullValidation = title.includes('validate game files') || taskId === 'GOAL-DELIVERY-GAP';
+
+  const indexHtml = readWorkspaceGameFile(projectState, 'index.html');
+  const gameJs = readWorkspaceGameFile(projectState, 'game.js');
+  const styleCss = readWorkspaceGameFile(projectState, 'style.css');
+
+  if (title.includes('html page')) {
+    if (isScaffoldOrThin(indexHtml, 35) || !String(indexHtml || '').includes('./game.js')) {
+      return { ok: false, reason: 'index_html_missing_or_scaffold' };
+    }
+  }
+  if (title.includes('javascript logic') || title.includes('playable game')) {
+    if (isScaffoldOrThin(gameJs, 60)) {
+      return { ok: false, reason: 'game_js_missing_or_scaffold' };
+    }
+  }
+  if (title.includes('css styles')) {
+    if (isScaffoldOrThin(styleCss, 40)) {
+      return { ok: false, reason: 'style_css_missing_or_scaffold' };
+    }
+  }
+  if (needsFullValidation) {
+    if (isScaffoldOrThin(indexHtml, 30) || isScaffoldOrThin(gameJs, 50) || isScaffoldOrThin(styleCss, 30)) {
+      return { ok: false, reason: 'delivery_gap_artifacts_incomplete' };
+    }
+  }
+
+  return { ok: true };
 }
 
 function summarizeProjectAutomation(projectState) {
@@ -5442,7 +5494,28 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
   if (!task || task.status !== 'inprogress') return;
 
   const worker = runtime.state.agents.find((a) => a.id === task.assignee);
-  if (exitCode === 0) {
+  let effectiveExitCode = exitCode;
+  if (effectiveExitCode === 0) {
+    const artifactCheck = validateGameStudioTaskArtifacts(runtime.state, task);
+    if (!artifactCheck.ok) {
+      effectiveExitCode = 2;
+      appendProjectLog(runtime.state, 'warning', {
+        kind: 'task_output_validation_failed',
+        taskId: task.id,
+        title: task.title,
+        reason: artifactCheck.reason,
+      });
+      appendMessageBusEntry({
+        projectId,
+        from: 'coordinator',
+        to: execution.agentId || 'unknown',
+        kind: 'task_output_validation_failed',
+        payload: { taskId: task.id, reason: artifactCheck.reason },
+      });
+    }
+  }
+
+  if (effectiveExitCode === 0) {
     task.status = 'done';
     task.completedAt = nowIso();
     task.executionState = 'done';
@@ -5493,13 +5566,13 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
       return;
     }
   } else {
-    requeueTaskToBacklog(task, `exit_code_${exitCode}`, true);
+    requeueTaskToBacklog(task, `exit_code_${effectiveExitCode}`, true);
     runtime.state.heartbeat.autoFixCount = (runtime.state.heartbeat.autoFixCount || 0) + 1;
 
     if (worker) {
       worker.status = 'idle';
       worker.currentTask = null;
-      markAgentLog(worker, `Execution failed for ${task.id} (exit ${exitCode})`);
+      markAgentLog(worker, `Execution failed for ${task.id} (exit ${effectiveExitCode})`);
       emitProjectEvent(projectId, 'agent_message', {
         agentId: worker.id,
         name: worker.name,
@@ -5514,7 +5587,7 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
     appendProjectLog(runtime.state, 'fix', {
       kind: 'task_execution_failed_requeued',
       taskId: task.id,
-      exitCode,
+      exitCode: effectiveExitCode,
       autoFixCount: runtime.state.heartbeat.autoFixCount,
     });
     appendMessageBusEntry({
@@ -5522,7 +5595,7 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
       from: execution.agentId || 'unknown',
       to: 'coordinator',
       kind: 'task_failed',
-      payload: { taskId: task.id, taskRunId, exitCode },
+      payload: { taskId: task.id, taskRunId, exitCode: effectiveExitCode },
     });
     emitProjectEvent(projectId, 'task_update', task);
 
