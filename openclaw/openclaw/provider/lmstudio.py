@@ -8,10 +8,11 @@ from .base import BaseProvider, ProviderError
 class LMStudioProvider(BaseProvider):
     name = "lmstudio"
 
-    def __init__(self, endpoint: str, model: str, timeout: int = 60, headers: Dict[str, str] | None = None):
+    def __init__(self, endpoint: str, model: str, timeout: int = 300, read_timeout: int | None = None, headers: Dict[str, str] | None = None):
         self.endpoint = endpoint.rstrip('/')
         self.model = model
         self.timeout = timeout
+        self.read_timeout = read_timeout if read_timeout is not None else timeout
         self.headers = headers or {}
 
     def _build_payload(self, messages: Iterable[Dict[str, Any]], tools: Dict[str, Any] | None) -> Dict[str, Any]:
@@ -59,7 +60,13 @@ class LMStudioProvider(BaseProvider):
         for endpoint in self._candidate_endpoints():
             url = f"{endpoint}/chat/completions"
             try:
-                current = requests.post(url, json=payload, headers=self.headers, stream=True, timeout=self.timeout)
+                current = requests.post(
+                    url,
+                    json=payload,
+                    headers=self.headers,
+                    stream=True,
+                    timeout=(self.timeout, self.read_timeout),
+                )
             except Exception as exc:  # pragma: no cover - network error
                 attempts.append(f"{url} -> network error: {exc}")
                 continue
@@ -76,23 +83,34 @@ class LMStudioProvider(BaseProvider):
                 "Failed to reach LM Studio chat endpoint. Tried: " + " | ".join(attempts)
             )
 
-        for line in resp.iter_lines():
-            if not line:
-                continue
-            if line.startswith(b"data: "):
-                line = line[len(b"data: "):]
-            if line == b"[DONE]":
-                break
-            try:
-                data = json.loads(line)
-                delta = data.get("choices", [{}])[0].get("delta", {})
-                if "content" in delta and delta["content"]:
-                    yield delta["content"]
-                elif delta.get("tool_calls"):
-                    # Forward raw tool call JSON to the agent for execution
-                    yield json.dumps({"tool_calls": delta["tool_calls"]})
-            except json.JSONDecodeError:
-                continue
+        try:
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                if line.startswith(b"data: "):
+                    line = line[len(b"data: "):]
+                if line == b"[DONE]":
+                    break
+                try:
+                    data = json.loads(line)
+                    delta = data.get("choices", [{}])[0].get("delta", {})
+                    if "content" in delta and delta["content"]:
+                        yield delta["content"]
+                    elif delta.get("tool_calls"):
+                        # Forward raw tool call JSON to the agent for execution
+                        yield json.dumps({"tool_calls": delta["tool_calls"]})
+                except json.JSONDecodeError:
+                    continue
+        except requests.exceptions.ReadTimeout as exc:
+            raise ProviderError(
+                f"LM Studio stream timed out after {self.read_timeout}s while waiting for tokens. "
+                f"Increase llm.readTimeoutSec in config.json if model generation is slow. ({exc})"
+            ) from exc
+        except requests.exceptions.ConnectionError as exc:
+            raise ProviderError(
+                f"LM Studio streaming connection dropped or timed out after {self.read_timeout}s. "
+                f"Increase llm.readTimeoutSec in config.json if needed. ({exc})"
+            ) from exc
 
     def supports_tools(self) -> bool:
         return True

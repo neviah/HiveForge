@@ -15,6 +15,8 @@ class Agent:
         self.provider = LMStudioProvider(
             endpoint=config.llm.endpoint,
             model=config.llm.model,
+            timeout=config.llm.timeout_sec,
+            read_timeout=config.llm.read_timeout_sec,
         )
         self.tools = TOOLS
         self.tool_schemas = [

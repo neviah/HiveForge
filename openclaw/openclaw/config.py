@@ -19,6 +19,8 @@ class LLMConfig:
     provider: str
     endpoint: str
     model: str
+    timeout_sec: int = 300
+    read_timeout_sec: int = 300
     streaming: bool = True
     cloud_providers: bool = False
     remote_tools: bool = False
@@ -63,6 +65,8 @@ def load_config(path: str | os.PathLike | None = None) -> AppConfig:
         provider=llm.get('provider', 'lmstudio'),
         endpoint=llm.get('endpoint', 'http://127.0.0.1:1234/api/v1'),
         model=llm.get('model', ''),
+        timeout_sec=int(llm.get('timeoutSec', llm.get('timeout_sec', 300))),
+        read_timeout_sec=int(llm.get('readTimeoutSec', llm.get('read_timeout_sec', 300))),
         streaming=bool(llm.get('streaming', True)),
         cloud_providers=bool(llm.get('cloudProviders', llm.get('cloud_providers', False))),
         remote_tools=bool(llm.get('remoteTools', llm.get('remote_tools', False))),
