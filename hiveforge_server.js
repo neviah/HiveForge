@@ -5550,7 +5550,7 @@ function startProjectTaskExecution(projectState, task, assignee) {
     `Goal: ${projectState.goal || 'N/A'}`,
     `Assigned Agent Role: ${assignee.role}`,
     `Task ${task.id}: ${task.title}`,
-    task.description ? `Task Description:\n${task.description.replace('{projectId}', projectState.id)}` : '',
+    task.description ? `Task Description:\n${task.description.replace(/\{projectId\}/g, projectState.id)}` : '',
     personalityPrompt ? `Agent Personality Guidance:\n${personalityPrompt}` : '',
     workspaceContext,
     'Execute the task and provide concrete output artifacts or decisions. End with TASK_DONE when complete.'
