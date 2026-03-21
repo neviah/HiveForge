@@ -35,17 +35,19 @@ class LMStudioProvider(BaseProvider):
                 candidates.append(value)
 
         add(base)
-        if base.endswith('/v1'):
-            root = base[:-3].rstrip('/')
-            add(f"{root}/api/v1")
-            add(root)
-        elif base.endswith('/api/v1'):
+        if base.endswith('/api/v1'):
+            # e.g. http://host:1234/api/v1 -> also try /v1
             root = base[:-7].rstrip('/')
             add(f"{root}/v1")
             add(root)
+        elif base.endswith('/v1'):
+            # e.g. http://host:1234/v1 -> also try /api/v1
+            root = base[:-3].rstrip('/')
+            add(f"{root}/api/v1")
+            add(root)
         else:
-            add(f"{base}/api/v1")
             add(f"{base}/v1")
+            add(f"{base}/api/v1")
 
         return candidates
 
