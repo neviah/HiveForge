@@ -65,7 +65,9 @@ const SECTION_TITLES = {
 
 const TEMPLATES = {
   business:        { label: 'Business', roster: ['Coordinator','Marketing Manager','Sales Manager','Financial Controller','Content Writer','Data Analyst'] },
-  software_agency: { label: 'Software Agency', roster: ['Coordinator','Lead Developer','Frontend Dev','Backend Dev','QA Engineer','DevOps Engineer'] },
+  software_agency: { label: 'Software Agency (Legacy)', roster: ['Coordinator','Lead Developer','Frontend Dev','Backend Dev','QA Engineer','DevOps Engineer'] },
+  software_web_app: { label: 'Software Web App', roster: ['Coordinator','Lead Developer','Frontend Dev','Backend Dev','QA Engineer','DevOps Engineer'] },
+  mobile_app: { label: 'Mobile App (React Native + Expo)', roster: ['Coordinator','Mobile Dev','Backend Dev','QA Engineer','DevOps Engineer'] },
   game_studio:     {
     label: 'Game Studio (2D Web-First)',
     roster: ['Coordinator','2D Game Designer','Gameplay Engineer','Technical Artist','Game Audio Engineer','QA Engineer'],

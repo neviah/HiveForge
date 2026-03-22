@@ -430,6 +430,14 @@ const RECURRING_SCHEDULE_BY_TEMPLATE = {
     { key: 'agency_deploy_audit', title: 'Run deployment readiness and rollback audit', phase: 'engineering', everyMs: 6 * 60 * 60 * 1000 },
     { key: 'agency_client_update', title: 'Generate client progress report and roadmap updates', phase: 'operations', everyMs: 4 * 60 * 60 * 1000 },
   ],
+  software_web_app: [
+    { key: 'web_release_audit', title: 'Run web release readiness and rollback audit', phase: 'engineering', everyMs: 6 * 60 * 60 * 1000 },
+    { key: 'web_performance_review', title: 'Review web app performance and conversion bottlenecks', phase: 'analytics', everyMs: 4 * 60 * 60 * 1000 },
+  ],
+  mobile_app: [
+    { key: 'mobile_build_audit', title: 'Run mobile build readiness and release rollback audit', phase: 'engineering', everyMs: 6 * 60 * 60 * 1000 },
+    { key: 'mobile_telemetry_review', title: 'Review crash/performance telemetry and mobile UX friction', phase: 'analytics', everyMs: 4 * 60 * 60 * 1000 },
+  ],
   game_studio: [
     { key: 'studio_build_validation', title: 'Run gameplay build validation pass', phase: 'development', everyMs: 6 * 60 * 60 * 1000 },
     { key: 'studio_player_insights', title: 'Review player feedback and balancing priorities', phase: 'analysis', everyMs: 5 * 60 * 60 * 1000 },
@@ -454,6 +462,8 @@ const RECURRING_SCHEDULE_BY_TEMPLATE = {
 const DEFAULT_OPERATING_MODE_BY_TEMPLATE = {
   business: 'continuous_business',
   software_agency: 'continuous_business',
+  software_web_app: 'continuous_business',
+  mobile_app: 'continuous_business',
   content_creator: 'continuous_business',
   game_studio: 'finite_delivery',
   publishing_house: 'finite_delivery',
@@ -2363,6 +2373,20 @@ function templateArtifactContract(templateId) {
   const key = String(templateId || '').toLowerCase();
   const map = {
     software_agency: [
+      { path: 'web/package.json', minLines: 16 },
+      { path: 'web/index.html', minLines: 10 },
+      { path: 'web/src/main.tsx', minLines: 12 },
+      { path: 'web/src/App.tsx', minLines: 30 },
+      { path: 'docs/qa_report.md', minLines: 8 },
+    ],
+    software_web_app: [
+      { path: 'web/package.json', minLines: 16 },
+      { path: 'web/index.html', minLines: 10 },
+      { path: 'web/src/main.tsx', minLines: 12 },
+      { path: 'web/src/App.tsx', minLines: 30 },
+      { path: 'docs/qa_report.md', minLines: 8 },
+    ],
+    mobile_app: [
       { path: 'mobile/package.json', minLines: 16 },
       { path: 'mobile/app.json', minLines: 10 },
       { path: 'mobile/babel.config.js', minLines: 6 },
@@ -2405,6 +2429,27 @@ function templateArtifactContract(templateId) {
 function scaffoldContentForContractPath(projectState, relativePath) {
   const title = String(projectState?.name || 'Project').trim() || 'Project';
   const lower = String(relativePath || '').toLowerCase();
+  if (lower === 'web/package.json') {
+    return `{
+  "name": "${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'hiveforge-web-app'}",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "HIVEFORGE_SCAFFOLD_PLACEHOLDER",
+    "react-dom": "HIVEFORGE_SCAFFOLD_PLACEHOLDER"
+  },
+  "devDependencies": {
+    "typescript": "HIVEFORGE_SCAFFOLD_PLACEHOLDER",
+    "vite": "HIVEFORGE_SCAFFOLD_PLACEHOLDER"
+  }
+}\n`;
+  }
   if (lower === 'mobile/package.json') {
     return `{
   "name": "${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'hiveforge-mobile-app'}",
@@ -3241,6 +3286,10 @@ function goalClarificationQuestions(templateId, goalText, tags = {}) {
 
 function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   const goalText = String(goal || '').trim();
+  const normalizedTemplate = String(templateId || '').toLowerCase();
+  const isSoftwareWebTemplate = normalizedTemplate === 'software_web_app' || normalizedTemplate === 'software_agency';
+  const isMobileTemplate = normalizedTemplate === 'mobile_app';
+  const isSoftwareTemplate = isSoftwareWebTemplate || isMobileTemplate;
   if (!goalText) {
     return {
       generatedAt: nowIso(),
@@ -3260,7 +3309,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   const planConfig = planningSettings();
   const needsManagedDatabase = Boolean(tags.webApp || tags.social || tags.marketplace || tags.property || tags.healthcare || tags.ecommerce || tags.fintech);
   const connectorSet = new Set();
-  if (tags.deployment || tags.webApp) connectorSet.add('netlify');
+  if (isSoftwareWebTemplate || ((tags.deployment || tags.webApp) && !isMobileTemplate)) connectorSet.add('netlify');
   if (tags.payments) connectorSet.add('stripe');
   if (tags.marketing) connectorSet.add('google_ads');
   if (needsManagedDatabase && planConfig.preferredDatabaseService === 'supabase') connectorSet.add('supabase');
@@ -3328,7 +3377,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
     const databaseTier = planConfig.preferredDatabaseService === 'supabase' && needsManagedDatabase
       ? 'Supabase free tier'
       : 'manual database selection';
-    const freeTierDescription = String(templateId || '').toLowerCase() === 'software_agency'
+    const freeTierDescription = isMobileTemplate
       ? `Default to Expo managed workflow for cross-platform mobile delivery and EAS free tier for Android packaging; use ${databaseTier} for data/auth where applicable.`
       : `Default to the lowest-cost launch stack first: Netlify free tier for hosting and ${databaseTier} for data/auth where applicable.`;
     addTask({
@@ -3339,24 +3388,26 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
     });
   }
 
-  if (tags.webApp) {
+  if (tags.webApp || isSoftwareTemplate) {
     addTask({
-      title: 'Design system architecture, mobile state model, and API contracts',
+      title: isMobileTemplate
+        ? 'Design system architecture, mobile state model, and API contracts'
+        : 'Design system architecture, domain model, and API contracts',
       phase: 'product_build',
       requiredRole: 'Backend Architect',
-      description: String(templateId || '').toLowerCase() === 'software_agency'
+      description: isMobileTemplate
         ? 'Translate business workflows into React Native app modules, backend services, data model, and endpoint contracts.'
         : 'Translate business workflows into backend services, data model, and endpoint contracts.',
     });
     addTask({
-      title: String(templateId || '').toLowerCase() === 'software_agency'
+      title: isMobileTemplate
         ? 'Implement cross-platform mobile experience (React Native + Expo) and role-based user journeys'
         : 'Implement core web experience and role-based user journeys',
       phase: 'product_build',
       requiredRole: 'UI Designer',
-      description: String(templateId || '').toLowerCase() === 'software_agency'
+      description: isMobileTemplate
         ? 'Build production-ready mobile UX in React Native with Expo navigation/state patterns for required personas and success paths.'
-        : 'Build production-ready UX for required personas and success paths.',
+        : 'Build production-ready web UX in React + TypeScript for required personas and success paths.',
     });
   }
 
@@ -6000,12 +6051,18 @@ function startProjectTaskExecution(projectState, task, assignee) {
       `  Sandbox project path: ${sandboxRoot}`,
       '  Required deliverable files to update (use file tool with action=write):',
       ...requiredArtifacts.map((item) => `    ${sandboxRoot}/${item.path}`),
-      ...(templateId === 'software_agency'
+      ...(templateId === 'mobile_app'
         ? [
-          '  Stack policy: software_agency defaults to React Native + Expo + TypeScript.',
+          '  Stack policy: mobile_app defaults to React Native + Expo + TypeScript.',
           '  Include practical run commands in docs/qa_report.md (for example: npm install, npx expo start, npx expo run:android).',
           '  If Android output is required, document EAS Build steps for APK/AAB and required credentials/signing handoff.',
         ]
+        : templateId === 'software_web_app' || templateId === 'software_agency'
+          ? [
+            '  Stack policy: software_web_app defaults to React + TypeScript + Vite.',
+            '  Include practical run commands in docs/qa_report.md (for example: npm install, npm run dev, npm run build).',
+            '  For draft preview, include a short walkthrough of key UI flows and expected states.',
+          ]
         : []),
       '  Replace HIVEFORGE_SCAFFOLD_PLACEHOLDER content with real work output before marking tasks complete.',
     ].join('\n');
@@ -10779,6 +10836,8 @@ function previewRootsForProject(projectId) {
     gameRoot: path.join(projectRoot, 'game'),
     appRoot: path.join(projectRoot, 'app'),
     websiteRoot: path.join(projectRoot, 'website'),
+    webRoot: path.join(projectRoot, 'web'),
+    mobileRoot: path.join(projectRoot, 'mobile'),
     previewRoot: path.join(projectRoot, 'preview'),
   };
 }
@@ -10788,11 +10847,13 @@ function resolveProjectPreviewRoot(projectId) {
   const gameIndex = path.join(roots.gameRoot, 'index.html');
   const appIndex = path.join(roots.appRoot, 'index.html');
   const websiteIndex = path.join(roots.websiteRoot, 'index.html');
+  const webIndex = path.join(roots.webRoot, 'index.html');
   const previewIndex = path.join(roots.previewRoot, 'index.html');
   const rootIndex = path.join(roots.projectRoot, 'index.html');
   if (fs.existsSync(gameIndex)) return roots.gameRoot;
   if (fs.existsSync(appIndex)) return roots.appRoot;
   if (fs.existsSync(websiteIndex)) return roots.websiteRoot;
+  if (fs.existsSync(webIndex)) return roots.webRoot;
   if (fs.existsSync(previewIndex)) return roots.previewRoot;
   if (fs.existsSync(rootIndex)) return roots.projectRoot;
   return null;
@@ -13410,6 +13471,20 @@ async function main() {
         if (previewRoot) {
           const indexPath = path.join(previewRoot, 'index.html');
           let html = fs.readFileSync(indexPath, 'utf-8');
+          if (previewRoot === roots.webRoot && /src\/(main|index)\.(ts|tsx)/i.test(html)) {
+            const appSourcePath = path.join(roots.webRoot, 'src', 'App.tsx');
+            const mainSourcePath = path.join(roots.webRoot, 'src', 'main.tsx');
+            const appSource = fs.existsSync(appSourcePath) ? fs.readFileSync(appSourcePath, 'utf-8') : 'No App.tsx generated yet.';
+            const mainSource = fs.existsSync(mainSourcePath) ? fs.readFileSync(mainSourcePath, 'utf-8') : 'No main.tsx generated yet.';
+            const esc = (text) => String(text || '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;');
+            const webPreview = `<!doctype html><html><head><meta charset="utf-8"/><title>Web Draft Preview</title><style>body{font-family:system-ui,sans-serif;margin:0;padding:20px;background:#0b1220;color:#e6edf8}h1{font-size:20px;margin:0 0 10px}p{line-height:1.45;color:#b7c3d8}code{background:#162033;padding:2px 6px;border-radius:6px}pre{white-space:pre-wrap;background:#111a2b;border:1px solid #25314a;border-radius:10px;padding:12px;line-height:1.4;color:#d7e2f2;max-height:40vh;overflow:auto}</style></head><body><h1>Web Draft Preview</h1><p>This project uses React + TypeScript + Vite. Draft preview shows source snapshots; run locally with <code>npm install</code> then <code>npm run dev</code> for an interactive browser experience.</p><h2>src/main.tsx</h2><pre>${esc(mainSource)}</pre><h2>src/App.tsx</h2><pre>${esc(appSource)}</pre></body></html>`;
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(webPreview);
+            return;
+          }
           const baseHref = `/api/projects/${encodeURIComponent(projectId)}/preview/assets/`;
           if (/<base\s+href=/i.test(html)) {
             html = html.replace(/<base\s+href=["'][^"']*["']\s*\/?\s*>/i, `<base href="${baseHref}">`);
@@ -13418,6 +13493,21 @@ async function main() {
           }
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
           res.end(html);
+          return;
+        }
+
+        const mobileAppTsx = path.join(roots.mobileRoot, 'App.tsx');
+        if (fs.existsSync(mobileAppTsx)) {
+          const appSource = fs.readFileSync(mobileAppTsx, 'utf-8');
+          const screenPath = path.join(roots.mobileRoot, 'src', 'screens', 'HomeScreen.tsx');
+          const screenSource = fs.existsSync(screenPath) ? fs.readFileSync(screenPath, 'utf-8') : 'No HomeScreen.tsx generated yet.';
+          const esc = (text) => String(text || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+          const mobilePreview = `<!doctype html><html><head><meta charset="utf-8"/><title>Mobile Draft Preview</title><style>body{font-family:system-ui,sans-serif;margin:0;padding:20px;background:#0b1220;color:#e6edf8}h1{font-size:20px;margin:0 0 10px}p{line-height:1.45;color:#b7c3d8}code{background:#162033;padding:2px 6px;border-radius:6px}pre{white-space:pre-wrap;background:#111a2b;border:1px solid #25314a;border-radius:10px;padding:12px;line-height:1.4;color:#d7e2f2;max-height:40vh;overflow:auto}</style></head><body><h1>Mobile Draft Preview</h1><p>This project uses React Native + Expo, so there is no direct browser render of native screens in draft preview.</p><p>Run locally with <code>npm install</code> then <code>npx expo start</code>. For Android wrapper builds, use <code>npx expo run:android</code> or EAS build in production flow.</p><h2>App.tsx</h2><pre>${esc(appSource)}</pre><h2>HomeScreen.tsx</h2><pre>${esc(screenSource)}</pre></body></html>`;
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(mobilePreview);
           return;
         }
 

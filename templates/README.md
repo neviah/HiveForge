@@ -11,6 +11,8 @@ Each JSON file defines a launchable project template and includes:
 
 Files:
 - business.json
+- software_web_app.json
+- mobile_app.json
 - game_studio.json
 - publishing_house.json
 - music_production.json
