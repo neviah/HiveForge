@@ -5019,6 +5019,7 @@ function summarizeProject(projectState) {
     id: projectState.id,
     name: projectState.name,
     template: projectState.template,
+    mode: String(projectState.mode || 'production').toLowerCase(),
     status: projectState.status,
     heartbeat: projectState.heartbeat?.status || 'unknown',
     lastActivity: projectState.lastActivity,
@@ -5816,6 +5817,23 @@ function startProjectTaskExecution(projectState, task, assignee) {
       `  Existing files contain HIVEFORGE_SCAFFOLD_PLACEHOLDER � replace them with real implementation.`,
       `  Do NOT output HIVEFORGE_SCAFFOLD_PLACEHOLDER anywhere in your written files.`,
     ].join('\n');
+  }
+
+  if (String(projectState.template || '').toLowerCase() === 'publishing_house') {
+    const sandboxBookPath = `/sandbox/workspace/projects/${projectState.id}/book`;
+    workspaceContext = [
+      workspaceContext,
+      '',
+      'WORKSPACE CONTEXT - Publishing House:',
+      `  Sandbox book path: ${sandboxBookPath}`,
+      `  Required files to maintain (use file tool with action=write):`,
+      `    ${sandboxBookPath}/story_bible.md`,
+      `    ${sandboxBookPath}/chapter_outline.md`,
+      `    ${sandboxBookPath}/manuscript.md`,
+      `    ${sandboxBookPath}/editorial_report.md`,
+      `    ${sandboxBookPath}/release_plan.md`,
+      '  Keep these files updated as tasks progress so Workspace Explorer shows real deliverables.',
+    ].filter(Boolean).join('\n');
   }
 
   const prompt = [
@@ -13142,13 +13160,51 @@ async function main() {
       }
       const previewRoot = path.join(WORKSPACE_ROOT, 'projects', projectId, 'preview');
       const indexHtml = path.join(previewRoot, 'index.html');
-      if (!fs.existsSync(indexHtml)) {
-        writeJson(res, { error: 'Preview files not ready yet' }, 404);
-        return;
-      }
+
       try {
+        const projectRoot = path.join(WORKSPACE_ROOT, 'projects', projectId);
+        const gameRoot = path.join(projectRoot, 'game');
+        const gameIndex = path.join(gameRoot, 'index.html');
+        const rootIndex = path.join(projectRoot, 'index.html');
+        const manuscript = path.join(projectRoot, 'book', 'manuscript.md');
+        const brief = path.join(projectRoot, 'project_brief.md');
+
+        // Prefer full game preview by inlining CSS/JS so relative paths work under /api/projects/:id/preview
+        if (fs.existsSync(gameIndex)) {
+          let html = fs.readFileSync(gameIndex, 'utf-8');
+          const stylePath = path.join(gameRoot, 'style.css');
+          const scriptPath = path.join(gameRoot, 'game.js');
+          const styleCss = fs.existsSync(stylePath) ? fs.readFileSync(stylePath, 'utf-8') : '';
+          const gameJs = fs.existsSync(scriptPath) ? fs.readFileSync(scriptPath, 'utf-8') : '';
+          html = html.replace(/<link\s+rel=["']stylesheet["']\s+href=["']\.\/style\.css["']\s*\/?\s*>/i, `<style>\n${styleCss}\n</style>`);
+          html = html.replace(/<script\s+src=["']\.\/game\.js["']\s*><\/script>/i, `<script>\n${gameJs}\n<\/script>`);
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(html);
+          return;
+        }
+
+        if (fs.existsSync(indexHtml)) {
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(fs.readFileSync(indexHtml, 'utf-8'));
+          return;
+        }
+
+        if (fs.existsSync(rootIndex)) {
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(fs.readFileSync(rootIndex, 'utf-8'));
+          return;
+        }
+
+        // Fallback preview for non-HTML templates (e.g., Publishing House)
+        const sourcePath = fs.existsSync(manuscript) ? manuscript : (fs.existsSync(brief) ? brief : null);
+        const sourceText = sourcePath ? fs.readFileSync(sourcePath, 'utf-8') : 'No preview-ready artifact found yet. Open Workspace Explorer to inspect files.';
+        const escaped = sourceText
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+        const fallbackHtml = `<!doctype html><html><head><meta charset="utf-8"/><title>Draft Preview</title><style>body{font-family:system-ui,sans-serif;margin:0;padding:16px;background:#fff;color:#111}h1{font-size:18px;margin:0 0 12px}pre{white-space:pre-wrap;background:#f6f8fa;border:1px solid #ddd;border-radius:8px;padding:12px;line-height:1.45}</style></head><body><h1>Draft Preview</h1><pre>${escaped}</pre></body></html>`;
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(fs.readFileSync(indexHtml, 'utf-8'));
+        res.end(fallbackHtml);
       } catch (err) {
         writeJson(res, { error: 'Failed to load preview' }, 500);
       }
