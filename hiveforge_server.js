@@ -10711,6 +10711,8 @@ function previewRootsForProject(projectId) {
   return {
     projectRoot,
     gameRoot: path.join(projectRoot, 'game'),
+    appRoot: path.join(projectRoot, 'app'),
+    websiteRoot: path.join(projectRoot, 'website'),
     previewRoot: path.join(projectRoot, 'preview'),
   };
 }
@@ -10718,9 +10720,13 @@ function previewRootsForProject(projectId) {
 function resolveProjectPreviewRoot(projectId) {
   const roots = previewRootsForProject(projectId);
   const gameIndex = path.join(roots.gameRoot, 'index.html');
+  const appIndex = path.join(roots.appRoot, 'index.html');
+  const websiteIndex = path.join(roots.websiteRoot, 'index.html');
   const previewIndex = path.join(roots.previewRoot, 'index.html');
   const rootIndex = path.join(roots.projectRoot, 'index.html');
   if (fs.existsSync(gameIndex)) return roots.gameRoot;
+  if (fs.existsSync(appIndex)) return roots.appRoot;
+  if (fs.existsSync(websiteIndex)) return roots.websiteRoot;
   if (fs.existsSync(previewIndex)) return roots.previewRoot;
   if (fs.existsSync(rootIndex)) return roots.projectRoot;
   return null;
