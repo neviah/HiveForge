@@ -2359,16 +2359,84 @@ Scaffold placeholder � HiveForge agents will implement the full game.
   };
 }
 
+function templateArtifactContract(templateId) {
+  const key = String(templateId || '').toLowerCase();
+  const map = {
+    software_agency: [
+      { path: 'app/index.html', minLines: 30 },
+      { path: 'app/app.js', minLines: 40 },
+      { path: 'app/style.css', minLines: 25 },
+      { path: 'docs/qa_report.md', minLines: 8 },
+    ],
+    business: [
+      { path: 'website/index.html', minLines: 30 },
+      { path: 'website/app.js', minLines: 30 },
+      { path: 'website/style.css', minLines: 20 },
+      { path: 'docs/business_plan.md', minLines: 10 },
+    ],
+    music_production: [
+      { path: 'music/track_outline.md', minLines: 8 },
+      { path: 'music/lyrics.md', minLines: 12 },
+      { path: 'music/release_plan.md', minLines: 8 },
+    ],
+    research_lab: [
+      { path: 'research/research_brief.md', minLines: 10 },
+      { path: 'research/findings.md', minLines: 12 },
+      { path: 'research/references.md', minLines: 8 },
+    ],
+    content_creator: [
+      { path: 'content/content_calendar.md', minLines: 10 },
+      { path: 'content/draft_asset.md', minLines: 10 },
+      { path: 'content/distribution_plan.md', minLines: 8 },
+    ],
+    publishing_house: [
+      { path: 'book/story_bible.md', minLines: 10 },
+      { path: 'book/chapter_outline.md', minLines: 10 },
+      { path: 'book/manuscript.md', minLines: 14 },
+      { path: 'book/editorial_report.md', minLines: 8 },
+      { path: 'book/release_plan.md', minLines: 8 },
+    ],
+  };
+  return map[key] || [];
+}
+
+function scaffoldContentForContractPath(projectState, relativePath) {
+  const title = String(projectState?.name || 'Project').trim() || 'Project';
+  const lower = String(relativePath || '').toLowerCase();
+  if (lower.endsWith('.html')) {
+    return `<!doctype html>\n<html lang="en">\n<head>\n  <meta charset="utf-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1" />\n  <title>${title}</title>\n  <link rel="stylesheet" href="./style.css" />\n</head>\n<body>\n  <main id="app">\n    <h1>${title}</h1>\n    <p>HIVEFORGE_SCAFFOLD_PLACEHOLDER</p>\n  </main>\n  <script src="./app.js"></script>\n</body>\n</html>\n`;
+  }
+  if (lower.endsWith('.js')) {
+    return `// HIVEFORGE_SCAFFOLD_PLACEHOLDER\nconsole.log('Implement ${relativePath} for ${title}');\n`;
+  }
+  if (lower.endsWith('.css')) {
+    return `/* HIVEFORGE_SCAFFOLD_PLACEHOLDER */\nbody { font-family: system-ui, sans-serif; margin: 0; padding: 1rem; }\n`;
+  }
+  return `# ${title}\n\nHIVEFORGE_SCAFFOLD_PLACEHOLDER\n\nThis file should be replaced with real deliverable content by the assigned agent.\n`;
+}
+
 function writeProjectWorkspaceArtifacts(projectState) {
   if (!projectState || !projectState.id) return;
   const targetDir = projectWorkspaceDir(projectState.id);
   ensureDir(targetDir);
+  const templateId = String(projectState.template || '').toLowerCase();
   const plan = projectState.goalPlan && typeof projectState.goalPlan === 'object' ? projectState.goalPlan : {};
   fs.writeFileSync(path.join(targetDir, 'project_brief.md'), buildProjectWorkspaceBrief(projectState), 'utf-8');
   fs.writeFileSync(path.join(targetDir, 'goal_plan.json'), `${JSON.stringify(plan, null, 2)}\n`, 'utf-8');
   fs.writeFileSync(path.join(targetDir, 'milestones.json'), `${JSON.stringify(Array.isArray(plan.milestones) ? plan.milestones : [], null, 2)}\n`, 'utf-8');
 
-  if (String(projectState.template || '').toLowerCase() === 'game_studio') {
+  const requiredArtifacts = templateArtifactContract(templateId);
+  for (const artifact of requiredArtifacts) {
+    const relPath = String(artifact && artifact.path ? artifact.path : '').trim();
+    if (!relPath) continue;
+    const absPath = path.join(targetDir, relPath);
+    ensureDir(path.dirname(absPath));
+    if (shouldRewriteScaffoldFile(absPath)) {
+      fs.writeFileSync(absPath, scaffoldContentForContractPath(projectState, relPath), 'utf-8');
+    }
+  }
+
+  if (templateId === 'game_studio') {
     const gameDir = path.join(targetDir, 'game');
     ensureDir(gameDir);
     const profile = deriveGameStudioPromptProfile(projectState);
@@ -3814,26 +3882,29 @@ function hasGameStudioDeployEvidence(projectState) {
   return Boolean(String(netlify.lastDeployUrl || '').trim());
 }
 
-function publishingRequiredArtifactPaths(projectState) {
-  const root = projectWorkspaceDir(projectState.id);
-  return [
-    path.join(root, 'book', 'story_bible.md'),
-    path.join(root, 'book', 'chapter_outline.md'),
-    path.join(root, 'book', 'manuscript.md'),
-    path.join(root, 'book', 'editorial_report.md'),
-    path.join(root, 'book', 'release_plan.md'),
-  ];
+function templateRequiredArtifactSpecs(projectState) {
+  if (!projectState) return [];
+  return templateArtifactContract(String(projectState.template || '').toLowerCase());
 }
 
-function hasPublishingHouseDeliveryArtifacts(projectState) {
-  if (!projectState || String(projectState.template || '').toLowerCase() !== 'publishing_house') return true;
-  const required = publishingRequiredArtifactPaths(projectState);
-  return required.every((target) => {
+function templateRequiredArtifactPaths(projectState) {
+  const root = projectWorkspaceDir(projectState.id);
+  return templateRequiredArtifactSpecs(projectState).map((item) => path.join(root, item.path));
+}
+
+function hasTemplateDeliveryArtifacts(projectState) {
+  const specs = templateRequiredArtifactSpecs(projectState);
+  if (!specs.length) return true;
+  const root = projectWorkspaceDir(projectState.id);
+  return specs.every((spec) => {
+    const target = path.join(root, spec.path);
     try {
       if (!fs.existsSync(target) || !fs.statSync(target).isFile()) return false;
       const text = fs.readFileSync(target, 'utf-8');
+      if (text.includes('HIVEFORGE_SCAFFOLD_PLACEHOLDER')) return false;
       const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-      return lines.length >= 8;
+      const minLines = Number.isFinite(Number(spec.minLines)) ? Number(spec.minLines) : 1;
+      return lines.length >= minLines;
     } catch {
       return false;
     }
@@ -3945,10 +4016,16 @@ function verifyGoalDelivery(projectState) {
       gaps.push('Game Studio deploy is stale: last Netlify deploy happened before latest game artifact updates. Trigger a fresh Netlify deploy after game file validation.');
     }
   }
-  if (!hasPublishingHouseDeliveryArtifacts(projectState)) {
-    const required = publishingRequiredArtifactPaths(projectState)
-      .map((target) => target.replace(projectWorkspaceDir(projectState.id), `/sandbox/workspace/projects/${projectState.id}`));
-    gaps.push(`Publishing House artifacts missing/incomplete. Required files:\n${required.map((item) => `  ${item}`).join('\n')}`);
+  if (!hasTemplateDeliveryArtifacts(projectState)) {
+    const required = templateRequiredArtifactSpecs(projectState)
+      .map((item) => ({
+        path: `/sandbox/workspace/projects/${projectState.id}/${item.path}`,
+        minLines: Number.isFinite(Number(item.minLines)) ? Number(item.minLines) : 1,
+      }));
+    if (required.length) {
+      const templateName = String(projectState.template || 'template').replace(/_/g, ' ');
+      gaps.push(`${templateName} artifacts missing/incomplete. Required files:\n${required.map((item) => `  ${item.path} (min ${item.minLines} non-empty lines)`).join('\n')}`);
+    }
   }
   if (gaps.length === 0) {
     return { verified: true, gaps: [] };
@@ -3978,7 +4055,7 @@ function verifyGoalDelivery(projectState) {
       completedAt: null,
       startedAt: null,
       assistanceRequestedAt: null,
-      description: `Delivery gaps found before project close:\n${gaps.map((g) => `- ${g}`).join('\n')}\n\nIf any game file paths are listed above, you MUST use the file tool (action=write) to write complete, real implementation code to each listed file. Do NOT output HIVEFORGE_SCAFFOLD_PLACEHOLDER.`,
+      description: `Delivery gaps found before project close:\n${gaps.map((g) => `- ${g}`).join('\n')}\n\nFor any listed workspace files, you MUST use the file tool (action=write) to write complete, real deliverables. Do NOT output HIVEFORGE_SCAFFOLD_PLACEHOLDER.`,
     });
     appendProjectLog(projectState, 'message', { kind: 'delivery_gap_task_created', gaps });
     notifyOperator(projectState, 'Delivery gap review required before project close', { gaps }).catch(() => {});
@@ -5839,38 +5916,33 @@ function startProjectTaskExecution(projectState, task, assignee) {
 
   const personalityPrompt = loadAgentPersonalityPrompt(assignee.personalityPromptPaths);
 
-  // For game_studio projects, inject sandbox workspace paths so the agent knows where to write files
+  const templateId = String(projectState.template || '').toLowerCase();
+  const sandboxRoot = `/sandbox/workspace/projects/${projectState.id}`;
+  const requiredArtifacts = templateArtifactContract(templateId);
   let workspaceContext = '';
-  if (String(projectState.template || '').toLowerCase() === 'game_studio') {
-    const sandboxGamePath = `/sandbox/workspace/projects/${projectState.id}/game`;
+
+  if (templateId === 'game_studio') {
+    const sandboxGamePath = `${sandboxRoot}/game`;
     workspaceContext = [
       '',
-      'WORKSPACE CONTEXT � Game Studio:',
+      'WORKSPACE CONTEXT - Game Studio:',
       `  Sandbox game path: ${sandboxGamePath}`,
-      `  Files to write (use file tool with action=write):`,
+      '  Files to write (use file tool with action=write):',
       `    ${sandboxGamePath}/index.html`,
       `    ${sandboxGamePath}/game.js`,
       `    ${sandboxGamePath}/style.css`,
-      `  Existing files contain HIVEFORGE_SCAFFOLD_PLACEHOLDER � replace them with real implementation.`,
-      `  Do NOT output HIVEFORGE_SCAFFOLD_PLACEHOLDER anywhere in your written files.`,
+      '  Existing files contain HIVEFORGE_SCAFFOLD_PLACEHOLDER; replace them with real implementation.',
+      '  Do NOT output HIVEFORGE_SCAFFOLD_PLACEHOLDER anywhere in your written files.',
     ].join('\n');
-  }
-
-  if (String(projectState.template || '').toLowerCase() === 'publishing_house') {
-    const sandboxBookPath = `/sandbox/workspace/projects/${projectState.id}/book`;
+  } else if (requiredArtifacts.length) {
     workspaceContext = [
-      workspaceContext,
       '',
-      'WORKSPACE CONTEXT - Publishing House:',
-      `  Sandbox book path: ${sandboxBookPath}`,
-      `  Required files to maintain (use file tool with action=write):`,
-      `    ${sandboxBookPath}/story_bible.md`,
-      `    ${sandboxBookPath}/chapter_outline.md`,
-      `    ${sandboxBookPath}/manuscript.md`,
-      `    ${sandboxBookPath}/editorial_report.md`,
-      `    ${sandboxBookPath}/release_plan.md`,
-      '  Keep these files updated as tasks progress so Workspace Explorer shows real deliverables.',
-    ].filter(Boolean).join('\n');
+      `WORKSPACE CONTEXT - ${templateId}:`,
+      `  Sandbox project path: ${sandboxRoot}`,
+      '  Required deliverable files to update (use file tool with action=write):',
+      ...requiredArtifacts.map((item) => `    ${sandboxRoot}/${item.path}`),
+      '  Replace HIVEFORGE_SCAFFOLD_PLACEHOLDER content with real work output before marking tasks complete.',
+    ].join('\n');
   }
 
   const prompt = [
