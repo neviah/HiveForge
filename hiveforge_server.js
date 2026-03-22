@@ -6618,9 +6618,19 @@ function removeProject(projectId) {
   }
 }
 
+function stripUtf8Bom(text) {
+  if (typeof text !== 'string') return text;
+  return text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
+}
+
 function parseJsonBodySafe(rawBody) {
   if (!rawBody) return {};
-  return JSON.parse(rawBody);
+  return JSON.parse(stripUtf8Bom(rawBody));
+}
+
+function readJsonFileSafe(filePath) {
+  const raw = fs.readFileSync(filePath, 'utf-8');
+  return JSON.parse(stripUtf8Bom(raw));
 }
 
 function credentialMetaPath(service) {
@@ -10986,7 +10996,7 @@ async function main() {
     process.exit(1);
   }
 
-  appConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+  appConfig = readJsonFileSafe(CONFIG_PATH);
   appConfig.llm = appConfig.llm || {};
   appConfig.llm.provider = normalizeLlmProvider(appConfig.llm.provider);
   appConfig.llm.cloudProviders = Boolean(appConfig.llm.cloudProviders);
