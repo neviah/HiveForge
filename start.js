@@ -23,7 +23,7 @@ module.exports = {
       method: 'shell.run',
       params: {
         message: [
-          'node hiveforge_server.js'
+          'powershell -NoProfile -ExecutionPolicy Bypass -Command "$cfg = Get-Content ''sandbox/config.json'' -Raw | ConvertFrom-Json; $envName = [string]$cfg.llm.apiKeyEnv; if ($envName) { $secret = [System.Environment]::GetEnvironmentVariable($envName, ''User''); if (-not $secret) { $secret = [System.Environment]::GetEnvironmentVariable($envName, ''Machine'') }; if ($secret) { Set-Item -Path (''Env:'' + $envName) -Value $secret } }; node hiveforge_server.js"'
         ]
       }
     }
