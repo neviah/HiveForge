@@ -1,6 +1,7 @@
 ﻿// Pinokio start manifest for HiveForge
 
 module.exports = {
+  daemon: true,
   run: [
     {
       when: "{{!exists('sandbox/config.json')}}",
@@ -13,18 +14,22 @@ module.exports = {
     },
     {
       when: "{{exists('sandbox/config.json')}}",
-      method: 'local.set',
+      method: 'shell.run',
       params: {
-        url: 'http://127.0.0.1:3000/dashboard/'
+        message: [
+          'node hiveforge_server.js'
+        ],
+        on: [{
+          event: "/(http:\\/\\/\\S+)/",
+          done: true
+        }]
       }
     },
     {
       when: "{{exists('sandbox/config.json')}}",
-      method: 'shell.run',
+      method: 'local.set',
       params: {
-        message: [
-          'powershell -NoProfile -ExecutionPolicy Bypass -Command "$cfg = Get-Content ''sandbox/config.json'' -Raw | ConvertFrom-Json; $envName = [string]$cfg.llm.apiKeyEnv; if ($envName) { $secret = [System.Environment]::GetEnvironmentVariable($envName, ''User''); if (-not $secret) { $secret = [System.Environment]::GetEnvironmentVariable($envName, ''Machine'') }; if ($secret) { Set-Item -Path (''Env:'' + $envName) -Value $secret } }; node hiveforge_server.js"'
-        ]
+        url: "{{input.event[1]}}"
       }
     }
   ]
