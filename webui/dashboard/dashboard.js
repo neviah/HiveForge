@@ -1683,6 +1683,13 @@ const Dashboard = {
     setDraftPreviewStatus('Refreshing draft preview...');
   },
 
+  openDraftPreviewTab() {
+    const pid = state.activeProject?.id;
+    if (!pid) return;
+    const url = `${API.projects}/${encodeURIComponent(pid)}${API.projectPreview}?t=${Date.now()}`;
+    window.open(url, '_blank', 'noopener');
+  },
+
   async sendProjectFeedback() {
     const pid = state.activeProject?.id;
     const input = document.getElementById('projectFeedbackInput');

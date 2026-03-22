@@ -738,6 +738,12 @@ function normalizeLlmModelLabel(modelValue) {
   return raw;
 }
 
+function preferredLlmModelLabel() {
+  return normalizeLlmModelLabel(appConfig && appConfig.llm && appConfig.llm.model)
+    || normalizeLlmModelLabel(appState && appState.llm && appState.llm.model)
+    || null;
+}
+
 function normalizeLlmProvider(providerValue) {
   const raw = String(providerValue || '').trim().toLowerCase();
   return raw === 'openai_compatible' ? 'openai_compatible' : 'lmstudio';
@@ -3808,6 +3814,32 @@ function hasGameStudioDeployEvidence(projectState) {
   return Boolean(String(netlify.lastDeployUrl || '').trim());
 }
 
+function publishingRequiredArtifactPaths(projectState) {
+  const root = projectWorkspaceDir(projectState.id);
+  return [
+    path.join(root, 'book', 'story_bible.md'),
+    path.join(root, 'book', 'chapter_outline.md'),
+    path.join(root, 'book', 'manuscript.md'),
+    path.join(root, 'book', 'editorial_report.md'),
+    path.join(root, 'book', 'release_plan.md'),
+  ];
+}
+
+function hasPublishingHouseDeliveryArtifacts(projectState) {
+  if (!projectState || String(projectState.template || '').toLowerCase() !== 'publishing_house') return true;
+  const required = publishingRequiredArtifactPaths(projectState);
+  return required.every((target) => {
+    try {
+      if (!fs.existsSync(target) || !fs.statSync(target).isFile()) return false;
+      const text = fs.readFileSync(target, 'utf-8');
+      const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      return lines.length >= 8;
+    } catch {
+      return false;
+    }
+  });
+}
+
 function latestGameArtifactUpdatedAt(projectState) {
   if (!projectState || String(projectState.template || '').toLowerCase() !== 'game_studio') return 0;
   const root = projectWorkspaceDir(projectState.id);
@@ -3912,6 +3944,11 @@ function verifyGoalDelivery(projectState) {
     if (latestArtifactMs > 0 && (!Number.isFinite(deployAtMs) || deployAtMs < latestArtifactMs)) {
       gaps.push('Game Studio deploy is stale: last Netlify deploy happened before latest game artifact updates. Trigger a fresh Netlify deploy after game file validation.');
     }
+  }
+  if (!hasPublishingHouseDeliveryArtifacts(projectState)) {
+    const required = publishingRequiredArtifactPaths(projectState)
+      .map((target) => target.replace(projectWorkspaceDir(projectState.id), `/sandbox/workspace/projects/${projectState.id}`));
+    gaps.push(`Publishing House artifacts missing/incomplete. Required files:\n${required.map((item) => `  ${item}`).join('\n')}`);
   }
   if (gaps.length === 0) {
     return { verified: true, gaps: [] };
@@ -10597,6 +10634,47 @@ async function pingLLMEndpoint(provider, endpoint, apiKey) {
   }
 }
 
+function previewRootsForProject(projectId) {
+  const projectRoot = path.join(WORKSPACE_ROOT, 'projects', projectId);
+  return {
+    projectRoot,
+    gameRoot: path.join(projectRoot, 'game'),
+    previewRoot: path.join(projectRoot, 'preview'),
+  };
+}
+
+function resolveProjectPreviewRoot(projectId) {
+  const roots = previewRootsForProject(projectId);
+  const gameIndex = path.join(roots.gameRoot, 'index.html');
+  const previewIndex = path.join(roots.previewRoot, 'index.html');
+  const rootIndex = path.join(roots.projectRoot, 'index.html');
+  if (fs.existsSync(gameIndex)) return roots.gameRoot;
+  if (fs.existsSync(previewIndex)) return roots.previewRoot;
+  if (fs.existsSync(rootIndex)) return roots.projectRoot;
+  return null;
+}
+
+function contentTypeForPath(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  const contentTypes = {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.mjs': 'text/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.ico': 'image/x-icon',
+    '.txt': 'text/plain; charset=utf-8',
+    '.md': 'text/markdown; charset=utf-8',
+  };
+  return contentTypes[ext] || 'application/octet-stream';
+}
+
 function serveStatic(req, res) {
   const rawPath = (req.url || '/').split('?')[0] || '/';
   // Root ? redirect to the HiveForge dashboard
@@ -11030,7 +11108,7 @@ async function main() {
   appState.llm.endpoint = endpoint;
   const lmResult = await pingLLMEndpoint(provider, endpoint, apiKey);
   appState.llm.reachable = lmResult.reachable;
-  if (lmResult.model) appState.llm.model = lmResult.model;
+  if (lmResult.model && !normalizeLlmModelLabel(appConfig?.llm?.model)) appState.llm.model = lmResult.model;
   appState.llm.lastCheckedAt = new Date().toISOString();
   if (!lmResult.reachable) {
     log(`Warning: ${llmProviderLabel(provider)} is not reachable at ${endpoint}. UI will still start; tasks may fail until the endpoint is reachable.`);
@@ -11812,9 +11890,7 @@ async function main() {
         llm: {
           provider: appState.llm.provider,
           endpoint: appState.llm.endpoint,
-          model: normalizeLlmModelLabel(appState.llm.model)
-            || normalizeLlmModelLabel(appConfig && appConfig.llm && appConfig.llm.model)
-            || null,
+          model: preferredLlmModelLabel(),
           cloudProviders: Boolean(appConfig?.llm?.cloudProviders),
           apiKeyEnv: String(appConfig?.llm?.apiKeyEnv || ''),
           apiKeyConfigured: Boolean(resolveLlmApiKey(appConfig?.llm || {})),
@@ -11926,9 +12002,7 @@ async function main() {
           llm: {
             provider: appState.llm.provider,
             endpoint: appState.llm.endpoint,
-            model: normalizeLlmModelLabel(appState.llm.model)
-              || normalizeLlmModelLabel(appConfig && appConfig.llm && appConfig.llm.model)
-              || null,
+            model: preferredLlmModelLabel(),
             cloudProviders: Boolean(appConfig?.llm?.cloudProviders),
             apiKeyEnv: String(appConfig?.llm?.apiKeyEnv || ''),
             apiKeyConfigured: Boolean(resolveLlmApiKey(appConfig?.llm || {})),
@@ -11954,9 +12028,7 @@ async function main() {
         llm: {
           provider: appState.llm.provider,
           endpoint: appState.llm.endpoint,
-          model: normalizeLlmModelLabel(appState.llm.model)
-            || normalizeLlmModelLabel(appConfig && appConfig.llm && appConfig.llm.model)
-            || null,
+          model: preferredLlmModelLabel(),
           cloudProviders: Boolean(appConfig?.llm?.cloudProviders),
           apiKeyEnv: String(appConfig?.llm?.apiKeyEnv || ''),
           apiKeyConfigured: Boolean(resolveLlmApiKey(appConfig?.llm || {})),
@@ -12866,9 +12938,7 @@ async function main() {
     }
 
     if (pathname === '/api/llm_health' && req.method === 'GET') {
-      const model = normalizeLlmModelLabel(appState.llm.model)
-        || normalizeLlmModelLabel(appConfig && appConfig.llm && appConfig.llm.model)
-        || 'connected';
+      const model = preferredLlmModelLabel() || 'connected';
       writeJson(res, appState.llm.reachable
         ? { status: 'ok', provider: appState.llm.provider, model, endpoint: appState.llm.endpoint }
         : { status: 'error', provider: appState.llm.provider, message: `${llmProviderLabel(appState.llm.provider)} not reachable`, endpoint: appState.llm.endpoint });
@@ -12983,12 +13053,11 @@ async function main() {
         appState.llm.endpoint = endpoint;
         appState.llm.cloudProviders = Boolean(appConfig?.llm?.cloudProviders);
         appState.llm.reachable = result.reachable;
-        if (result.model) appState.llm.model = result.model;
+        if (result.model && !normalizeLlmModelLabel(appConfig?.llm?.model)) appState.llm.model = result.model;
         appState.llm.lastCheckedAt = new Date().toISOString();
         writeJson(res, {
           ...appState.llm,
-          model: normalizeLlmModelLabel(appState.llm.model)
-            || normalizeLlmModelLabel(appConfig && appConfig.llm && appConfig.llm.model),
+          model: preferredLlmModelLabel(),
         });
       }).catch(() => {
         appState.llm.provider = provider;
@@ -12998,8 +13067,7 @@ async function main() {
         appState.llm.lastCheckedAt = new Date().toISOString();
         writeJson(res, {
           ...appState.llm,
-          model: normalizeLlmModelLabel(appState.llm.model)
-            || normalizeLlmModelLabel(appConfig && appConfig.llm && appConfig.llm.model),
+          model: preferredLlmModelLabel(),
         });
       });
       return;
@@ -13149,6 +13217,39 @@ async function main() {
     // DRAFT MODE & USER FEEDBACK API ROUTES
     // ============================================
 
+    // Preview static assets endpoint for draft projects (js/css/images)
+    if (pathname.startsWith('/api/projects/') && pathname.includes('/preview/assets/') && req.method === 'GET') {
+      const match = pathname.match(/^\/api\/projects\/([^/]+)\/preview\/assets\/?(.*)$/);
+      if (!match) {
+        writeJson(res, { error: 'Invalid preview asset path' }, 400);
+        return;
+      }
+      const projectId = decodeURIComponent(match[1]);
+      const relPath = decodeURIComponent(match[2] || 'index.html');
+      const runtime = projectId ? projectRuntimes.get(projectId) : null;
+      if (!runtime || runtime.state.mode !== 'draft') {
+        writeJson(res, { error: 'Preview not available for this project' }, 404);
+        return;
+      }
+      const root = resolveProjectPreviewRoot(projectId);
+      if (!root) {
+        writeJson(res, { error: 'Preview assets not ready yet' }, 404);
+        return;
+      }
+      const target = path.resolve(root, relPath || 'index.html');
+      if (!target.startsWith(path.resolve(root))) {
+        writeJson(res, { error: 'Forbidden path' }, 403);
+        return;
+      }
+      if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
+        writeJson(res, { error: 'Preview asset not found' }, 404);
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': contentTypeForPath(target) });
+      res.end(fs.readFileSync(target));
+      return;
+    }
+
     // Preview endpoint for draft projects
     if (pathname.startsWith('/api/projects/') && pathname.endsWith('/preview') && req.method === 'GET') {
       const url_parts = pathname.split('/');
@@ -13158,44 +13259,27 @@ async function main() {
         writeJson(res, { error: 'Preview not available for this project' }, 404);
         return;
       }
-      const previewRoot = path.join(WORKSPACE_ROOT, 'projects', projectId, 'preview');
-      const indexHtml = path.join(previewRoot, 'index.html');
 
       try {
-        const projectRoot = path.join(WORKSPACE_ROOT, 'projects', projectId);
-        const gameRoot = path.join(projectRoot, 'game');
-        const gameIndex = path.join(gameRoot, 'index.html');
-        const rootIndex = path.join(projectRoot, 'index.html');
-        const manuscript = path.join(projectRoot, 'book', 'manuscript.md');
-        const brief = path.join(projectRoot, 'project_brief.md');
-
-        // Prefer full game preview by inlining CSS/JS so relative paths work under /api/projects/:id/preview
-        if (fs.existsSync(gameIndex)) {
-          let html = fs.readFileSync(gameIndex, 'utf-8');
-          const stylePath = path.join(gameRoot, 'style.css');
-          const scriptPath = path.join(gameRoot, 'game.js');
-          const styleCss = fs.existsSync(stylePath) ? fs.readFileSync(stylePath, 'utf-8') : '';
-          const gameJs = fs.existsSync(scriptPath) ? fs.readFileSync(scriptPath, 'utf-8') : '';
-          html = html.replace(/<link\s+rel=["']stylesheet["']\s+href=["']\.\/style\.css["']\s*\/?\s*>/i, `<style>\n${styleCss}\n</style>`);
-          html = html.replace(/<script\s+src=["']\.\/game\.js["']\s*><\/script>/i, `<script>\n${gameJs}\n<\/script>`);
+        const roots = previewRootsForProject(projectId);
+        const previewRoot = resolveProjectPreviewRoot(projectId);
+        if (previewRoot) {
+          const indexPath = path.join(previewRoot, 'index.html');
+          let html = fs.readFileSync(indexPath, 'utf-8');
+          const baseHref = `/api/projects/${encodeURIComponent(projectId)}/preview/assets/`;
+          if (/<base\s+href=/i.test(html)) {
+            html = html.replace(/<base\s+href=["'][^"']*["']\s*\/?\s*>/i, `<base href="${baseHref}">`);
+          } else if (/<head[^>]*>/i.test(html)) {
+            html = html.replace(/<head[^>]*>/i, (m) => `${m}\n<base href="${baseHref}">`);
+          }
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
           res.end(html);
           return;
         }
 
-        if (fs.existsSync(indexHtml)) {
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(fs.readFileSync(indexHtml, 'utf-8'));
-          return;
-        }
-
-        if (fs.existsSync(rootIndex)) {
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(fs.readFileSync(rootIndex, 'utf-8'));
-          return;
-        }
-
         // Fallback preview for non-HTML templates (e.g., Publishing House)
+        const manuscript = path.join(roots.projectRoot, 'book', 'manuscript.md');
+        const brief = path.join(roots.projectRoot, 'project_brief.md');
         const sourcePath = fs.existsSync(manuscript) ? manuscript : (fs.existsSync(brief) ? brief : null);
         const sourceText = sourcePath ? fs.readFileSync(sourcePath, 'utf-8') : 'No preview-ready artifact found yet. Open Workspace Explorer to inspect files.';
         const escaped = sourceText
