@@ -2363,9 +2363,11 @@ function templateArtifactContract(templateId) {
   const key = String(templateId || '').toLowerCase();
   const map = {
     software_agency: [
-      { path: 'app/index.html', minLines: 30 },
-      { path: 'app/app.js', minLines: 40 },
-      { path: 'app/style.css', minLines: 25 },
+      { path: 'mobile/package.json', minLines: 16 },
+      { path: 'mobile/app.json', minLines: 10 },
+      { path: 'mobile/babel.config.js', minLines: 6 },
+      { path: 'mobile/App.tsx', minLines: 40 },
+      { path: 'mobile/src/screens/HomeScreen.tsx', minLines: 25 },
       { path: 'docs/qa_report.md', minLines: 8 },
     ],
     business: [
@@ -2403,11 +2405,59 @@ function templateArtifactContract(templateId) {
 function scaffoldContentForContractPath(projectState, relativePath) {
   const title = String(projectState?.name || 'Project').trim() || 'Project';
   const lower = String(relativePath || '').toLowerCase();
+  if (lower === 'mobile/package.json') {
+    return `{
+  "name": "${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'hiveforge-mobile-app'}",
+  "version": "0.1.0",
+  "private": true,
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "expo": "HIVEFORGE_SCAFFOLD_PLACEHOLDER",
+    "react": "HIVEFORGE_SCAFFOLD_PLACEHOLDER",
+    "react-native": "HIVEFORGE_SCAFFOLD_PLACEHOLDER"
+  }
+}\n`;
+  }
+  if (lower === 'mobile/app.json') {
+    return `{
+  "expo": {
+    "name": "${title}",
+    "slug": "${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'hiveforge-mobile-app'}",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "assetBundlePatterns": ["**/*"],
+    "hiveforgePlaceholder": "HIVEFORGE_SCAFFOLD_PLACEHOLDER"
+  }
+}\n`;
+  }
   if (lower.endsWith('.html')) {
     return `<!doctype html>\n<html lang="en">\n<head>\n  <meta charset="utf-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1" />\n  <title>${title}</title>\n  <link rel="stylesheet" href="./style.css" />\n</head>\n<body>\n  <main id="app">\n    <h1>${title}</h1>\n    <p>HIVEFORGE_SCAFFOLD_PLACEHOLDER</p>\n  </main>\n  <script src="./app.js"></script>\n</body>\n</html>\n`;
   }
   if (lower.endsWith('.js')) {
     return `// HIVEFORGE_SCAFFOLD_PLACEHOLDER\nconsole.log('Implement ${relativePath} for ${title}');\n`;
+  }
+  if (lower.endsWith('.tsx')) {
+    return `// HIVEFORGE_SCAFFOLD_PLACEHOLDER
+import React from 'react';
+import { SafeAreaView, Text, View } from 'react-native';
+
+export default function PlaceholderScreen(): React.JSX.Element {
+  return (
+    <SafeAreaView>
+      <View>
+        <Text>Implement ${relativePath} for ${title}</Text>
+      </View>
+    </SafeAreaView>
+  );
+}
+`;
   }
   if (lower.endsWith('.css')) {
     return `/* HIVEFORGE_SCAFFOLD_PLACEHOLDER */\nbody { font-family: system-ui, sans-serif; margin: 0; padding: 1rem; }\n`;
@@ -3278,26 +3328,35 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
     const databaseTier = planConfig.preferredDatabaseService === 'supabase' && needsManagedDatabase
       ? 'Supabase free tier'
       : 'manual database selection';
+    const freeTierDescription = String(templateId || '').toLowerCase() === 'software_agency'
+      ? `Default to Expo managed workflow for cross-platform mobile delivery and EAS free tier for Android packaging; use ${databaseTier} for data/auth where applicable.`
+      : `Default to the lowest-cost launch stack first: Netlify free tier for hosting and ${databaseTier} for data/auth where applicable.`;
     addTask({
       title: 'Choose free-tier infrastructure footprint for MVP launch',
       phase: 'strategy',
       requiredRole: strategyOwnerRole,
-      description: `Default to the lowest-cost launch stack first: Netlify free tier for hosting and ${databaseTier} for data/auth where applicable.`,
+      description: freeTierDescription,
     });
   }
 
   if (tags.webApp) {
     addTask({
-      title: 'Design system architecture, domain model, and API contracts',
+      title: 'Design system architecture, mobile state model, and API contracts',
       phase: 'product_build',
       requiredRole: 'Backend Architect',
-      description: 'Translate business workflows into backend services, data model, and endpoint contracts.',
+      description: String(templateId || '').toLowerCase() === 'software_agency'
+        ? 'Translate business workflows into React Native app modules, backend services, data model, and endpoint contracts.'
+        : 'Translate business workflows into backend services, data model, and endpoint contracts.',
     });
     addTask({
-      title: 'Implement core web experience and role-based user journeys',
+      title: String(templateId || '').toLowerCase() === 'software_agency'
+        ? 'Implement cross-platform mobile experience (React Native + Expo) and role-based user journeys'
+        : 'Implement core web experience and role-based user journeys',
       phase: 'product_build',
       requiredRole: 'UI Designer',
-      description: 'Build production-ready UX for required personas and success paths.',
+      description: String(templateId || '').toLowerCase() === 'software_agency'
+        ? 'Build production-ready mobile UX in React Native with Expo navigation/state patterns for required personas and success paths.'
+        : 'Build production-ready UX for required personas and success paths.',
     });
   }
 
@@ -5941,6 +6000,13 @@ function startProjectTaskExecution(projectState, task, assignee) {
       `  Sandbox project path: ${sandboxRoot}`,
       '  Required deliverable files to update (use file tool with action=write):',
       ...requiredArtifacts.map((item) => `    ${sandboxRoot}/${item.path}`),
+      ...(templateId === 'software_agency'
+        ? [
+          '  Stack policy: software_agency defaults to React Native + Expo + TypeScript.',
+          '  Include practical run commands in docs/qa_report.md (for example: npm install, npx expo start, npx expo run:android).',
+          '  If Android output is required, document EAS Build steps for APK/AAB and required credentials/signing handoff.',
+        ]
+        : []),
       '  Replace HIVEFORGE_SCAFFOLD_PLACEHOLDER content with real work output before marking tasks complete.',
     ].join('\n');
   }
