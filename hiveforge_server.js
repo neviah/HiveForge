@@ -534,7 +534,7 @@ const appState = {
   }
 };
 
-const SUPPORTED_CREDENTIAL_SERVICES = ['github', 'netlify', 'stripe', 'google_ads', 'analytics', 'supabase', 'email_provider', 'support_chat', 'support_ticket', 'kdp', 'gumroad', 'substack', 'custom_cms'];
+const SUPPORTED_CREDENTIAL_SERVICES = ['github', 'netlify', 'stripe', 'google_ads', 'analytics', 'supabase', 'email_provider', 'support_chat', 'support_ticket', 'kdp', 'gumroad', 'substack', 'custom_cms', 'google_play'];
 const CONNECTOR_REGISTRY = {
   github: { id: 'github', label: 'GitHub', credentialService: 'github' },
   telegram: { id: 'telegram', label: 'Telegram', provider: 'telegram' },
@@ -551,6 +551,7 @@ const CONNECTOR_REGISTRY = {
   gumroad: { id: 'gumroad', label: 'Gumroad', credentialService: 'gumroad' },
   substack: { id: 'substack', label: 'Substack', credentialService: 'substack' },
   custom_cms: { id: 'custom_cms', label: 'Custom CMS', credentialService: 'custom_cms' },
+  google_play: { id: 'google_play', label: 'Google Play Console', credentialService: 'google_play' },
 };
 const MUTATING_CONNECTOR_OPERATIONS = {
   netlify: new Set(['trigger_deploy']),
@@ -565,6 +566,7 @@ const MUTATING_CONNECTOR_OPERATIONS = {
   gumroad: new Set(['publish_product', 'update_product', 'unpublish_product']),
   substack: new Set(['publish_post', 'update_post', 'unpublish_post']),
   custom_cms: new Set(['publish_book', 'update_publication', 'unpublish_publication']),
+  google_play: new Set(['upload_bundle', 'create_release', 'update_release_notes', 'promote_release']),
 };
 const CONNECTOR_IDEMPOTENCY_PROFILES = {
   netlify: {
@@ -733,6 +735,24 @@ const CONNECTOR_IDEMPOTENCY_PROFILES = {
     unpublish_publication: {
       mode: 'native_token',
       reconciliation: 'publication_state',
+    },
+  },
+  google_play: {
+    upload_bundle: {
+      mode: 'native_token',
+      reconciliation: 'release_state',
+    },
+    create_release: {
+      mode: 'native_token',
+      reconciliation: 'release_state',
+    },
+    update_release_notes: {
+      mode: 'native_token',
+      reconciliation: 'release_state',
+    },
+    promote_release: {
+      mode: 'native_token',
+      reconciliation: 'release_state',
     },
   },
 };
@@ -3226,6 +3246,7 @@ function normalizeGoalKeywordTags(goalText) {
     ecommerce: textContainsAny(source, ['ecommerce', 'e-commerce', 'online store', 'shopify', 'woocommerce', 'product catalog', 'inventory', 'order fulfillment', 'retail store']),
     marketplace: textContainsAny(source, ['marketplace', 'auction', 'bidding', 'bid', 'listing', 'buy and sell', 'seller', 'buyer', 'classifieds', 'peer-to-peer']),
     social: textContainsAny(source, ['social', 'profile', 'dating', 'match', 'matchmaking', 'network', 'community', 'forum', 'feed', 'follow', 'user-generated']),
+    mobileMonetization: textContainsAny(source, ['monetize', 'monetization', 'iap', 'in-app purchase', 'freemium', 'premium unlock', 'rewarded ad', 'interstitial', 'banner ad', 'revenue model', 'play store revenue', 'app revenue']),
   };
 }
 
@@ -3251,6 +3272,9 @@ function connectorHealthCheckActionForService(connector) {
   }
   if (key === 'email_provider') {
     return { connector: 'email_provider', operation: 'list_inbox', actorRole: 'Support Responder', phase: 'support' };
+  }
+  if (key === 'google_play') {
+    return { connector: 'google_play', operation: 'get_release_status', actorRole: 'DevOps Automator', phase: 'deployment' };
   }
   return null;
 }
@@ -3310,6 +3334,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   const needsManagedDatabase = Boolean(tags.webApp || tags.social || tags.marketplace || tags.property || tags.healthcare || tags.ecommerce || tags.fintech);
   const connectorSet = new Set();
   if (isSoftwareWebTemplate || ((tags.deployment || tags.webApp) && !isMobileTemplate)) connectorSet.add('netlify');
+  if (isMobileTemplate) connectorSet.add('google_play');
   if (tags.payments) connectorSet.add('stripe');
   if (tags.marketing) connectorSet.add('google_ads');
   if (needsManagedDatabase && planConfig.preferredDatabaseService === 'supabase') connectorSet.add('supabase');
@@ -3503,6 +3528,49 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       phase: 'deployment',
       requiredRole: 'Backend Architect',
       description: 'Ensure release safety checks, rollback path, and release verification are in place.',
+    });
+  }
+
+  if (isMobileTemplate) {
+    if (tags.mobileMonetization || tags.payments) {
+      addTask({
+        title: 'Define mobile monetization model and in-app billing strategy',
+        phase: 'finance',
+        requiredRole: 'Finance Tracker',
+        description: 'Choose monetization approach (free / ads / IAP / subscriptions / hybrid). Define paywall placement, entitlement tiers, pricing SKUs, and free-to-paid conversion funnel before build begins.',
+      });
+      addTask({
+        title: 'Implement app store billing catalog and in-app purchase flows',
+        phase: 'product_build',
+        requiredRole: 'Backend Architect',
+        description: 'Configure Google Play Billing / RevenueCat SKUs. Wire purchase initiation, server-side receipt validation, entitlement state management, and restore-purchases flow.',
+      });
+      addTask({
+        title: 'Instrument monetization funnel and conversion KPI tracking',
+        phase: 'analytics',
+        requiredRole: 'Finance Tracker',
+        description: 'Track paywall impressions, purchase events, subscription starts/cancellations, and LTV estimates. Wire to analytics connector for recurring revenue dashboards.',
+      });
+    }
+    addTask({
+      title: 'Build signed Android App Bundle (AAB) and submit to Play Store internal track',
+      phase: 'deployment',
+      requiredRole: 'DevOps Automator',
+      description: [
+        'Build a signed release AAB via EAS Build (eas build --platform android --profile production).',
+        'If google_play connector is connected and project mode is not draft: upload AAB to the Play Store internal testing track via the Google Play Console API (upload_bundle, track=internal).',
+        'If connector is not yet connected: produce docs/release_handoff.md with signing config, upload steps, compliance checklist, and Play Store listing guidance for manual submission.',
+        'Document minimum API level, permissions manifest, and privacy policy URL before any submission.',
+      ].join(' '),
+      autoAction: {
+        type: 'connector',
+        connector: 'google_play',
+        operation: 'upload_bundle',
+        input: { track: 'internal' },
+        estimatedCost: 0,
+        actorRole: 'DevOps Automator',
+        requiresPermission: true,
+      },
     });
   }
 
@@ -6056,6 +6124,8 @@ function startProjectTaskExecution(projectState, task, assignee) {
           '  Stack policy: mobile_app defaults to React Native + Expo + TypeScript.',
           '  Include practical run commands in docs/qa_report.md (for example: npm install, npx expo start, npx expo run:android).',
           '  If Android output is required, document EAS Build steps for APK/AAB and required credentials/signing handoff.',
+          '  Google Play release: if google_play connector is connected, DevOps Automator may submit the signed AAB to the Play Store internal testing track (upload_bundle, track=internal).',
+          '  If google_play connector is not connected, produce docs/release_handoff.md instead — include signing config, Play Store listing checklist, and privacy policy URL requirements.',
         ]
         : templateId === 'software_web_app' || templateId === 'software_agency'
           ? [
@@ -10452,6 +10522,38 @@ async function executeCustomCmsConnector(options = {}) {
   };
 }
 
+async function executeGooglePlayConnector(options = {}) {
+  const operation = String(options.operation || 'get_release_status').trim() || 'get_release_status';
+  const token = readCredentialToken('google_play');
+  if (!token) {
+    return {
+      ok: false,
+      errorCode: 'SECRET_MISSING',
+      message: 'Google Play credential token is missing. Connect a Google Play service account JSON key in the Credentials panel.',
+      operation,
+      actualCost: 0,
+      data: null,
+    };
+  }
+
+  const gateway = await executeViaApiGateway('google_play', operation, {
+    ...(options.input && typeof options.input === 'object' ? options.input : {}),
+    credentialToken: token,
+    idempotencyKey: options.idempotencyKey || null,
+    projectId: options.projectId || null,
+  }, 30000);
+  if (!gateway.ok) return gateway;
+  return {
+    ok: true,
+    message: gateway.message || `Google Play operation ${operation} completed via API gateway.`,
+    operation,
+    actualCost: Number.isFinite(Number(gateway.actualCost))
+      ? Number(gateway.actualCost)
+      : Number(options.estimatedCost || 0),
+    data: gateway.data || null,
+  };
+}
+
 function publicationOperationKind(operation) {
   const normalized = String(operation || '').trim().toLowerCase();
   if (['publish_book', 'publish_post', 'publish_product'].includes(normalized)) return 'publish';
@@ -10770,6 +10872,9 @@ async function executeLiveConnector(connectorId, options = {}) {
   }
   if (connectorKey === 'custom_cms') {
     return executeCustomCmsConnector(options);
+  }
+  if (connectorKey === 'google_play') {
+    return executeGooglePlayConnector(options);
   }
   return {
     ok: false,

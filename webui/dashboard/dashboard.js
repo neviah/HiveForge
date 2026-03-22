@@ -121,6 +121,7 @@ const CREDENTIAL_SERVICES = [
   { id:'analytics',     label:'Google Analytics',  icon:'📊', desc:'Track traffic, events, and conversions.'    },
   { id:'supabase',      label:'Supabase',          icon:'🗄️', desc:'Postgres database, auth, and storage for app backends.' },
   { id:'email_provider',label:'Email Provider',    icon:'📧', desc:'SMTP / transactional email (Mailgun etc.).' },
+  { id:'google_play',   label:'Google Play Console', icon:'▶️', desc:'Submit Android App Bundles to Play Store and manage releases.' },
 ];
 
 const KPI_LABELS = ['Tasks Done', 'In Progress', 'Backlog', 'Agents Active', 'Tokens Used', 'Uptime'];
@@ -150,6 +151,7 @@ const CONNECTOR_WEBSITES = {
   analytics: 'https://analytics.google.com/',
   supabase: 'https://supabase.com/dashboard/account/tokens',
   email_provider: 'https://www.mailgun.com/',
+  google_play: 'https://play.google.com/console/developers',
 };
 
 const SERVICE_LABELS = {
@@ -162,6 +164,7 @@ const SERVICE_LABELS = {
   github:         'GitHub',
   telegram:       'Telegram',
   whatsapp:       'WhatsApp',
+  google_play:    'Google Play Console',
 };
 
 const SERVICE_TOKEN_GUIDES = {
@@ -192,6 +195,10 @@ const SERVICE_TOKEN_GUIDES = {
   email_provider: {
     where: 'Mailgun dashboard -> API Security -> API Keys.',
     what: 'Use the private API key (starts with key-).',
+  },
+  google_play: {
+    where: 'Google Play Console -> Setup -> API access -> Service accounts -> create/select a service account -> manage keys.',
+    what: 'Download the service account JSON key file and paste its entire contents (or just the private key) here.',
   },
 };
 
