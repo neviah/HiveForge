@@ -676,9 +676,8 @@
               <input id="settingsLlmApiKeyEnv" type="text" style="width:100%;" placeholder="e.g. OPENROUTER_API_KEY" />
             </div>
             <div style="grid-column:1 / -1;">
-              <div style="font-size:0.84rem;color:var(--muted);padding:0.55rem 0.65rem;border:1px solid var(--border);border-radius:8px;background:var(--panel-bg);">
-                Direct API key storage is disabled for security. Set API Key Env Var and provide the secret in your process environment.
-              </div>
+              <label style="display:block;margin-bottom:0.35rem;font-weight:600;">API Key (Optional direct value)</label>
+              <input id="settingsLlmApiKey" type="password" style="width:100%;" placeholder="Leave blank to keep existing key" autocomplete="off" />
             </div>
           </div>
 

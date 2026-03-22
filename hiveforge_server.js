@@ -744,6 +744,8 @@ function normalizeLlmProvider(providerValue) {
 }
 
 function resolveLlmApiKey(llmConfig) {
+  const direct = String(llmConfig?.apiKey || '').trim();
+  if (direct) return direct;
   const envName = String(llmConfig?.apiKeyEnv || '').trim();
   if (envName) return String(process.env[envName] || '').trim();
   return '';
@@ -2081,11 +2083,7 @@ function planningSettings() {
 
 function persistAppConfig() {
   ensureDir(path.dirname(CONFIG_PATH));
-  const safeConfig = JSON.parse(JSON.stringify(appConfig || {}));
-  if (safeConfig.llm && typeof safeConfig.llm === 'object' && Object.prototype.hasOwnProperty.call(safeConfig.llm, 'apiKey')) {
-    delete safeConfig.llm.apiKey;
-  }
-  fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(safeConfig, null, 2)}\n`, 'utf-8');
+  fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(appConfig, null, 2)}\n`, 'utf-8');
 }
 
 function applyRuntimeSettingsUpdate(partial = {}) {
@@ -11823,13 +11821,6 @@ async function main() {
         const nextApiKey = typeof llmPatch.apiKey !== 'undefined' ? String(llmPatch.apiKey || '').trim() : null;
         const notificationPatch = payload.notifications && typeof payload.notifications === 'object' ? payload.notifications : {};
 
-        if (nextApiKey !== null && nextApiKey !== '') {
-          writeJson(res, {
-            error: 'Direct llm.apiKey storage is disabled. Set llm.apiKeyEnv and provide the key via environment variable instead.',
-          }, 400);
-          return;
-        }
-
         applyRuntimeSettingsUpdate(runtimePatch);
         applyPlanningSettingsUpdate(planningPatch);
 
@@ -11851,8 +11842,8 @@ async function main() {
           if (nextApiKeyEnv !== null) {
             appConfig.llm.apiKeyEnv = nextApiKeyEnv;
           }
-          if (Object.prototype.hasOwnProperty.call(appConfig.llm, 'apiKey')) {
-            delete appConfig.llm.apiKey;
+          if (nextApiKey !== null) {
+            appConfig.llm.apiKey = nextApiKey;
           }
           appState.llm.cloudProviders = Boolean(appConfig.llm.cloudProviders);
           persistAppConfig();

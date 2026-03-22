@@ -396,6 +396,11 @@ function renderSettings(data) {
   document.getElementById('settingsLlmModel').value = llm.model || '';
   document.getElementById('settingsLlmCloudProviders').checked = Boolean(llm.cloudProviders);
   document.getElementById('settingsLlmApiKeyEnv').value = llm.apiKeyEnv || '';
+  document.getElementById('settingsLlmApiKey').value = '';
+  const llmKeyField = document.getElementById('settingsLlmApiKey');
+  if (llmKeyField) {
+    llmKeyField.placeholder = llm.apiKeyConfigured ? 'Configured (leave blank to keep existing key)' : 'Leave blank to keep empty key';
+  }
   const preferFreeTierInput = document.getElementById('settingsPreferFreeTierFirst');
   const requireUpgradeApprovalInput = document.getElementById('settingsRequirePaidTierApproval');
   const preferredDatabaseInput = document.getElementById('settingsPreferredDatabase');
@@ -2232,6 +2237,7 @@ const Dashboard = {
     const llmModel = document.getElementById('settingsLlmModel').value.trim();
     const llmCloudProviders = Boolean(document.getElementById('settingsLlmCloudProviders').checked);
     const llmApiKeyEnv = document.getElementById('settingsLlmApiKeyEnv').value.trim();
+    const llmApiKey = document.getElementById('settingsLlmApiKey').value;
     const preferFreeTierFirst = Boolean(document.getElementById('settingsPreferFreeTierFirst')?.checked);
     const requireApprovalForPaidTierUpgrade = Boolean(document.getElementById('settingsRequirePaidTierApproval')?.checked);
     const preferredDatabaseService = document.getElementById('settingsPreferredDatabase')?.value || 'supabase';
@@ -2258,6 +2264,7 @@ const Dashboard = {
           model: llmModel,
           cloudProviders: llmCloudProviders,
           apiKeyEnv: llmApiKeyEnv,
+          apiKey: llmApiKey,
         },
         planning: {
           preferFreeTierFirst,

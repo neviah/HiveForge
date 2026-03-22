@@ -92,13 +92,11 @@ def load_config(path: str | os.PathLike | None = None) -> AppConfig:
         raise ValueError('Cloud provider selected, but llm.cloudProviders is disabled. Enable it explicitly to allow online LLMs.')
 
     if llm_cfg.provider == 'openai_compatible':
-        if llm_cfg.api_key.strip():
-            raise ValueError('Direct llm.apiKey storage is disabled. Use llm.apiKeyEnv and set the key via environment variable.')
+        resolved_key = llm_cfg.api_key.strip()
         env_name = llm_cfg.api_key_env.strip()
-        if not env_name:
-            raise ValueError('OpenAI-compatible provider requires llm.apiKeyEnv to be set.')
-        resolved_key = str(os.environ.get(env_name, '')).strip()
+        if not resolved_key and env_name:
+            resolved_key = str(os.environ.get(env_name, '')).strip()
         if not resolved_key:
-            raise ValueError(f'Environment variable {env_name} is empty or missing for OpenAI-compatible provider.')
+            raise ValueError('OpenAI-compatible provider requires an API key (llm.apiKey or llm.apiKeyEnv).')
 
     return AppConfig(llm=llm_cfg, sandbox=sandbox_cfg, git=git_cfg)
