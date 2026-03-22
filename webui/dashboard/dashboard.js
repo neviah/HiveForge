@@ -41,6 +41,10 @@ const API = {
   netlifyDeploys: '/api/netlify/deploys',
   notificationTest: '/api/notifications/test',
   retryPolicyTest: '/api/retry_policy/test',
+  projectPreview: '/preview',
+  projectFeedback: '/feedback',
+  projectMessages: '/messages',
+  projectPromote: '/promote',
 };
 
 const SECTION_TITLES = {
@@ -379,6 +383,24 @@ async function fetchWorkspace(projectId, relativePath = '') {
 
 async function fetchWorkspaceFile(projectId, relativePath) {
   return apiFetch(`${API.workspaceFile}?projectId=${encodeURIComponent(projectId)}&path=${encodeURIComponent(relativePath)}`);
+}
+
+async function fetchProjectMessages(projectId) {
+  return apiFetch(`${API.projects}/${encodeURIComponent(projectId)}${API.projectMessages}`);
+}
+
+async function sendProjectFeedback(projectId, message, targetAgentRole = 'coordinator') {
+  return apiFetch(`${API.projects}/${encodeURIComponent(projectId)}${API.projectFeedback}`, {
+    method: 'POST',
+    body: JSON.stringify({ message, targetAgentRole }),
+  });
+}
+
+async function promoteProjectDraft(projectId) {
+  return apiFetch(`${API.projects}/${encodeURIComponent(projectId)}${API.projectPromote}`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
 }
 
 function renderSettings(data) {
@@ -1360,6 +1382,32 @@ function renderWorkspacePreview(data) {
   preview.textContent = String(data.content || '').trim() || 'File is empty.';
 }
 
+function setDraftPreviewStatus(text, level = 'muted') {
+  const el = document.getElementById('draftPreviewStatus');
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = level === 'error' ? 'var(--error,#d9534f)' : 'var(--muted)';
+}
+
+function renderProjectMessagesPanel(payload) {
+  const host = document.getElementById('projectMessages');
+  if (!host) return;
+  const items = Array.isArray(payload?.messages) ? payload.messages : [];
+  if (!items.length) {
+    host.innerHTML = '<div style="color:var(--muted);">No messages yet.</div>';
+    return;
+  }
+  host.innerHTML = items.slice(0, 25).map((entry) => {
+    const when = esc(entry.ts || '');
+    const kind = esc(entry.kind || 'message');
+    const msg = esc(entry.message || '(no message text)');
+    return `<div style="padding:0.45rem 0.5rem;border-bottom:1px solid var(--border);">
+      <div style="font-size:0.75rem;color:var(--muted);">${when} · ${kind}</div>
+      <div style="font-size:0.86rem;">${msg}</div>
+    </div>`;
+  }).join('');
+}
+
 function normalizeHttpUrl(candidate) {
   const raw = String(candidate || '').trim();
   if (!raw) return '';
@@ -1496,10 +1544,30 @@ async function onSectionActivate(id) {
           } else {
             renderWorkspacePreview(null);
           }
+
+          const frame = document.getElementById('draftPreviewFrame');
+          if (frame) {
+            const activeProject = state.projects.find((p) => p.id === pid) || state.activeProject || {};
+            if (String(activeProject.mode || '').toLowerCase() === 'draft') {
+              frame.src = `${API.projects}/${encodeURIComponent(pid)}${API.projectPreview}`;
+              setDraftPreviewStatus('Draft preview loaded from project artifacts.');
+            } else {
+              frame.removeAttribute('src');
+              frame.srcdoc = '<p style="padding:12px;color:#666;font-family:sans-serif;">Draft preview is only available when project mode is Draft.</p>';
+              setDraftPreviewStatus('Current project is in Production mode.');
+            }
+          }
+
+          try {
+            renderProjectMessagesPanel(await fetchProjectMessages(pid));
+          } catch (err) {
+            renderProjectMessagesPanel({ messages: [] });
+          }
         } catch (err) {
           const tree = document.getElementById('workspaceTree');
           if (tree) tree.innerHTML = `<div style="color:var(--error,#d9534f);">${esc(err.message)}</div>`;
           renderWorkspacePreview({ content: 'Workspace preview unavailable.' });
+          setDraftPreviewStatus('Draft preview unavailable.', 'error');
         }
       }
       break;
@@ -1585,6 +1653,7 @@ const Dashboard = {
   async createProject() {
     const name     = document.getElementById('newProjectName').value.trim();
     const template = document.getElementById('newProjectTemplate').value;
+    const mode     = (document.getElementById('newProjectMode')?.value || 'production').trim();
     const goal     = document.getElementById('newProjectGoal').value.trim();
     const status   = document.getElementById('createProjectStatus');
 
@@ -1594,7 +1663,7 @@ const Dashboard = {
     try {
       const project = await apiFetch(API.projects, {
         method: 'POST',
-        body: JSON.stringify({ name, template, goal }),
+        body: JSON.stringify({ name, template, mode, goal }),
       });
       const projects = await fetchProjects();
       state.projects = projects;
@@ -1603,6 +1672,48 @@ const Dashboard = {
       setTimeout(() => Dashboard.selectProject(project.id), 800);
     } catch (err) {
       showStatus(status, `Failed: ${err.message}`, 'error');
+    }
+  },
+
+  async refreshDraftPreview() {
+    const pid = state.activeProject?.id;
+    const frame = document.getElementById('draftPreviewFrame');
+    if (!pid || !frame) return;
+    frame.src = `${API.projects}/${encodeURIComponent(pid)}${API.projectPreview}?t=${Date.now()}`;
+    setDraftPreviewStatus('Refreshing draft preview...');
+  },
+
+  async sendProjectFeedback() {
+    const pid = state.activeProject?.id;
+    const input = document.getElementById('projectFeedbackInput');
+    const status = document.getElementById('projectFeedbackStatus');
+    if (!pid || !input || !status) return;
+    const message = String(input.value || '').trim();
+    if (!message) {
+      showStatus(status, 'Enter feedback first.', 'error');
+      return;
+    }
+    showStatus(status, 'Sending…', 'running');
+    try {
+      await sendProjectFeedback(pid, message, 'coordinator');
+      input.value = '';
+      renderProjectMessagesPanel(await fetchProjectMessages(pid));
+      showStatus(status, 'Sent to coordinator.', 'ok');
+    } catch (err) {
+      showStatus(status, `Failed: ${err.message}`, 'error');
+    }
+  },
+
+  async promoteDraftToProduction() {
+    const pid = state.activeProject?.id;
+    if (!pid) return;
+    try {
+      await promoteProjectDraft(pid);
+      state.projects = await fetchProjects();
+      renderSidebarProjectList(state.projects);
+      setDraftPreviewStatus('Project promoted to Production mode.');
+    } catch (err) {
+      setDraftPreviewStatus(`Promotion failed: ${err.message}`, 'error');
     }
   },
 

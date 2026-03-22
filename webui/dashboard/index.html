@@ -159,6 +159,16 @@
           </div>
         </div>
         <div style="max-width:700px;margin-bottom:1rem;">
+          <label style="display:block;margin-bottom:0.4rem;font-weight:600;">Run Mode</label>
+          <select id="newProjectMode" style="width:100%;">
+            <option value="production">Production (deploy enabled)</option>
+            <option value="draft">Draft (preview only, no deploy)</option>
+          </select>
+          <div style="font-size:0.8rem;color:var(--muted);margin-top:0.35rem;">
+            Use Draft mode to iterate without spending Netlify deploy credits.
+          </div>
+        </div>
+        <div style="max-width:700px;margin-bottom:1rem;">
           <label style="display:block;margin-bottom:0.4rem;font-weight:600;">Goal (describe what this project should achieve)</label>
           <textarea id="newProjectGoal" style="width:100%;height:90px;" placeholder="e.g. Build and launch a SaaS product that automates invoice processing..."></textarea>
         </div>
@@ -276,6 +286,29 @@
           <div class="hf-card" style="min-height:400px;">
             <h3>File Preview</h3>
             <pre id="workspacePreview" style="font-size:0.82rem;overflow:auto;max-height:360px;color:var(--muted);">Select a file to preview.</pre>
+          </div>
+        </div>
+        <div class="hf-grid-2" style="margin-top:1rem;">
+          <div class="hf-card" style="min-height:360px;">
+            <h3>Draft Preview</h3>
+            <div class="hf-btn-row" style="margin-bottom:0.6rem;">
+              <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.refreshDraftPreview()">↻ Refresh Preview</button>
+              <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.promoteDraftToProduction()">Promote to Production</button>
+            </div>
+            <iframe id="draftPreviewFrame" style="width:100%;height:255px;border:1px solid var(--border);border-radius:8px;background:#fff;"></iframe>
+            <div id="draftPreviewStatus" style="font-size:0.8rem;color:var(--muted);margin-top:0.5rem;">Preview is available for draft projects after artifacts are generated.</div>
+          </div>
+          <div class="hf-card" style="min-height:360px;">
+            <h3>Project Messaging</h3>
+            <div id="projectMessages" class="hf-log-stream" style="max-height:180px;margin-bottom:0.6rem;">
+              <div style="color:var(--muted);">No messages yet.</div>
+            </div>
+            <label style="display:block;margin-bottom:0.35rem;font-weight:600;">Send Feedback to Coordinator</label>
+            <textarea id="projectFeedbackInput" style="width:100%;height:88px;" placeholder="e.g. Make the homepage layout more minimal and remove testimonials section."></textarea>
+            <div class="hf-btn-row" style="margin-top:0.55rem;">
+              <button class="hf-btn" onclick="Dashboard.sendProjectFeedback()">Send Feedback</button>
+              <span id="projectFeedbackStatus" class="hf-status" style="display:none;"></span>
+            </div>
           </div>
         </div>
       </section>
