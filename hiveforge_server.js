@@ -27,6 +27,7 @@ const DEFAULT_RUNTIME_SETTINGS = {
   stallTimeoutMs: 10 * 60 * 1000,
   maxAutoFixes: 5,
   countManualHeartbeatForStall: false,
+  fastLocalIterationMode: true,
 };
 const DEFAULT_PLANNING_SETTINGS = {
   preferFreeTierFirst: true,
@@ -743,8 +744,6 @@ function normalizeLlmProvider(providerValue) {
 }
 
 function resolveLlmApiKey(llmConfig) {
-  const direct = String(llmConfig?.apiKey || '').trim();
-  if (direct) return direct;
   const envName = String(llmConfig?.apiKeyEnv || '').trim();
   if (envName) return String(process.env[envName] || '').trim();
   return '';
@@ -2058,6 +2057,9 @@ function runtimeSettings() {
     countManualHeartbeatForStall: typeof raw.countManualHeartbeatForStall === 'boolean'
       ? raw.countManualHeartbeatForStall
       : DEFAULT_RUNTIME_SETTINGS.countManualHeartbeatForStall,
+    fastLocalIterationMode: typeof raw.fastLocalIterationMode === 'boolean'
+      ? raw.fastLocalIterationMode
+      : DEFAULT_RUNTIME_SETTINGS.fastLocalIterationMode,
   };
 }
 
@@ -2079,7 +2081,11 @@ function planningSettings() {
 
 function persistAppConfig() {
   ensureDir(path.dirname(CONFIG_PATH));
-  fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(appConfig, null, 2)}\n`, 'utf-8');
+  const safeConfig = JSON.parse(JSON.stringify(appConfig || {}));
+  if (safeConfig.llm && typeof safeConfig.llm === 'object' && Object.prototype.hasOwnProperty.call(safeConfig.llm, 'apiKey')) {
+    delete safeConfig.llm.apiKey;
+  }
+  fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(safeConfig, null, 2)}\n`, 'utf-8');
 }
 
 function applyRuntimeSettingsUpdate(partial = {}) {
@@ -2094,6 +2100,9 @@ function applyRuntimeSettingsUpdate(partial = {}) {
     countManualHeartbeatForStall: typeof merged.countManualHeartbeatForStall === 'boolean'
       ? merged.countManualHeartbeatForStall
       : DEFAULT_RUNTIME_SETTINGS.countManualHeartbeatForStall,
+    fastLocalIterationMode: typeof merged.fastLocalIterationMode === 'boolean'
+      ? merged.fastLocalIterationMode
+      : DEFAULT_RUNTIME_SETTINGS.fastLocalIterationMode,
   };
   persistAppConfig();
 
@@ -2385,6 +2394,7 @@ function writeProjectWorkspaceArtifacts(projectState) {
       siteUrl: netlify.siteUrl || null,
       lastDeployUrl: netlify.lastDeployUrl || null,
       lastDeployAt: netlify.lastDeployAt || null,
+      lastDeployArtifactHash: netlify.lastDeployArtifactHash || null,
       deployStatus: netlify.status || 'unknown',
     }, null, 2)}\n`, 'utf-8');
   }
@@ -2890,13 +2900,24 @@ function hasUnresolvedTemplateValue(value) {
 }
 
 function recurringScheduleForTemplate(templateKey, templateData = null) {
+  const key = String(templateKey || '').toLowerCase();
+  const mode = String(
+    (templateData && templateData.operating_mode)
+    || DEFAULT_OPERATING_MODE_BY_TEMPLATE[key]
+    || 'continuous_business'
+  ).toLowerCase();
+  const includeDefaultRecurring = mode === 'continuous_business';
+  const fastLocalGameMode = key === 'game_studio' && runtimeSettings().fastLocalIterationMode;
+  if (fastLocalGameMode) return [];
+
   const fromTemplate = Array.isArray(templateData && templateData.recurring_loops)
     ? templateData.recurring_loops
       .filter((entry) => entry && entry.enabled !== false)
       .map((entry, idx) => normalizeRecurringLoopSpec(entry, idx))
     : [];
-  const templateSchedule = RECURRING_SCHEDULE_BY_TEMPLATE[String(templateKey || '').toLowerCase()] || [];
-  const merged = fromTemplate.length ? [...DEFAULT_RECURRING_SCHEDULE, ...fromTemplate] : [...DEFAULT_RECURRING_SCHEDULE, ...templateSchedule];
+  const templateSchedule = RECURRING_SCHEDULE_BY_TEMPLATE[key] || [];
+  const defaults = includeDefaultRecurring ? DEFAULT_RECURRING_SCHEDULE : [];
+  const merged = fromTemplate.length ? [...defaults, ...fromTemplate] : [...defaults, ...templateSchedule];
   return merged.map((entry, idx) => normalizeRecurringLoopSpec({
     key: entry.key,
     title: entry.title,
@@ -3450,6 +3471,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   }
 
   if (String(templateId || '').toLowerCase() === 'game_studio') {
+    const fastLocalGameMode = runtimeSettings().fastLocalIterationMode === true;
     addTask({
       title: 'Design game mechanics, rules, and player experience',
       phase: 'product_build',
@@ -3471,7 +3493,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
         '  /sandbox/workspace/projects/{projectId}/game/index.html',
         'Requirements:',
         '  - Include <link rel="stylesheet" href="./style.css"> and <script src="./game.js"></script>.',
-        '  - Include a #game-container div, a score/status area, card play areas, and a #restartBtn button.',
+        '  - Include a #game-container div, a score/status area, core gameplay region, and a #restartBtn button.',
         '  - The <title> and main <h1> must match the project name exactly.',
         '  - Do NOT include HIVEFORGE_SCAFFOLD_PLACEHOLDER anywhere.',
         'Write only index.html, then end with TASK_DONE.',
@@ -3488,7 +3510,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
         '  /sandbox/workspace/projects/{projectId}/game/game.js',
         'Requirements:',
         '  - Vanilla JavaScript only — no imports, no npm packages.',
-        '  - Full game loop: initialization, player input, AI turns, win/lose detection, scoring, restart.',
+        '  - Full game loop: initialization, player input, game state updates, win/lose detection, scoring, restart.',
         '  - Use getElementById/querySelector to interact with DOM elements from index.html.',
         '  - Do NOT include HIVEFORGE_SCAFFOLD_PLACEHOLDER anywhere.',
         'Write only game.js, then end with TASK_DONE.',
@@ -3503,8 +3525,8 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
         'Write ONLY this one file using the file tool (action=write):',
         '  /sandbox/workspace/projects/{projectId}/game/style.css',
         'Requirements:',
-        '  - Dark-themed, polished card-game aesthetic.',
-        '  - Style the card table, player areas, score panel, buttons, and status messages.',
+        '  - Polished visual style matched to the game concept in the goal prompt.',
+        '  - Style gameplay area, player/status panels, buttons, and status messages.',
         '  - Responsive layout that works at 900px+ width.',
         '  - Do NOT include HIVEFORGE_SCAFFOLD_PLACEHOLDER anywhere.',
         'Write only style.css, then end with TASK_DONE.',
@@ -3526,23 +3548,32 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
         'End with TASK_DONE only after confirming all three files are complete with no scaffold placeholder.',
       ].join('\n'),
     });
-    addTask({
-      title: 'Deploy finalized game build to Netlify',
-      phase: 'deployment',
-      requiredRole: 'Backend Architect',
-      description: 'Trigger a fresh Netlify deploy using the configured site binding after game files are fully implemented and validated.',
-      autoAction: {
-        type: 'connector',
-        connector: 'netlify',
-        operation: 'trigger_deploy',
-        input: {
-          siteId: '{{netlify_site_id}}',
+    if (!fastLocalGameMode) {
+      addTask({
+        title: 'Deploy finalized game build to Netlify',
+        phase: 'deployment',
+        requiredRole: 'Backend Architect',
+        description: 'Trigger a fresh Netlify deploy using the configured site binding after game files are fully implemented and validated.',
+        autoAction: {
+          type: 'connector',
+          connector: 'netlify',
+          operation: 'trigger_deploy',
+          input: {
+            siteId: '{{netlify_site_id}}',
+          },
+          estimatedCost: 0,
+          actorRole: 'Backend Architect',
+          requiresPermission: false,
         },
-        estimatedCost: 0,
-        actorRole: 'Backend Architect',
-        requiresPermission: false,
-      },
-    });
+      });
+    } else {
+      addTask({
+        title: 'Run local-only gameplay verification pass',
+        phase: 'deployment',
+        requiredRole: 'Evidence Collector',
+        description: 'Fast local iteration mode is enabled. Validate playability in local preview and defer remote deploy until operator explicitly requests release deploy.',
+      });
+    }
   }
 
   addTask({
@@ -3675,7 +3706,7 @@ function createInitialTasks(template, options = {}) {
   if (!generatedTasks.length) {
     return baseTasks;
   }
-  if (templateId === 'business') {
+  if (templateId === 'business' || templateId === 'game_studio') {
     return generatedTasks;
   }
   return [...generatedTasks, ...baseTasks];
@@ -3772,6 +3803,7 @@ function hasGameStudioPlayableArtifacts(projectState) {
 
 function hasGameStudioDeployEvidence(projectState) {
   if (!projectState || String(projectState.template || '').toLowerCase() !== 'game_studio') return true;
+  if (runtimeSettings().fastLocalIterationMode) return true;
   const netlify = projectState.connectorBindings && projectState.connectorBindings.netlify
     ? projectState.connectorBindings.netlify
     : {};
@@ -3796,6 +3828,24 @@ function latestGameArtifactUpdatedAt(projectState) {
     }
   });
   return latest;
+}
+
+function gameStudioArtifactHash(projectState) {
+  if (!projectState || String(projectState.template || '').toLowerCase() !== 'game_studio') return null;
+  const root = projectWorkspaceDir(projectState.id);
+  const required = [
+    path.join(root, 'game', 'index.html'),
+    path.join(root, 'game', 'game.js'),
+    path.join(root, 'game', 'style.css'),
+  ];
+  try {
+    const chunks = required.map((target) => fs.readFileSync(target));
+    const hash = crypto.createHash('sha256');
+    chunks.forEach((buf) => hash.update(buf));
+    return hash.digest('hex');
+  } catch {
+    return null;
+  }
 }
 
 function verifyGoalDelivery(projectState) {
@@ -3850,6 +3900,12 @@ function verifyGoalDelivery(projectState) {
   if (!hasGameStudioDeployEvidence(projectState)) {
     gaps.push('Game Studio deploy evidence missing: no deploy URL recorded for project Netlify site yet.');
   } else if (String(projectState.template || '').toLowerCase() === 'game_studio') {
+    if (runtimeSettings().fastLocalIterationMode) {
+      if (gaps.length === 0) {
+        return { verified: true, gaps: [] };
+      }
+      return { verified: false, gaps };
+    }
     const netlify = projectState.connectorBindings && projectState.connectorBindings.netlify
       ? projectState.connectorBindings.netlify
       : {};
@@ -4082,16 +4138,16 @@ function summarizeProjectAutomation(projectState) {
 
 function ensureRecurringState(projectState) {
   if (!projectState.recurring || typeof projectState.recurring !== 'object') {
-    projectState.recurring = { enabled: true, lastRunAt: {}, lastIdleNoticeAt: null };
-  }
-  if (typeof projectState.recurring.enabled !== 'boolean') {
-    projectState.recurring.enabled = true;
+    projectState.recurring = { enabled: false, lastRunAt: {}, lastIdleNoticeAt: null };
   }
   if (!projectState.recurring.lastRunAt || typeof projectState.recurring.lastRunAt !== 'object') {
     projectState.recurring.lastRunAt = {};
   }
   if (!Array.isArray(projectState.recurring.schedule)) {
     projectState.recurring.schedule = recurringScheduleForTemplate(projectState.template);
+  }
+  if (typeof projectState.recurring.enabled !== 'boolean') {
+    projectState.recurring.enabled = projectState.recurring.schedule.length > 0;
   }
   if (typeof projectState.recurring.lastIdleNoticeAt === 'undefined') {
     projectState.recurring.lastIdleNoticeAt = null;
@@ -4615,6 +4671,41 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
     return true;
   }
 
+  if (
+    String(projectState.template || '').toLowerCase() === 'game_studio'
+    && String(action.connector || '').toLowerCase() === 'netlify'
+    && String(action.operation || '').toLowerCase() === 'trigger_deploy'
+  ) {
+    ensureProjectConnectorBindings(projectState);
+    const binding = projectState.connectorBindings.netlify || {};
+    const currentArtifactHash = gameStudioArtifactHash(projectState);
+    const previousArtifactHash = String(binding.lastDeployArtifactHash || '').trim();
+    if (currentArtifactHash && previousArtifactHash && previousArtifactHash === currentArtifactHash) {
+      finalizeAutoActionTask(projectState, task, true, 'No deploy needed: game artifacts unchanged since last successful deploy.', {
+        connector: action.connector,
+        operation: action.operation,
+        source,
+        skipped: true,
+        skippedReason: 'artifact_hash_unchanged',
+        executionKey,
+        artifactHash: currentArtifactHash,
+      });
+      markConnectorExecutionRecord(projectState, executionKey, {
+        status: 'succeeded',
+        message: 'Skipped deploy because game artifacts are unchanged.',
+        completedAt: nowIso(),
+        actualCost: 0,
+        result: {
+          skipped: true,
+          reason: 'artifact_hash_unchanged',
+          artifactHash: currentArtifactHash,
+        },
+      });
+      persistProjectState(projectState);
+      return true;
+    }
+  }
+
   task.status = 'inprogress';
   task.assignee = actor ? actor.id : null;
   task.startedAt = nowIso();
@@ -4816,6 +4907,7 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
     if (String(action.connector || '').toLowerCase() === 'netlify') {
       ensureProjectConnectorBindings(projectState);
       const binding = projectState.connectorBindings.netlify || {};
+      const currentArtifactHash = gameStudioArtifactHash(projectState);
       const deployUrl = String(execution && execution.data && execution.data.deployUrl ? execution.data.deployUrl : '').trim();
       const siteUrl = String(execution && execution.data && execution.data.siteUrl ? execution.data.siteUrl : '').trim();
       const siteId = String(actionInput.siteId || binding.siteId || '').trim();
@@ -4825,6 +4917,7 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
         siteUrl: siteUrl || binding.siteUrl || null,
         lastDeployUrl: deployUrl || binding.lastDeployUrl || null,
         lastDeployAt: nowIso(),
+        lastDeployArtifactHash: currentArtifactHash || binding.lastDeployArtifactHash || null,
         status: 'ready',
         updatedAt: nowIso(),
       };
@@ -6235,6 +6328,7 @@ function createProjectFromTemplate({ name, template, goal }) {
   const operatingMode = templateOperatingMode(template, tpl);
   const staffingPolicy = templateAutoStaffingPolicy(tpl, subordinateCount);
   const goalPlan = goalActionPlanFromPrompt(template, goal || tpl.goal_definition || '', tpl);
+  const recurringSchedule = recurringScheduleForTemplate(template, tpl);
   const state = {
     id,
     name,
@@ -6249,9 +6343,9 @@ function createProjectFromTemplate({ name, template, goal }) {
     completedAt: null,
     failedAt: null,
     recurring: {
-      enabled: true,
+      enabled: recurringSchedule.length > 0,
       lastRunAt: {},
-      schedule: recurringScheduleForTemplate(template, tpl),
+      schedule: recurringSchedule,
       lastIdleNoticeAt: null,
     },
     staffing: {
@@ -11729,6 +11823,13 @@ async function main() {
         const nextApiKey = typeof llmPatch.apiKey !== 'undefined' ? String(llmPatch.apiKey || '').trim() : null;
         const notificationPatch = payload.notifications && typeof payload.notifications === 'object' ? payload.notifications : {};
 
+        if (nextApiKey !== null && nextApiKey !== '') {
+          writeJson(res, {
+            error: 'Direct llm.apiKey storage is disabled. Set llm.apiKeyEnv and provide the key via environment variable instead.',
+          }, 400);
+          return;
+        }
+
         applyRuntimeSettingsUpdate(runtimePatch);
         applyPlanningSettingsUpdate(planningPatch);
 
@@ -11750,8 +11851,8 @@ async function main() {
           if (nextApiKeyEnv !== null) {
             appConfig.llm.apiKeyEnv = nextApiKeyEnv;
           }
-          if (nextApiKey !== null) {
-            appConfig.llm.apiKey = nextApiKey;
+          if (Object.prototype.hasOwnProperty.call(appConfig.llm, 'apiKey')) {
+            delete appConfig.llm.apiKey;
           }
           appState.llm.cloudProviders = Boolean(appConfig.llm.cloudProviders);
           persistAppConfig();

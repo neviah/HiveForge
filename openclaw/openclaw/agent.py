@@ -22,9 +22,8 @@ class Agent:
             )
             self._provider_policy = 'Use the configured local LM Studio model for reasoning and tool use.'
         elif config.llm.provider == 'openai_compatible':
-            api_key = (config.llm.api_key or '').strip()
-            if not api_key and (config.llm.api_key_env or '').strip():
-                api_key = str(os.environ.get(config.llm.api_key_env.strip(), '') or '').strip()
+            api_key_env = (config.llm.api_key_env or '').strip()
+            api_key = str(os.environ.get(api_key_env, '') or '').strip() if api_key_env else ''
             self.provider = OpenAICompatibleProvider(
                 endpoint=config.llm.endpoint,
                 model=config.llm.model,

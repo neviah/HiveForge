@@ -390,16 +390,12 @@ function renderSettings(data) {
   document.getElementById('settingsStallMinutes').value = String(Math.round((Number(runtime.stallTimeoutMs) || 600000) / 60000));
   document.getElementById('settingsMaxAutoFixes').value = String(Number(runtime.maxAutoFixes) || 5);
   document.getElementById('settingsCountManualHeartbeat').checked = Boolean(runtime.countManualHeartbeatForStall);
+  document.getElementById('settingsFastLocalIterationMode').checked = runtime.fastLocalIterationMode !== false;
   document.getElementById('settingsLlmProvider').value = llm.provider === 'openai_compatible' ? 'openai_compatible' : 'lmstudio';
   document.getElementById('settingsLlmEndpoint').value = llm.endpoint || '';
   document.getElementById('settingsLlmModel').value = llm.model || '';
   document.getElementById('settingsLlmCloudProviders').checked = Boolean(llm.cloudProviders);
   document.getElementById('settingsLlmApiKeyEnv').value = llm.apiKeyEnv || '';
-  document.getElementById('settingsLlmApiKey').value = '';
-  const llmKeyField = document.getElementById('settingsLlmApiKey');
-  if (llmKeyField) {
-    llmKeyField.placeholder = llm.apiKeyConfigured ? 'Configured (leave blank to keep existing key)' : 'Leave blank to keep empty key';
-  }
   const preferFreeTierInput = document.getElementById('settingsPreferFreeTierFirst');
   const requireUpgradeApprovalInput = document.getElementById('settingsRequirePaidTierApproval');
   const preferredDatabaseInput = document.getElementById('settingsPreferredDatabase');
@@ -2230,12 +2226,12 @@ const Dashboard = {
     const stallMinutes = Number(document.getElementById('settingsStallMinutes').value);
     const maxAutoFixes = Number(document.getElementById('settingsMaxAutoFixes').value);
     const countManualHeartbeatForStall = document.getElementById('settingsCountManualHeartbeat').checked;
+    const fastLocalIterationMode = document.getElementById('settingsFastLocalIterationMode').checked;
     const llmProvider = document.getElementById('settingsLlmProvider').value;
     const llmEndpoint = document.getElementById('settingsLlmEndpoint').value.trim();
     const llmModel = document.getElementById('settingsLlmModel').value.trim();
     const llmCloudProviders = Boolean(document.getElementById('settingsLlmCloudProviders').checked);
     const llmApiKeyEnv = document.getElementById('settingsLlmApiKeyEnv').value.trim();
-    const llmApiKey = document.getElementById('settingsLlmApiKey').value;
     const preferFreeTierFirst = Boolean(document.getElementById('settingsPreferFreeTierFirst')?.checked);
     const requireApprovalForPaidTierUpgrade = Boolean(document.getElementById('settingsRequirePaidTierApproval')?.checked);
     const preferredDatabaseService = document.getElementById('settingsPreferredDatabase')?.value || 'supabase';
@@ -2254,6 +2250,7 @@ const Dashboard = {
           stallTimeoutMs: Math.round(stallMinutes * 60 * 1000),
           maxAutoFixes: Math.round(maxAutoFixes),
           countManualHeartbeatForStall,
+          fastLocalIterationMode,
         },
         llm: {
           provider: llmProvider,
@@ -2261,7 +2258,6 @@ const Dashboard = {
           model: llmModel,
           cloudProviders: llmCloudProviders,
           apiKeyEnv: llmApiKeyEnv,
-          apiKey: llmApiKey,
         },
         planning: {
           preferFreeTierFirst,

@@ -24,7 +24,6 @@ function writeConfig() {
       provider: 'lmstudio',
       endpoint: 'http://127.0.0.1:1234/api/v1',
       model: null,
-      apiKey: '',
       apiKeyEnv: '',
       extraHeaders: {},
       streaming: true,
@@ -51,7 +50,8 @@ function writeConfig() {
       heartbeatIntervalMs: 30000,
       stallTimeoutMs: 600000,
       maxAutoFixes: 5,
-      countManualHeartbeatForStall: false
+      countManualHeartbeatForStall: false,
+      fastLocalIterationMode: true
     },
     planning: {
       preferFreeTierFirst: true,
