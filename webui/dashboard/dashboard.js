@@ -228,6 +228,8 @@ const state = {
   credentialBudget: [],
   credentialAudit: [],
   credentials: [],
+  imageRuntime: null,
+  imageProgressEvents: [],
   workspacePath: '',
   messageBusPoller: null,
   messageBusFilter: { kind: '', actor: '', q: '' },
@@ -353,6 +355,23 @@ async function runConnectorCheck(connector, projectId, dryRun = true, operation 
   return apiFetch(API.connectorsExecute, {
     method: 'POST',
     body: JSON.stringify({ connector, projectId, dryRun, operation, estimatedCost }),
+  });
+}
+
+async function runImageConnector(projectId, operation, input = {}, dryRun = false) {
+  return apiFetch(API.connectorsExecute, {
+    method: 'POST',
+    body: JSON.stringify({
+      connector: 'image_generator',
+      projectId,
+      dryRun,
+      operation,
+      input,
+      estimatedCost: 0,
+      actorRole: 'Backend Architect',
+      requiresPermission: false,
+      productionMode: false,
+    }),
   });
 }
 
@@ -631,6 +650,7 @@ function startSSE(projectId) {
   src.addEventListener('task_update',     e => handleSSEEvent('task',            JSON.parse(e.data)));
   src.addEventListener('heartbeat',       e => handleSSEEvent('heartbeat',       JSON.parse(e.data)));
   src.addEventListener('project_status',  e => handleSSEEvent('project_status',  JSON.parse(e.data)));
+  src.addEventListener('image_progress',  e => handleSSEEvent('image_progress',  JSON.parse(e.data)));
   src.addEventListener('error',           e => handleSSEEvent('error',           JSON.parse(e.data)));
   src.onerror = () => console.warn('[HiveForge] SSE connection dropped — will retry.');
   state.sseSource = src;
@@ -655,6 +675,12 @@ function handleSSEEvent(type, data) {
       if (state.activeSection === 'agents') onSectionActivate('agents');
       if (data.status === 'completed') showToast('\u2705 Project completed — all tasks done!', 'ok');
       if (data.status === 'failed')    showToast('\u274c Project failed — max auto-fixes reached. Use Restart Agents to retry.', 'error');
+    }
+  }
+  if (type === 'image_progress') {
+    appendImageProgressEvent(data || {});
+    if (state.activeSection === 'workspace') {
+      renderImageProgressStream();
     }
   }
 }
@@ -1417,6 +1443,69 @@ function renderProjectMessagesPanel(payload) {
   }).join('');
 }
 
+function appendImageProgressEvent(entry) {
+  const item = {
+    ts: entry?.ts || new Date().toISOString(),
+    kind: entry?.kind || 'event',
+    modelId: entry?.modelId || null,
+    progressPct: Number.isFinite(Number(entry?.progressPct)) ? Number(entry.progressPct) : null,
+    written: Number.isFinite(Number(entry?.written)) ? Number(entry.written) : null,
+    total: Number.isFinite(Number(entry?.total)) ? Number(entry.total) : null,
+    output: entry?.output || null,
+    jobId: entry?.jobId || null,
+  };
+  state.imageProgressEvents.unshift(item);
+  if (state.imageProgressEvents.length > 80) state.imageProgressEvents.length = 80;
+}
+
+function renderImageProgressStream() {
+  const host = document.getElementById('imageProgressStream');
+  if (!host) return;
+  const entries = Array.isArray(state.imageProgressEvents) ? state.imageProgressEvents : [];
+  if (!entries.length) {
+    host.innerHTML = '<div style="color:var(--muted);">No image runtime events yet.</div>';
+    return;
+  }
+  host.innerHTML = entries.slice(0, 30).map((entry) => {
+    const pct = entry.progressPct !== null ? `${entry.progressPct}%` : '';
+    const bytes = entry.written !== null && entry.total !== null
+      ? ` (${formatFileSize(entry.written)} / ${formatFileSize(entry.total)})`
+      : '';
+    const info = [pct, bytes, entry.modelId ? `model=${entry.modelId}` : '', entry.jobId ? `job=${entry.jobId}` : '']
+      .filter(Boolean)
+      .join(' ');
+    return `<div style="padding:0.4rem 0.45rem;border-bottom:1px solid var(--border);">
+      <div style="font-size:0.74rem;color:var(--muted);">${esc(new Date(entry.ts).toLocaleString())} · ${esc(entry.kind)}</div>
+      <div style="font-size:0.82rem;color:var(--text);">${esc(info || 'progress update')}</div>
+      ${entry.output ? `<div style="font-size:0.76rem;color:var(--muted);">${esc(entry.output)}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function renderImageRuntimePanel(profilePayload) {
+  const profile = profilePayload && typeof profilePayload === 'object' ? profilePayload : null;
+  state.imageRuntime = profile;
+  const queue = profile && profile.queue && typeof profile.queue === 'object' ? profile.queue : {};
+  setText('imageQueueQueued', String(Number(queue.queued || 0)));
+  setText('imageQueueActive', String(Number(queue.active || 0)));
+  setText('imageQueueCompleted', String(Number(queue.completed || 0)));
+  setText('imageQueueFailed', String(Number(queue.failed || 0)));
+
+  const models = Array.isArray(profile && profile.models) ? profile.models : [];
+  const preferredModelId = String(profile && profile.preferredModelId ? profile.preferredModelId : '').trim();
+  const preferred = models.find((item) => item.id === preferredModelId) || models[0] || null;
+  const modelLabel = preferred
+    ? `${preferred.label || preferred.id} (${preferred.vramProfile || 'n/a'}) · ${preferred.ready ? 'ready' : (preferred.status || 'not-ready')}`
+    : 'unknown';
+  setText('imageRuntimeModel', `Model: ${modelLabel}`);
+
+  const statusText = profile
+    ? `Worker slots: ${profile.settings?.workerSlots ?? 1} · retention: ${profile.settings?.retentionDays ?? '-'}d · quota: ${profile.settings?.quotaMbPerProject ?? '-'}MB`
+    : 'No runtime status loaded yet.';
+  setText('imageRuntimeStatus', statusText);
+  renderImageProgressStream();
+}
+
 function normalizeHttpUrl(candidate) {
   const raw = String(candidate || '').trim();
   if (!raw) return '';
@@ -1571,6 +1660,15 @@ async function onSectionActivate(id) {
             renderProjectMessagesPanel(await fetchProjectMessages(pid));
           } catch (err) {
             renderProjectMessagesPanel({ messages: [] });
+          }
+
+          try {
+            const runtimeRes = await runImageConnector(pid, 'get_profile', {}, false);
+            const profile = runtimeRes?.execution?.data || runtimeRes?.data || null;
+            renderImageRuntimePanel(profile);
+          } catch (err) {
+            renderImageRuntimePanel(null);
+            setText('imageRuntimeStatus', `Image runtime unavailable: ${err.message}`);
           }
         } catch (err) {
           const tree = document.getElementById('workspaceTree');
@@ -1737,6 +1835,76 @@ const Dashboard = {
   refreshAgents()   { onSectionActivate('agents');   },
   refreshApprovals(){ onSectionActivate('approvals');},
   refreshWorkspace(){ onSectionActivate('workspace'); },
+  async refreshImageRuntime() {
+    const pid = state.activeProject?.id;
+    if (!pid) {
+      showToast('No active project selected.', 'error');
+      return;
+    }
+    try {
+      const result = await runImageConnector(pid, 'get_profile', {}, false);
+      const profile = result?.execution?.data || result?.data || null;
+      renderImageRuntimePanel(profile);
+      showToast('Image runtime profile refreshed.', 'ok');
+    } catch (err) {
+      setText('imageRuntimeStatus', `Image runtime refresh failed: ${err.message}`);
+      showToast(`Image runtime refresh failed: ${err.message}`, 'error');
+    }
+  },
+
+  async warmupImageRuntime() {
+    const pid = state.activeProject?.id;
+    if (!pid) {
+      showToast('No active project selected.', 'error');
+      return;
+    }
+    setText('imageRuntimeStatus', 'Warmup started. Initial download can take several minutes.');
+    try {
+      const result = await runImageConnector(pid, 'warmup', {}, false);
+      if (!result?.ok) {
+        throw new Error(result?.reason || 'Warmup denied by policy.');
+      }
+      await this.refreshImageRuntime();
+      showToast('Image runtime warmup completed.', 'ok');
+    } catch (err) {
+      setText('imageRuntimeStatus', `Warmup failed: ${err.message}`);
+      showToast(`Warmup failed: ${err.message}`, 'error');
+    }
+  },
+
+  async generateImageProbe() {
+    const pid = state.activeProject?.id;
+    if (!pid) {
+      showToast('No active project selected.', 'error');
+      return;
+    }
+    setText('imageRuntimeStatus', 'Submitting test image generation request...');
+    try {
+      const payload = {
+        prompt: `concept art for ${state.activeProject?.name || 'project'}, clean style, game-ready composition`,
+        templateId: state.activeProject?.template || '',
+        assetKind: 'probe_asset',
+      };
+      const result = await runImageConnector(pid, 'generate_image', payload, false);
+      if (!result?.ok) {
+        throw new Error(result?.reason || 'Image generation denied by policy.');
+      }
+      const out = result?.execution?.data?.outputPath || result?.data?.outputPath || '(no output path)';
+      appendImageProgressEvent({
+        ts: new Date().toISOString(),
+        kind: 'probe_generation_complete',
+        output: out,
+      });
+      renderImageProgressStream();
+      setText('imageRuntimeStatus', `Test generation completed: ${out}`);
+      showToast('Test image generated.', 'ok');
+      await this.refreshWorkspace();
+    } catch (err) {
+      setText('imageRuntimeStatus', `Test generation failed: ${err.message}`);
+      showToast(`Test generation failed: ${err.message}`, 'error');
+    }
+  },
+
   refreshHeartbeat(){ onSectionActivate('heartbeat');},
   refreshLogs()     { onSectionActivate('logs');     },
   refreshMessageBus(){ onSectionActivate('message-bus'); },

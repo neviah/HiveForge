@@ -58,6 +58,24 @@ function writeConfig() {
       preferFreeTierFirst: true,
       requireApprovalForPaidTierUpgrade: true,
       preferredDatabaseService: 'supabase'
+    },
+    imageGenerator: {
+      enabled: true,
+      preferredModelId: 'zimage_fusion_8gb',
+      workerSlots: 1,
+      retentionDays: 14,
+      quotaMbPerProject: 1024,
+      defaultDeterministic: false,
+      defaultWidth: 768,
+      defaultHeight: 768,
+      models: {
+        zimage_fusion_8gb: {
+          label: 'Unsloth Z-Image Turbo GGUF (Q4_K_M)',
+          vramProfile: '8gb',
+          downloadUrl: 'https://huggingface.co/unsloth/Z-Image-Turbo-GGUF/resolve/main/z-image-turbo-Q4_K_M.gguf?download=true',
+          fileName: 'z-image-turbo-Q4_K_M.gguf'
+        }
+      }
     }
   };
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));

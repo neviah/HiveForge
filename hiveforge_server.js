@@ -47,18 +47,17 @@ const DEFAULT_IMAGE_GENERATOR_SETTINGS = {
   retentionDays: 14,
   quotaMbPerProject: 1024,
   defaultDeterministic: false,
-  defaultWidth: 1024,
-  defaultHeight: 1024,
+  defaultWidth: 768,
+  defaultHeight: 768,
 };
 const IMAGE_MODEL_CATALOG = {
   zimage_fusion_8gb: {
     id: 'zimage_fusion_8gb',
-    label: 'ZImage Fusion 8GB',
+    label: 'Unsloth Z-Image Turbo GGUF (Q4_K_M)',
     vramProfile: '8gb',
     recommendedFor: ['game_studio', 'software_web_app', 'mobile_app'],
-    // Set via app config to avoid hardcoding a large model URL in source control.
-    downloadUrl: null,
-    fileName: 'zimage_fusion_8gb.safetensors',
+    downloadUrl: 'https://huggingface.co/unsloth/Z-Image-Turbo-GGUF/resolve/main/z-image-turbo-Q4_K_M.gguf?download=true',
+    fileName: 'z-image-turbo-Q4_K_M.gguf',
     sha256: null,
   },
 };
