@@ -49,6 +49,16 @@ const DEFAULT_IMAGE_GENERATOR_SETTINGS = {
   defaultDeterministic: false,
   defaultWidth: 768,
   defaultHeight: 768,
+  engine: {
+    provider: 'comfyui',
+    endpoint: 'http://127.0.0.1:8188',
+    autoStart: true,
+    startupTimeoutMs: 180000,
+    appPath: '',
+    startCommand: '',
+    defaultWorkflow: null,
+    defaultCheckpointName: '',
+  },
 };
 const IMAGE_MODEL_CATALOG = {
   zimage_fusion_8gb: {
@@ -554,6 +564,8 @@ let appConfig = null;
 let imageRuntimeState = null;
 let imageActiveWorkers = 0;
 const imageGenerationQueue = [];
+let imageEngineProcess = null;
+let imageEngineLastStartAt = null;
 const appState = {
   llm: {
     provider: 'lmstudio',
@@ -2174,6 +2186,9 @@ function planningSettings() {
 
 function imageGeneratorSettings() {
   const raw = (appConfig && appConfig.imageGenerator) || {};
+  const engineRaw = raw.engine && typeof raw.engine === 'object' ? raw.engine : {};
+  const engineDefaults = DEFAULT_IMAGE_GENERATOR_SETTINGS.engine;
+  const provider = String(engineRaw.provider || engineDefaults.provider).trim().toLowerCase();
   return {
     enabled: typeof raw.enabled === 'boolean' ? raw.enabled : DEFAULT_IMAGE_GENERATOR_SETTINGS.enabled,
     preferredModelId: String(raw.preferredModelId || DEFAULT_IMAGE_GENERATOR_SETTINGS.preferredModelId).trim() || DEFAULT_IMAGE_GENERATOR_SETTINGS.preferredModelId,
@@ -2187,6 +2202,16 @@ function imageGeneratorSettings() {
       : DEFAULT_IMAGE_GENERATOR_SETTINGS.defaultDeterministic,
     defaultWidth: clampInt(raw.defaultWidth, DEFAULT_IMAGE_GENERATOR_SETTINGS.defaultWidth, 256, 2048),
     defaultHeight: clampInt(raw.defaultHeight, DEFAULT_IMAGE_GENERATOR_SETTINGS.defaultHeight, 256, 2048),
+    engine: {
+      provider: provider === 'comfyui' ? 'comfyui' : engineDefaults.provider,
+      endpoint: String(engineRaw.endpoint || engineDefaults.endpoint).trim() || engineDefaults.endpoint,
+      autoStart: typeof engineRaw.autoStart === 'boolean' ? engineRaw.autoStart : engineDefaults.autoStart,
+      startupTimeoutMs: clampInt(engineRaw.startupTimeoutMs, engineDefaults.startupTimeoutMs, 10000, 10 * 60 * 1000),
+      appPath: String(engineRaw.appPath || engineDefaults.appPath).trim(),
+      startCommand: String(engineRaw.startCommand || engineDefaults.startCommand).trim(),
+      defaultWorkflow: engineRaw.defaultWorkflow && typeof engineRaw.defaultWorkflow === 'object' ? engineRaw.defaultWorkflow : null,
+      defaultCheckpointName: String(engineRaw.defaultCheckpointName || engineDefaults.defaultCheckpointName).trim(),
+    },
     blockedTerms: Array.isArray(raw.blockedTerms)
       ? raw.blockedTerms.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)
       : ['nsfw', 'nude', 'nudity', 'porn', 'gore', 'graphic violence', 'sexual content', 'minor', 'child sexual'],
@@ -2548,10 +2573,366 @@ function safeSlug(value, fallback = 'item') {
   return v || fallback;
 }
 
-function writePlaceholderSvg(filePath, prompt, width, height, seed) {
-  const escapedPrompt = String(prompt || '').replace(/[<>&]/g, '');
-  const svg = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">\n  <defs>\n    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">\n      <stop offset="0%" stop-color="#10223d"/>\n      <stop offset="100%" stop-color="#1f4e79"/>\n    </linearGradient>\n  </defs>\n  <rect width="${width}" height="${height}" fill="url(#bg)"/>\n  <text x="24" y="56" fill="#e8f0fe" font-size="24" font-family="Segoe UI, Arial, sans-serif">HiveForge Image Placeholder</text>\n  <text x="24" y="96" fill="#c7d2e0" font-size="16" font-family="Segoe UI, Arial, sans-serif">seed: ${seed || 'auto'}</text>\n  <foreignObject x="24" y="120" width="${Math.max(100, width - 48)}" height="${Math.max(100, height - 140)}">\n    <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Segoe UI, Arial, sans-serif;color:#dbeafe;font-size:14px;line-height:1.45;white-space:pre-wrap;">${escapedPrompt}</div>\n  </foreignObject>\n</svg>\n`;
-  fs.writeFileSync(filePath, svg, 'utf-8');
+function delayMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function imageEngineWorkingPath(engine) {
+  const raw = String(engine && engine.appPath ? engine.appPath : '').trim();
+  if (!raw) return null;
+  if (path.isAbsolute(raw)) return raw;
+  return path.resolve(__dirname, raw);
+}
+
+async function comfyApiRequest(routePath, options = {}, timeoutMs = 20000) {
+  const settings = imageGeneratorSettings();
+  const endpoint = String(settings.engine.endpoint || '').trim().replace(/\/$/, '');
+  if (!endpoint) {
+    return {
+      ok: false,
+      error: 'imageGenerator.engine.endpoint is not configured.',
+      status: 0,
+      data: null,
+      response: null,
+    };
+  }
+  const url = `${endpoint}${routePath.startsWith('/') ? routePath : `/${routePath}`}`;
+  try {
+    const response = await fetchWithTimeout(url, {
+      method: options.method || 'GET',
+      headers: {
+        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+        ...(options.headers || {}),
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    }, timeoutMs);
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      return {
+        ok: false,
+        status: response.status,
+        error: `ComfyUI API ${routePath} failed with HTTP ${response.status}${text ? `: ${redactSensitive(text).slice(0, 180)}` : ''}.`,
+        data: null,
+        response,
+      };
+    }
+
+    const text = await response.text().catch(() => '');
+    let data = null;
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch (err) {
+        data = text;
+      }
+    }
+    return {
+      ok: true,
+      status: response.status,
+      error: null,
+      data,
+      response,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: redactSensitive(err && err.message ? err.message : 'ComfyUI request failed.'),
+      data: null,
+      response: null,
+    };
+  }
+}
+
+async function comfyIsHealthy() {
+  const probe = await comfyApiRequest('/system_stats', { method: 'GET' }, 6000);
+  if (probe.ok) return true;
+  const alt = await comfyApiRequest('/object_info', { method: 'GET' }, 6000);
+  return alt.ok;
+}
+
+function startComfyRuntime(projectId = null) {
+  const settings = imageGeneratorSettings();
+  const engine = settings.engine || {};
+  if (engine.provider !== 'comfyui') {
+    return { ok: false, error: `Unsupported image engine provider: ${engine.provider || 'unknown'}.` };
+  }
+  const cmd = String(engine.startCommand || '').trim();
+  if (!cmd) {
+    return {
+      ok: false,
+      error: 'ComfyUI start command is not configured. Set imageGenerator.engine.startCommand.',
+    };
+  }
+  const cwd = imageEngineWorkingPath(engine) || __dirname;
+  ensureDir(cwd);
+  try {
+    const child = spawn(cmd, {
+      cwd,
+      shell: true,
+      detached: false,
+      stdio: 'ignore',
+      env: {
+        ...process.env,
+        HIVEFORGE_IMAGE_RUNTIME: 'comfyui',
+      },
+    });
+    imageEngineProcess = child;
+    imageEngineLastStartAt = nowIso();
+    child.once('exit', () => {
+      imageEngineProcess = null;
+    });
+    imageProgress(projectId, 'engine_start_requested', {
+      provider: 'comfyui',
+      endpoint: settings.engine.endpoint,
+      cwd,
+    });
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: redactSensitive(err && err.message ? err.message : 'Failed to start ComfyUI runtime.'),
+    };
+  }
+}
+
+async function ensureComfyRuntimeReady(projectId = null) {
+  const settings = imageGeneratorSettings();
+  const engine = settings.engine || {};
+  if (engine.provider !== 'comfyui') {
+    return {
+      ok: false,
+      errorCode: 'VALIDATION_ERROR',
+      message: `Unsupported image engine provider: ${engine.provider || 'unknown'}.`,
+    };
+  }
+
+  if (await comfyIsHealthy()) {
+    return { ok: true };
+  }
+
+  if (!engine.autoStart) {
+    return {
+      ok: false,
+      errorCode: 'CONNECTOR_FAILURE',
+      message: `ComfyUI is not reachable at ${engine.endpoint}. Enable imageGenerator.engine.autoStart or start ComfyUI manually.`,
+    };
+  }
+
+  const start = startComfyRuntime(projectId);
+  if (!start.ok) {
+    return {
+      ok: false,
+      errorCode: 'CONNECTOR_FAILURE',
+      message: start.error,
+    };
+  }
+
+  const deadline = Date.now() + clampInt(engine.startupTimeoutMs, 180000, 10000, 10 * 60 * 1000);
+  while (Date.now() < deadline) {
+    if (await comfyIsHealthy()) {
+      imageProgress(projectId, 'engine_ready', {
+        provider: 'comfyui',
+        endpoint: engine.endpoint,
+      });
+      return { ok: true };
+    }
+    await delayMs(2000);
+  }
+
+  return {
+    ok: false,
+    errorCode: 'CONNECTOR_FAILURE',
+    message: `ComfyUI did not become ready within ${Math.round((engine.startupTimeoutMs || 180000) / 1000)}s.`,
+  };
+}
+
+function syncModelIntoComfyPaths(modelPath, fileName) {
+  const settings = imageGeneratorSettings();
+  const engineRoot = imageEngineWorkingPath(settings.engine || {});
+  if (!engineRoot || !fs.existsSync(engineRoot)) {
+    return { ok: true, syncedTo: [] };
+  }
+  const targets = [
+    path.join(engineRoot, 'models', 'checkpoints', fileName),
+    path.join(engineRoot, 'models', 'unet', fileName),
+  ];
+  const syncedTo = [];
+  targets.forEach((target) => {
+    try {
+      ensureDir(path.dirname(target));
+      if (!fs.existsSync(target)) {
+        fs.copyFileSync(modelPath, target);
+      }
+      syncedTo.push(target);
+    } catch (err) {}
+  });
+  return { ok: true, syncedTo };
+}
+
+function deepReplaceTemplateTokens(value, replacements) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => deepReplaceTemplateTokens(entry, replacements));
+  }
+  if (value && typeof value === 'object') {
+    const out = {};
+    Object.entries(value).forEach(([key, val]) => {
+      out[key] = deepReplaceTemplateTokens(val, replacements);
+    });
+    return out;
+  }
+  if (typeof value === 'string') {
+    if (/^\{\{[a-z0-9_]+\}\}$/i.test(value.trim())) {
+      const token = value.trim().slice(2, -2).toLowerCase();
+      if (Object.prototype.hasOwnProperty.call(replacements, token)) {
+        return replacements[token];
+      }
+    }
+    let out = value;
+    Object.entries(replacements).forEach(([k, v]) => {
+      out = out.replaceAll(`{{${k}}}`, String(v));
+    });
+    return out;
+  }
+  return value;
+}
+
+function defaultComfyWorkflow(job) {
+  const settings = imageGeneratorSettings();
+  const ckpt = String(settings.engine.defaultCheckpointName || job.modelFileName || '').trim();
+  if (!ckpt) return null;
+  return {
+    '4': {
+      class_type: 'CheckpointLoaderSimple',
+      inputs: {
+        ckpt_name: '{{checkpoint_name}}',
+      },
+    },
+    '5': {
+      class_type: 'EmptyLatentImage',
+      inputs: {
+        width: '{{width}}',
+        height: '{{height}}',
+        batch_size: 1,
+      },
+    },
+    '6': {
+      class_type: 'CLIPTextEncode',
+      inputs: {
+        text: '{{prompt}}',
+        clip: ['4', 1],
+      },
+    },
+    '7': {
+      class_type: 'CLIPTextEncode',
+      inputs: {
+        text: '{{negative_prompt}}',
+        clip: ['4', 1],
+      },
+    },
+    '3': {
+      class_type: 'KSampler',
+      inputs: {
+        seed: '{{seed}}',
+        steps: '{{steps}}',
+        cfg: '{{cfg}}',
+        sampler_name: '{{sampler_name}}',
+        scheduler: '{{scheduler}}',
+        denoise: 1,
+        model: ['4', 0],
+        positive: ['6', 0],
+        negative: ['7', 0],
+        latent_image: ['5', 0],
+      },
+    },
+    '8': {
+      class_type: 'VAEDecode',
+      inputs: {
+        samples: ['3', 0],
+        vae: ['4', 2],
+      },
+    },
+    '9': {
+      class_type: 'SaveImage',
+      inputs: {
+        filename_prefix: '{{filename_prefix}}',
+        images: ['8', 0],
+      },
+    },
+  };
+}
+
+function resolveComfyWorkflow(job) {
+  const settings = imageGeneratorSettings();
+  const source = job.workflow && typeof job.workflow === 'object'
+    ? job.workflow
+    : (settings.engine.defaultWorkflow && typeof settings.engine.defaultWorkflow === 'object'
+      ? settings.engine.defaultWorkflow
+      : defaultComfyWorkflow(job));
+  if (!source || typeof source !== 'object') {
+    return null;
+  }
+  const replacements = {
+    prompt: job.prompt,
+    negative_prompt: job.negativePrompt || '',
+    seed: Number.isFinite(Number(job.seed)) ? Number(job.seed) : 42,
+    width: Number(job.width),
+    height: Number(job.height),
+    steps: clampInt(job.steps, 10, 4, 60),
+    cfg: Number.isFinite(Number(job.cfg)) ? Number(job.cfg) : 1,
+    sampler_name: String(job.samplerName || 'euler').trim() || 'euler',
+    scheduler: String(job.scheduler || 'normal').trim() || 'normal',
+    checkpoint_name: String(job.checkpointName || '').trim(),
+    filename_prefix: String(job.filenamePrefix || 'hiveforge').trim() || 'hiveforge',
+  };
+  return deepReplaceTemplateTokens(source, replacements);
+}
+
+function firstComfyImageRef(historyEntry) {
+  const outputs = historyEntry && historyEntry.outputs && typeof historyEntry.outputs === 'object'
+    ? historyEntry.outputs
+    : {};
+  for (const nodeOutput of Object.values(outputs)) {
+    if (!nodeOutput || typeof nodeOutput !== 'object') continue;
+    const images = Array.isArray(nodeOutput.images) ? nodeOutput.images : [];
+    if (images.length > 0) {
+      const img = images[0] || {};
+      return {
+        filename: String(img.filename || '').trim(),
+        subfolder: String(img.subfolder || '').trim(),
+        type: String(img.type || 'output').trim() || 'output',
+      };
+    }
+  }
+  return null;
+}
+
+async function fetchComfyImageBinary(imageRef) {
+  const qs = new URLSearchParams();
+  qs.set('filename', imageRef.filename);
+  if (imageRef.subfolder) qs.set('subfolder', imageRef.subfolder);
+  if (imageRef.type) qs.set('type', imageRef.type);
+  const settings = imageGeneratorSettings();
+  const endpoint = String(settings.engine.endpoint || '').trim().replace(/\/$/, '');
+  const url = `${endpoint}/view?${qs.toString()}`;
+  const response = await fetchWithTimeout(url, { method: 'GET' }, 120000);
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    return {
+      ok: false,
+      error: `ComfyUI image fetch failed with HTTP ${response.status}${text ? `: ${redactSensitive(text).slice(0, 180)}` : ''}.`,
+      buffer: null,
+      contentType: null,
+    };
+  }
+  const arr = await response.arrayBuffer();
+  return {
+    ok: true,
+    error: null,
+    buffer: Buffer.from(arr),
+    contentType: String(response.headers.get('content-type') || 'image/png').trim().toLowerCase(),
+  };
 }
 
 async function runImageGenerationJob(job) {
@@ -2583,6 +2964,26 @@ async function runImageGenerationJob(job) {
     jobId: job.id,
     modelId: modelResult.model.id,
   });
+
+  const engineReady = await ensureComfyRuntimeReady(projectId);
+  if (!engineReady.ok) {
+    return {
+      ok: false,
+      errorCode: engineReady.errorCode || 'CONNECTOR_FAILURE',
+      message: engineReady.message,
+      data: null,
+    };
+  }
+
+  const modelSync = syncModelIntoComfyPaths(modelResult.model.path, modelResult.model.fileName || path.basename(modelResult.model.path));
+  if (modelSync.syncedTo && modelSync.syncedTo.length) {
+    imageProgress(projectId, 'model_synced', {
+      jobId: job.id,
+      modelId: modelResult.model.id,
+      syncedTo: modelSync.syncedTo,
+    });
+  }
+
   const outputRoot = imageProjectArtifactsRoot(projectId || 'global');
   ensureDir(outputRoot);
   const ts = new Date();
@@ -2591,10 +2992,115 @@ async function runImageGenerationJob(job) {
   ensureDir(dir);
   const assetKind = safeSlug(job.assetKind || 'image', 'image');
   const base = `${safeSlug(job.projectName || projectId || 'project', 'project')}_${assetKind}_${job.seed || 'auto'}_${Date.now()}`;
-  const svgPath = path.join(dir, `${base}.svg`);
-  const metadataPath = path.join(dir, `${base}.json`);
+  const workflow = resolveComfyWorkflow({
+    ...job,
+    checkpointName: String(settings.engine.defaultCheckpointName || modelResult.model.fileName || '').trim(),
+    modelFileName: modelResult.model.fileName || path.basename(modelResult.model.path),
+    filenamePrefix: base,
+  });
+  if (!workflow) {
+    return {
+      ok: false,
+      errorCode: 'VALIDATION_ERROR',
+      message: 'No ComfyUI workflow configured. Set imageGenerator.engine.defaultWorkflow or imageGenerator.engine.defaultCheckpointName.',
+      data: null,
+    };
+  }
 
-  writePlaceholderSvg(svgPath, job.prompt, job.width, job.height, job.seed);
+  const submit = await comfyApiRequest('/prompt', {
+    method: 'POST',
+    body: {
+      prompt: workflow,
+      client_id: `hiveforge_${projectId || 'global'}`,
+    },
+  }, 30000);
+  if (!submit.ok) {
+    return {
+      ok: false,
+      errorCode: 'CONNECTOR_FAILURE',
+      message: submit.error,
+      data: null,
+    };
+  }
+  const promptId = String(submit.data && submit.data.prompt_id ? submit.data.prompt_id : '').trim();
+  if (!promptId) {
+    return {
+      ok: false,
+      errorCode: 'CONNECTOR_FAILURE',
+      message: 'ComfyUI prompt submission returned no prompt_id.',
+      data: submit.data || null,
+    };
+  }
+
+  imageProgress(projectId, 'generation_queued', {
+    jobId: job.id,
+    modelId: modelResult.model.id,
+    promptId,
+  });
+
+  const pollTimeoutMs = clampInt(job.timeoutMs, 6 * 60 * 1000, 30 * 1000, 20 * 60 * 1000);
+  const pollDeadline = Date.now() + pollTimeoutMs;
+  let historyEntry = null;
+  let pollCount = 0;
+  while (Date.now() < pollDeadline) {
+    pollCount += 1;
+    const historyResp = await comfyApiRequest(`/history/${encodeURIComponent(promptId)}`, { method: 'GET' }, 20000);
+    if (historyResp.ok && historyResp.data && typeof historyResp.data === 'object') {
+      historyEntry = historyResp.data[promptId] || historyResp.data[String(promptId)] || null;
+      if (historyEntry && historyEntry.outputs && Object.keys(historyEntry.outputs).length > 0) {
+        break;
+      }
+    }
+    if (pollCount % 3 === 0) {
+      imageProgress(projectId, 'generation_progress', {
+        jobId: job.id,
+        promptId,
+        pollCount,
+      });
+    }
+    await delayMs(1500);
+  }
+
+  if (!historyEntry || !historyEntry.outputs || !Object.keys(historyEntry.outputs).length) {
+    return {
+      ok: false,
+      errorCode: 'CONNECTOR_FAILURE',
+      message: `ComfyUI generation timed out after ${Math.round(pollTimeoutMs / 1000)}s for prompt ${promptId}.`,
+      data: {
+        promptId,
+      },
+    };
+  }
+
+  const imageRef = firstComfyImageRef(historyEntry);
+  if (!imageRef || !imageRef.filename) {
+    return {
+      ok: false,
+      errorCode: 'CONNECTOR_FAILURE',
+      message: 'ComfyUI finished but no image output was found in history.',
+      data: {
+        promptId,
+      },
+    };
+  }
+
+  const fetched = await fetchComfyImageBinary(imageRef);
+  if (!fetched.ok) {
+    return {
+      ok: false,
+      errorCode: 'CONNECTOR_FAILURE',
+      message: fetched.error,
+      data: {
+        promptId,
+        imageRef,
+      },
+    };
+  }
+
+  const extension = fetched.contentType.includes('jpeg') ? 'jpg' : fetched.contentType.includes('webp') ? 'webp' : 'png';
+  const outputPath = path.join(dir, `${base}.${extension}`);
+  const metadataPath = path.join(dir, `${base}.json`);
+  fs.writeFileSync(outputPath, fetched.buffer);
   const metadata = {
     jobId: job.id,
     modelId: modelResult.model.id,
@@ -2607,23 +3113,26 @@ async function runImageGenerationJob(job) {
     templateId: job.templateId || null,
     assetKind,
     createdAt: nowIso(),
-    engine: 'hiveforge_internal_placeholder',
-    file: path.relative(projectDir(projectId || 'global'), svgPath).replace(/\\/g, '/'),
+    engine: 'comfyui',
+    comfyPromptId: promptId,
+    comfyImageRef: imageRef,
+    file: path.relative(projectDir(projectId || 'global'), outputPath).replace(/\\/g, '/'),
   };
   fs.writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf-8');
   const lifecycle = applyImageStorageLifecycle(projectId || 'global');
 
   imageProgress(projectId, 'generation_complete', {
     jobId: job.id,
-    output: svgPath,
+    output: outputPath,
     metadata: metadataPath,
     deletedCount: lifecycle.deletedCount,
+    promptId,
   });
   return {
     ok: true,
     message: 'Image generated successfully.',
     data: {
-      outputPath: svgPath,
+      outputPath,
       metadataPath,
       metadata,
       lifecycle,
@@ -2646,6 +3155,12 @@ async function enqueueImageGenerationJob(jobInput = {}) {
     deterministic,
     width: clampInt(jobInput.width, settings.defaultWidth, 256, 2048),
     height: clampInt(jobInput.height, settings.defaultHeight, 256, 2048),
+    steps: clampInt(jobInput.steps, 10, 4, 60),
+    cfg: Number.isFinite(Number(jobInput.cfg)) ? Number(jobInput.cfg) : 1,
+    samplerName: String(jobInput.samplerName || 'euler').trim() || 'euler',
+    scheduler: String(jobInput.scheduler || 'normal').trim() || 'normal',
+    timeoutMs: clampInt(jobInput.timeoutMs, 6 * 60 * 1000, 30 * 1000, 20 * 60 * 1000),
+    workflow: jobInput.workflow && typeof jobInput.workflow === 'object' ? jobInput.workflow : null,
     templateId: String(jobInput.templateId || '').trim().toLowerCase() || null,
     assetKind: String(jobInput.assetKind || 'image').trim() || 'image',
     createdAt: nowIso(),
@@ -11283,6 +11798,16 @@ async function executeImageGeneratorConnector(options = {}) {
           defaultWidth: settings.defaultWidth,
           defaultHeight: settings.defaultHeight,
         },
+        engine: {
+          provider: settings.engine.provider,
+          endpoint: settings.engine.endpoint,
+          autoStart: settings.engine.autoStart,
+          appPath: settings.engine.appPath,
+          hasDefaultWorkflow: Boolean(settings.engine.defaultWorkflow),
+          defaultCheckpointName: settings.engine.defaultCheckpointName || null,
+          processRunning: Boolean(imageEngineProcess && !imageEngineProcess.killed),
+          lastStartAt: imageEngineLastStartAt,
+        },
         models: modelStatus,
       },
     };
@@ -11317,6 +11842,22 @@ async function executeImageGeneratorConnector(options = {}) {
           modelId,
         },
       };
+    }
+    if (operation === 'warmup') {
+      const engineReady = await ensureComfyRuntimeReady(options.projectId || null);
+      if (!engineReady.ok) {
+        return {
+          ok: false,
+          errorCode: engineReady.errorCode || 'CONNECTOR_FAILURE',
+          message: engineReady.message,
+          operation,
+          actualCost: 0,
+          data: {
+            modelId,
+            modelPath: ensured.model.path,
+          },
+        };
+      }
     }
     imageProgress(options.projectId || null, operation === 'warmup' ? 'warmup_complete' : 'download_complete', {
       modelId,
@@ -11413,6 +11954,12 @@ async function executeImageGeneratorConnector(options = {}) {
         deterministic: input.deterministic,
         width: asset.width,
         height: asset.height,
+        steps: input.steps,
+        cfg: input.cfg,
+        samplerName: input.samplerName,
+        scheduler: input.scheduler,
+        timeoutMs: input.timeoutMs,
+        workflow: input.workflow,
         templateId,
         assetKind: asset.key,
       });
@@ -11464,6 +12011,12 @@ async function executeImageGeneratorConnector(options = {}) {
       deterministic: input.deterministic,
       width: input.width,
       height: input.height,
+      steps: input.steps,
+      cfg: input.cfg,
+      samplerName: input.samplerName,
+      scheduler: input.scheduler,
+      timeoutMs: input.timeoutMs,
+      workflow: input.workflow,
       templateId: input.templateId || (projectState && projectState.template_id) || null,
       assetKind: input.assetKind || 'image',
     });

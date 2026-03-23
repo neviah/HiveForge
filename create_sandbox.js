@@ -68,6 +68,16 @@ function writeConfig() {
       defaultDeterministic: false,
       defaultWidth: 768,
       defaultHeight: 768,
+      engine: {
+        provider: 'comfyui',
+        endpoint: 'http://127.0.0.1:8188',
+        autoStart: true,
+        startupTimeoutMs: 180000,
+        appPath: '',
+        startCommand: '',
+        defaultCheckpointName: '',
+        defaultWorkflow: null
+      },
       models: {
         zimage_fusion_8gb: {
           label: 'Unsloth Z-Image Turbo GGUF (Q4_K_M)',
