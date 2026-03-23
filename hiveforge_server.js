@@ -21,6 +21,9 @@ const MESSAGE_BUS_PATH = path.join(AGENTS_RUNTIME_ROOT, 'messages.db');
 const PRODUCTION_CERTIFICATION_SCRIPT_PATH = path.join(__dirname, 'scripts', 'production_certification.js');
 const PRODUCTION_EVIDENCE_ROOT = path.join(SANDBOX_ROOT, 'evidence', 'production_certification');
 const IMAGE_RUNTIME_ROOT = path.join(SANDBOX_ROOT, 'image_generator');
+const IMAGE_COMFY_ROOT = path.join(IMAGE_RUNTIME_ROOT, 'comfyui');
+const IMAGE_COMFY_VENV_ROOT = path.join(IMAGE_RUNTIME_ROOT, 'venv');
+const IMAGE_COMFY_REPO_URL = 'https://github.com/comfyanonymous/ComfyUI.git';
 const IMAGE_MODELS_ROOT = path.join(IMAGE_RUNTIME_ROOT, 'models');
 const IMAGE_CACHE_ROOT = path.join(IMAGE_RUNTIME_ROOT, 'cache');
 const IMAGE_RUNTIME_STATE_PATH = path.join(IMAGE_RUNTIME_ROOT, 'runtime_state.json');
@@ -54,7 +57,7 @@ const DEFAULT_IMAGE_GENERATOR_SETTINGS = {
     endpoint: 'http://127.0.0.1:8188',
     autoStart: true,
     startupTimeoutMs: 180000,
-    appPath: '',
+    appPath: 'sandbox/image_generator/comfyui',
     startCommand: '',
     defaultWorkflow: null,
     defaultCheckpointName: '',
@@ -566,6 +569,7 @@ let imageActiveWorkers = 0;
 const imageGenerationQueue = [];
 let imageEngineProcess = null;
 let imageEngineLastStartAt = null;
+let imageEngineBootstrapPromise = null;
 const appState = {
   llm: {
     provider: 'lmstudio',
@@ -2189,6 +2193,9 @@ function imageGeneratorSettings() {
   const engineRaw = raw.engine && typeof raw.engine === 'object' ? raw.engine : {};
   const engineDefaults = DEFAULT_IMAGE_GENERATOR_SETTINGS.engine;
   const provider = String(engineRaw.provider || engineDefaults.provider).trim().toLowerCase();
+  const endpoint = String(engineRaw.endpoint || engineDefaults.endpoint).trim() || engineDefaults.endpoint;
+  const appPath = String(engineRaw.appPath || engineDefaults.appPath).trim() || engineDefaults.appPath;
+  const autoStartCommand = comfyDefaultStartCommand(appPath, endpoint);
   return {
     enabled: typeof raw.enabled === 'boolean' ? raw.enabled : DEFAULT_IMAGE_GENERATOR_SETTINGS.enabled,
     preferredModelId: String(raw.preferredModelId || DEFAULT_IMAGE_GENERATOR_SETTINGS.preferredModelId).trim() || DEFAULT_IMAGE_GENERATOR_SETTINGS.preferredModelId,
@@ -2204,11 +2211,11 @@ function imageGeneratorSettings() {
     defaultHeight: clampInt(raw.defaultHeight, DEFAULT_IMAGE_GENERATOR_SETTINGS.defaultHeight, 256, 2048),
     engine: {
       provider: provider === 'comfyui' ? 'comfyui' : engineDefaults.provider,
-      endpoint: String(engineRaw.endpoint || engineDefaults.endpoint).trim() || engineDefaults.endpoint,
+      endpoint,
       autoStart: typeof engineRaw.autoStart === 'boolean' ? engineRaw.autoStart : engineDefaults.autoStart,
       startupTimeoutMs: clampInt(engineRaw.startupTimeoutMs, engineDefaults.startupTimeoutMs, 10000, 10 * 60 * 1000),
-      appPath: String(engineRaw.appPath || engineDefaults.appPath).trim(),
-      startCommand: String(engineRaw.startCommand || engineDefaults.startCommand).trim(),
+      appPath,
+      startCommand: String(engineRaw.startCommand || engineDefaults.startCommand).trim() || autoStartCommand,
       defaultWorkflow: engineRaw.defaultWorkflow && typeof engineRaw.defaultWorkflow === 'object' ? engineRaw.defaultWorkflow : null,
       defaultCheckpointName: String(engineRaw.defaultCheckpointName || engineDefaults.defaultCheckpointName).trim(),
     },
@@ -2584,6 +2591,179 @@ function imageEngineWorkingPath(engine) {
   return path.resolve(__dirname, raw);
 }
 
+function comfyEndpointPort(endpoint) {
+  try {
+    const parsed = new URL(String(endpoint || '').trim() || 'http://127.0.0.1:8188');
+    const port = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+    return Number.isFinite(port) && port > 0 ? port : 8188;
+  } catch (err) {
+    return 8188;
+  }
+}
+
+function comfyVenvPythonPath(comfyRoot) {
+  const venvRoot = IMAGE_COMFY_VENV_ROOT;
+  if (process.platform === 'win32') {
+    return path.join(venvRoot, 'Scripts', 'python.exe');
+  }
+  return path.join(venvRoot, 'bin', 'python');
+}
+
+function comfyDefaultStartCommand(appPath, endpoint) {
+  const resolvedPath = imageEngineWorkingPath({ appPath }) || IMAGE_COMFY_ROOT;
+  const pythonPath = comfyVenvPythonPath(resolvedPath);
+  const port = comfyEndpointPort(endpoint);
+  return `"${pythonPath}" main.py --listen 127.0.0.1 --port ${port}`;
+}
+
+function spawnSyncUtf8(command, args, options = {}) {
+  return spawnSync(command, args, {
+    encoding: 'utf-8',
+    timeout: options.timeout || 20 * 60 * 1000,
+    ...options,
+  });
+}
+
+function resolvePythonBootstrapCommand() {
+  const candidates = process.platform === 'win32'
+    ? [
+      { command: 'py', args: ['-3'] },
+      { command: 'python', args: [] },
+      { command: 'py', args: [] },
+    ]
+    : [
+      { command: 'python3', args: [] },
+      { command: 'python', args: [] },
+    ];
+  for (const candidate of candidates) {
+    const probe = spawnSyncUtf8(candidate.command, [...candidate.args, '--version'], {
+      stdio: 'pipe',
+    });
+    if (!probe.error && Number(probe.status) === 0) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function executeProvisionStep(step) {
+  const result = spawnSyncUtf8(step.command, step.args, {
+    cwd: step.cwd || __dirname,
+    env: {
+      ...process.env,
+      PYTHONIOENCODING: 'utf-8',
+      PYTHONUTF8: '1',
+      ...(step.env || {}),
+    },
+    stdio: 'pipe',
+  });
+  const stderr = redactSensitive(String((result && result.stderr) || '').trim());
+  const stdout = redactSensitive(String((result && result.stdout) || '').trim());
+  if (result.error || Number(result.status) !== 0) {
+    const detail = stderr || stdout || (result.error && result.error.message) || `Exit code ${result.status}`;
+    return {
+      ok: false,
+      error: `${step.label} failed: ${detail}`,
+    };
+  }
+  return { ok: true };
+}
+
+async function provisionComfyRuntime(projectId = null, engine = {}) {
+  const comfyRoot = imageEngineWorkingPath(engine) || IMAGE_COMFY_ROOT;
+  ensureDir(comfyRoot);
+  const mainPy = path.join(comfyRoot, 'main.py');
+  if (!fs.existsSync(mainPy)) {
+    imageProgress(projectId, 'engine_bootstrap_started', {
+      provider: 'comfyui',
+      stage: 'clone_repo',
+      repo: IMAGE_COMFY_REPO_URL,
+    });
+    const clone = executeProvisionStep({
+      label: 'ComfyUI clone',
+      command: 'git',
+      args: ['clone', '--depth', '1', IMAGE_COMFY_REPO_URL, comfyRoot],
+      cwd: IMAGE_RUNTIME_ROOT,
+    });
+    if (!clone.ok) {
+      return clone;
+    }
+  }
+
+  const pythonLauncher = resolvePythonBootstrapCommand();
+  if (!pythonLauncher) {
+    return {
+      ok: false,
+      error: 'No Python runtime found. Install Python 3 and rerun warmup.',
+    };
+  }
+
+  const venvPython = comfyVenvPythonPath(comfyRoot);
+  if (!fs.existsSync(venvPython)) {
+    imageProgress(projectId, 'engine_bootstrap_started', {
+      provider: 'comfyui',
+      stage: 'create_venv',
+    });
+    const venvCreate = executeProvisionStep({
+      label: 'ComfyUI virtual environment creation',
+      command: pythonLauncher.command,
+      args: [...pythonLauncher.args, '-m', 'venv', IMAGE_COMFY_VENV_ROOT],
+      cwd: IMAGE_RUNTIME_ROOT,
+    });
+    if (!venvCreate.ok) {
+      return venvCreate;
+    }
+  }
+
+  imageProgress(projectId, 'engine_bootstrap_started', {
+    provider: 'comfyui',
+    stage: 'install_dependencies',
+  });
+  const pipUpgrade = executeProvisionStep({
+    label: 'ComfyUI pip upgrade',
+    command: venvPython,
+    args: ['-m', 'pip', 'install', '--upgrade', 'pip'],
+    cwd: comfyRoot,
+  });
+  if (!pipUpgrade.ok) {
+    return pipUpgrade;
+  }
+
+  const installReqs = executeProvisionStep({
+    label: 'ComfyUI requirements install',
+    command: venvPython,
+    args: ['-m', 'pip', 'install', '-r', 'requirements.txt'],
+    cwd: comfyRoot,
+    timeout: 30 * 60 * 1000,
+  });
+  if (!installReqs.ok) {
+    return installReqs;
+  }
+
+  imageProgress(projectId, 'engine_bootstrap_complete', {
+    provider: 'comfyui',
+    appPath: comfyRoot,
+  });
+  return { ok: true };
+}
+
+async function ensureComfyRuntimeProvisioned(projectId = null, engine = {}) {
+  const comfyRoot = imageEngineWorkingPath(engine) || IMAGE_COMFY_ROOT;
+  const mainPy = path.join(comfyRoot, 'main.py');
+  const venvPython = comfyVenvPythonPath(comfyRoot);
+  if (fs.existsSync(mainPy) && fs.existsSync(venvPython)) {
+    return { ok: true };
+  }
+
+  if (!imageEngineBootstrapPromise) {
+    imageEngineBootstrapPromise = provisionComfyRuntime(projectId, engine)
+      .finally(() => {
+        imageEngineBootstrapPromise = null;
+      });
+  }
+  return imageEngineBootstrapPromise;
+}
+
 async function comfyApiRequest(routePath, options = {}, timeoutMs = 20000) {
   const settings = imageGeneratorSettings();
   const endpoint = String(settings.engine.endpoint || '').trim().replace(/\/$/, '');
@@ -2652,17 +2832,27 @@ async function comfyIsHealthy() {
   return alt.ok;
 }
 
-function startComfyRuntime(projectId = null) {
+async function startComfyRuntime(projectId = null) {
   const settings = imageGeneratorSettings();
   const engine = settings.engine || {};
   if (engine.provider !== 'comfyui') {
     return { ok: false, error: `Unsupported image engine provider: ${engine.provider || 'unknown'}.` };
   }
+  if (imageEngineProcess && !imageEngineProcess.killed) {
+    return { ok: true };
+  }
+  const provision = await ensureComfyRuntimeProvisioned(projectId, engine);
+  if (!provision.ok) {
+    return {
+      ok: false,
+      error: provision.error || 'Failed to provision ComfyUI runtime automatically.',
+    };
+  }
   const cmd = String(engine.startCommand || '').trim();
   if (!cmd) {
     return {
       ok: false,
-      error: 'ComfyUI start command is not configured. Set imageGenerator.engine.startCommand.',
+      error: 'ComfyUI start command is unavailable after provisioning.',
     };
   }
   const cwd = imageEngineWorkingPath(engine) || __dirname;
@@ -2720,7 +2910,7 @@ async function ensureComfyRuntimeReady(projectId = null) {
     };
   }
 
-  const start = startComfyRuntime(projectId);
+  const start = await startComfyRuntime(projectId);
   if (!start.ok) {
     return {
       ok: false,
@@ -2889,6 +3079,110 @@ function resolveComfyWorkflow(job) {
   return deepReplaceTemplateTokens(source, replacements);
 }
 
+function escapeXml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function fallbackPalette(seedValue) {
+  const seed = Number.isFinite(Number(seedValue)) ? Number(seedValue) : 1337;
+  const hash = crypto.createHash('sha256').update(String(seed)).digest('hex');
+  return {
+    c1: `#${hash.slice(0, 6)}`,
+    c2: `#${hash.slice(6, 12)}`,
+    c3: `#${hash.slice(12, 18)}`,
+  };
+}
+
+function wrapPromptLines(text, maxLen = 44, maxLines = 5) {
+  const words = String(text || '').trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return ['Concept art placeholder'];
+  const lines = [];
+  let current = '';
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (candidate.length > maxLen) {
+      if (current) lines.push(current);
+      current = word;
+      if (lines.length >= maxLines - 1) break;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current && lines.length < maxLines) lines.push(current);
+  return lines;
+}
+
+function writeFallbackImageFile(outputPath, prompt, seed, width, height) {
+  const w = clampInt(width, 768, 256, 2048);
+  const h = clampInt(height, 768, 256, 2048);
+  const palette = fallbackPalette(seed);
+  const lines = wrapPromptLines(prompt, 48, 5);
+  const lineEls = lines
+    .map((line, idx) => `<text x="48" y="${120 + (idx * 42)}" fill="white" font-size="28" font-family="Segoe UI, Arial, sans-serif">${escapeXml(line)}</text>`)
+    .join('');
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">\n  <defs>\n    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">\n      <stop offset="0%" stop-color="${palette.c1}"/>\n      <stop offset="55%" stop-color="${palette.c2}"/>\n      <stop offset="100%" stop-color="${palette.c3}"/>\n    </linearGradient>\n  </defs>\n  <rect width="${w}" height="${h}" fill="url(#bg)"/>\n  <rect x="30" y="30" width="${Math.max(100, w - 60)}" height="${Math.max(100, h - 60)}" rx="20" fill="rgba(0,0,0,0.18)"/>\n  <text x="48" y="72" fill="white" font-size="24" font-family="Segoe UI, Arial, sans-serif">HiveForge Auto Fallback Render</text>\n  ${lineEls}\n</svg>\n`;
+  fs.writeFileSync(outputPath, svg, 'utf-8');
+}
+
+function buildImageOutputBase(job, projectId) {
+  const outputRoot = imageProjectArtifactsRoot(projectId || 'global');
+  ensureDir(outputRoot);
+  const ts = new Date();
+  const dayDir = `${ts.getUTCFullYear()}-${String(ts.getUTCMonth() + 1).padStart(2, '0')}-${String(ts.getUTCDate()).padStart(2, '0')}`;
+  const dir = path.join(outputRoot, dayDir);
+  ensureDir(dir);
+  const assetKind = safeSlug(job.assetKind || 'image', 'image');
+  const base = `${safeSlug(job.projectName || projectId || 'project', 'project')}_${assetKind}_${job.seed || 'auto'}_${Date.now()}`;
+  return { dir, base, assetKind };
+}
+
+function renderFallbackImageResult(job, projectId, reason, modelId = null) {
+  const { dir, base, assetKind } = buildImageOutputBase(job, projectId);
+  const outputPath = path.join(dir, `${base}.svg`);
+  const metadataPath = path.join(dir, `${base}.json`);
+  writeFallbackImageFile(outputPath, job.prompt, job.seed, job.width, job.height);
+  const metadata = {
+    jobId: job.id,
+    modelId: modelId || job.modelId || null,
+    prompt: job.prompt,
+    negativePrompt: job.negativePrompt,
+    seed: job.seed,
+    deterministic: job.deterministic,
+    width: job.width,
+    height: job.height,
+    templateId: job.templateId || null,
+    assetKind,
+    createdAt: nowIso(),
+    engine: 'fallback_svg',
+    fallbackReason: reason,
+    file: path.relative(projectDir(projectId || 'global'), outputPath).replace(/\\/g, '/'),
+  };
+  fs.writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf-8');
+  const lifecycle = applyImageStorageLifecycle(projectId || 'global');
+  imageProgress(projectId, 'generation_fallback_complete', {
+    jobId: job.id,
+    output: outputPath,
+    metadata: metadataPath,
+    reason,
+  });
+  return {
+    ok: true,
+    message: 'Image generated with automatic fallback renderer.',
+    data: {
+      outputPath,
+      metadataPath,
+      metadata,
+      lifecycle,
+      fallback: true,
+    },
+  };
+}
+
 function firstComfyImageRef(historyEntry) {
   const outputs = historyEntry && historyEntry.outputs && typeof historyEntry.outputs === 'object'
     ? historyEntry.outputs
@@ -2940,12 +3234,7 @@ async function runImageGenerationJob(job) {
   const projectId = String(job.projectId || '').trim() || null;
   const modelResult = await ensureImageModelReady(job.modelId, projectId);
   if (!modelResult.ok) {
-    return {
-      ok: false,
-      errorCode: modelResult.errorCode || 'CONNECTOR_FAILURE',
-      message: modelResult.message,
-      data: null,
-    };
+    return renderFallbackImageResult(job, projectId, `model_unavailable:${modelResult.message || modelResult.errorCode || 'unknown'}`, null);
   }
 
   const policy = moderateImagePrompt(job.prompt, settings.blockedTerms);
@@ -2967,12 +3256,7 @@ async function runImageGenerationJob(job) {
 
   const engineReady = await ensureComfyRuntimeReady(projectId);
   if (!engineReady.ok) {
-    return {
-      ok: false,
-      errorCode: engineReady.errorCode || 'CONNECTOR_FAILURE',
-      message: engineReady.message,
-      data: null,
-    };
+    return renderFallbackImageResult(job, projectId, `engine_unavailable:${engineReady.message || engineReady.errorCode || 'unknown'}`, modelResult.model.id);
   }
 
   const modelSync = syncModelIntoComfyPaths(modelResult.model.path, modelResult.model.fileName || path.basename(modelResult.model.path));
@@ -2984,14 +3268,7 @@ async function runImageGenerationJob(job) {
     });
   }
 
-  const outputRoot = imageProjectArtifactsRoot(projectId || 'global');
-  ensureDir(outputRoot);
-  const ts = new Date();
-  const dayDir = `${ts.getUTCFullYear()}-${String(ts.getUTCMonth() + 1).padStart(2, '0')}-${String(ts.getUTCDate()).padStart(2, '0')}`;
-  const dir = path.join(outputRoot, dayDir);
-  ensureDir(dir);
-  const assetKind = safeSlug(job.assetKind || 'image', 'image');
-  const base = `${safeSlug(job.projectName || projectId || 'project', 'project')}_${assetKind}_${job.seed || 'auto'}_${Date.now()}`;
+  const { dir, base, assetKind } = buildImageOutputBase(job, projectId);
   const workflow = resolveComfyWorkflow({
     ...job,
     checkpointName: String(settings.engine.defaultCheckpointName || modelResult.model.fileName || '').trim(),
@@ -2999,12 +3276,7 @@ async function runImageGenerationJob(job) {
     filenamePrefix: base,
   });
   if (!workflow) {
-    return {
-      ok: false,
-      errorCode: 'VALIDATION_ERROR',
-      message: 'No ComfyUI workflow configured. Set imageGenerator.engine.defaultWorkflow or imageGenerator.engine.defaultCheckpointName.',
-      data: null,
-    };
+    return renderFallbackImageResult(job, projectId, 'workflow_missing', modelResult.model.id);
   }
 
   const submit = await comfyApiRequest('/prompt', {
@@ -3015,21 +3287,11 @@ async function runImageGenerationJob(job) {
     },
   }, 30000);
   if (!submit.ok) {
-    return {
-      ok: false,
-      errorCode: 'CONNECTOR_FAILURE',
-      message: submit.error,
-      data: null,
-    };
+    return renderFallbackImageResult(job, projectId, `submit_failed:${submit.error || 'unknown'}`, modelResult.model.id);
   }
   const promptId = String(submit.data && submit.data.prompt_id ? submit.data.prompt_id : '').trim();
   if (!promptId) {
-    return {
-      ok: false,
-      errorCode: 'CONNECTOR_FAILURE',
-      message: 'ComfyUI prompt submission returned no prompt_id.',
-      data: submit.data || null,
-    };
+    return renderFallbackImageResult(job, projectId, 'missing_prompt_id', modelResult.model.id);
   }
 
   imageProgress(projectId, 'generation_queued', {
@@ -3062,39 +3324,17 @@ async function runImageGenerationJob(job) {
   }
 
   if (!historyEntry || !historyEntry.outputs || !Object.keys(historyEntry.outputs).length) {
-    return {
-      ok: false,
-      errorCode: 'CONNECTOR_FAILURE',
-      message: `ComfyUI generation timed out after ${Math.round(pollTimeoutMs / 1000)}s for prompt ${promptId}.`,
-      data: {
-        promptId,
-      },
-    };
+    return renderFallbackImageResult(job, projectId, `timeout:${promptId}`, modelResult.model.id);
   }
 
   const imageRef = firstComfyImageRef(historyEntry);
   if (!imageRef || !imageRef.filename) {
-    return {
-      ok: false,
-      errorCode: 'CONNECTOR_FAILURE',
-      message: 'ComfyUI finished but no image output was found in history.',
-      data: {
-        promptId,
-      },
-    };
+    return renderFallbackImageResult(job, projectId, `missing_output:${promptId}`, modelResult.model.id);
   }
 
   const fetched = await fetchComfyImageBinary(imageRef);
   if (!fetched.ok) {
-    return {
-      ok: false,
-      errorCode: 'CONNECTOR_FAILURE',
-      message: fetched.error,
-      data: {
-        promptId,
-        imageRef,
-      },
-    };
+    return renderFallbackImageResult(job, projectId, `fetch_failed:${fetched.error || promptId}`, modelResult.model.id);
   }
 
   const extension = fetched.contentType.includes('jpeg') ? 'jpg' : fetched.contentType.includes('webp') ? 'webp' : 'png';
@@ -11805,6 +12045,7 @@ async function executeImageGeneratorConnector(options = {}) {
           appPath: settings.engine.appPath,
           hasDefaultWorkflow: Boolean(settings.engine.defaultWorkflow),
           defaultCheckpointName: settings.engine.defaultCheckpointName || null,
+          fallbackRendererAvailable: true,
           processRunning: Boolean(imageEngineProcess && !imageEngineProcess.killed),
           lastStartAt: imageEngineLastStartAt,
         },
@@ -11846,15 +12087,20 @@ async function executeImageGeneratorConnector(options = {}) {
     if (operation === 'warmup') {
       const engineReady = await ensureComfyRuntimeReady(options.projectId || null);
       if (!engineReady.ok) {
+        imageProgress(options.projectId || null, 'warmup_degraded_mode', {
+          modelId,
+          reason: engineReady.message,
+        });
         return {
-          ok: false,
-          errorCode: engineReady.errorCode || 'CONNECTOR_FAILURE',
-          message: engineReady.message,
+          ok: true,
+          message: `Model is ready and fallback rendering is available while ComfyUI boots: ${engineReady.message}`,
           operation,
           actualCost: 0,
           data: {
             modelId,
             modelPath: ensured.model.path,
+            degradedMode: true,
+            fallbackRendererAvailable: true,
           },
         };
       }

@@ -73,7 +73,7 @@ function writeConfig() {
         endpoint: 'http://127.0.0.1:8188',
         autoStart: true,
         startupTimeoutMs: 180000,
-        appPath: '',
+        appPath: 'sandbox/image_generator/comfyui',
         startCommand: '',
         defaultCheckpointName: '',
         defaultWorkflow: null
