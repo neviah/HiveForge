@@ -20,6 +20,10 @@ const AGENTS_RUNTIME_ROOT = path.join(SANDBOX_ROOT, 'agents');
 const MESSAGE_BUS_PATH = path.join(AGENTS_RUNTIME_ROOT, 'messages.db');
 const PRODUCTION_CERTIFICATION_SCRIPT_PATH = path.join(__dirname, 'scripts', 'production_certification.js');
 const PRODUCTION_EVIDENCE_ROOT = path.join(SANDBOX_ROOT, 'evidence', 'production_certification');
+const IMAGE_RUNTIME_ROOT = path.join(SANDBOX_ROOT, 'image_generator');
+const IMAGE_MODELS_ROOT = path.join(IMAGE_RUNTIME_ROOT, 'models');
+const IMAGE_CACHE_ROOT = path.join(IMAGE_RUNTIME_ROOT, 'cache');
+const IMAGE_RUNTIME_STATE_PATH = path.join(IMAGE_RUNTIME_ROOT, 'runtime_state.json');
 const MAX_TASK_HISTORY = 100;
 const MAX_EVENTS_PER_TASK = 500;
 const DEFAULT_RUNTIME_SETTINGS = {
@@ -33,6 +37,30 @@ const DEFAULT_PLANNING_SETTINGS = {
   preferFreeTierFirst: true,
   requireApprovalForPaidTierUpgrade: true,
   preferredDatabaseService: 'supabase',
+};
+const DEFAULT_IMAGE_GENERATOR_SETTINGS = {
+  enabled: true,
+  preferredModelId: 'zimage_fusion_8gb',
+  maxPromptLength: 420,
+  maxNegativePromptLength: 420,
+  workerSlots: 1,
+  retentionDays: 14,
+  quotaMbPerProject: 1024,
+  defaultDeterministic: false,
+  defaultWidth: 1024,
+  defaultHeight: 1024,
+};
+const IMAGE_MODEL_CATALOG = {
+  zimage_fusion_8gb: {
+    id: 'zimage_fusion_8gb',
+    label: 'ZImage Fusion 8GB',
+    vramProfile: '8gb',
+    recommendedFor: ['game_studio', 'software_web_app', 'mobile_app'],
+    // Set via app config to avoid hardcoding a large model URL in source control.
+    downloadUrl: null,
+    fileName: 'zimage_fusion_8gb.safetensors',
+    sha256: null,
+  },
 };
 const AUTO_ACTION_RETRY_POLICY = {
   maxAttempts: 3,
@@ -54,6 +82,7 @@ const DEFAULT_CONNECTOR_RETRY_POLICIES = {
   gumroad: { maxAttempts: 3, baseDelayMs: 30 * 1000, maxDelayMs: 20 * 60 * 1000 },
   substack: { maxAttempts: 3, baseDelayMs: 30 * 1000, maxDelayMs: 20 * 60 * 1000 },
   custom_cms: { maxAttempts: 3, baseDelayMs: 30 * 1000, maxDelayMs: 20 * 60 * 1000 },
+  image_generator: { maxAttempts: 2, baseDelayMs: 10 * 1000, maxDelayMs: 2 * 60 * 1000 },
   telegram: { maxAttempts: 3, baseDelayMs: 15 * 1000, maxDelayMs: 10 * 60 * 1000 },
   whatsapp: { maxAttempts: 3, baseDelayMs: 15 * 1000, maxDelayMs: 10 * 60 * 1000 },
 };
@@ -477,8 +506,8 @@ const DEFAULT_AUTO_STAFFING_POLICY = {
   maxOptionalAdds: 3,
 };
 const DEFAULT_ROLE_CAPABILITIES = {
-  'DevOps Automator': { canDeploy: true, canSpend: true, allowedConnectors: ['netlify', 'github'] },
-  'Backend Architect': { canDeploy: false, canSpend: false, allowedConnectors: ['github', 'supabase'] },
+  'DevOps Automator': { canDeploy: true, canSpend: true, allowedConnectors: ['netlify', 'github', 'image_generator'] },
+  'Backend Architect': { canDeploy: false, canSpend: false, allowedConnectors: ['github', 'supabase', 'image_generator'] },
   'Senior Project Manager': { canDeploy: false, canSpend: false, allowedConnectors: [] },
   'Growth Hacker': { canDeploy: true, canSpend: false, allowedConnectors: ['github', 'netlify', 'email_provider', 'analytics', 'kdp', 'gumroad', 'substack', 'custom_cms'] },
   'Reality Checker': { canDeploy: false, canSpend: false, allowedConnectors: ['analytics'] },
@@ -523,6 +552,9 @@ let sqliteMessageBus = null;
 let nextTaskId = 1;
 const taskHistory = [];
 let appConfig = null;
+let imageRuntimeState = null;
+let imageActiveWorkers = 0;
+const imageGenerationQueue = [];
 const appState = {
   llm: {
     provider: 'lmstudio',
@@ -552,6 +584,7 @@ const CONNECTOR_REGISTRY = {
   substack: { id: 'substack', label: 'Substack', credentialService: 'substack' },
   custom_cms: { id: 'custom_cms', label: 'Custom CMS', credentialService: 'custom_cms' },
   google_play: { id: 'google_play', label: 'Google Play Console', credentialService: 'google_play' },
+  image_generator: { id: 'image_generator', label: 'Image Generator', localRuntime: true },
 };
 const MUTATING_CONNECTOR_OPERATIONS = {
   netlify: new Set(['trigger_deploy']),
@@ -567,6 +600,7 @@ const MUTATING_CONNECTOR_OPERATIONS = {
   substack: new Set(['publish_post', 'update_post', 'unpublish_post']),
   custom_cms: new Set(['publish_book', 'update_publication', 'unpublish_publication']),
   google_play: new Set(['upload_bundle', 'create_release', 'update_release_notes', 'promote_release']),
+  image_generator: new Set(['download_model', 'warmup', 'generate_image', 'generate_asset_pack', 'prune_storage']),
 };
 const CONNECTOR_IDEMPOTENCY_PROFILES = {
   netlify: {
@@ -753,6 +787,28 @@ const CONNECTOR_IDEMPOTENCY_PROFILES = {
     promote_release: {
       mode: 'native_token',
       reconciliation: 'release_state',
+    },
+  },
+  image_generator: {
+    download_model: {
+      mode: 'ledger_only',
+      reconciliation: 'runtime_state',
+    },
+    warmup: {
+      mode: 'ledger_only',
+      reconciliation: 'runtime_state',
+    },
+    generate_image: {
+      mode: 'ledger_only',
+      reconciliation: 'artifact_state',
+    },
+    generate_asset_pack: {
+      mode: 'ledger_only',
+      reconciliation: 'artifact_state',
+    },
+    prune_storage: {
+      mode: 'ledger_only',
+      reconciliation: 'artifact_state',
     },
   },
 };
@@ -2117,6 +2173,541 @@ function planningSettings() {
   };
 }
 
+function imageGeneratorSettings() {
+  const raw = (appConfig && appConfig.imageGenerator) || {};
+  return {
+    enabled: typeof raw.enabled === 'boolean' ? raw.enabled : DEFAULT_IMAGE_GENERATOR_SETTINGS.enabled,
+    preferredModelId: String(raw.preferredModelId || DEFAULT_IMAGE_GENERATOR_SETTINGS.preferredModelId).trim() || DEFAULT_IMAGE_GENERATOR_SETTINGS.preferredModelId,
+    maxPromptLength: clampInt(raw.maxPromptLength, DEFAULT_IMAGE_GENERATOR_SETTINGS.maxPromptLength, 64, 4000),
+    maxNegativePromptLength: clampInt(raw.maxNegativePromptLength, DEFAULT_IMAGE_GENERATOR_SETTINGS.maxNegativePromptLength, 64, 4000),
+    workerSlots: clampInt(raw.workerSlots, DEFAULT_IMAGE_GENERATOR_SETTINGS.workerSlots, 1, 8),
+    retentionDays: clampInt(raw.retentionDays, DEFAULT_IMAGE_GENERATOR_SETTINGS.retentionDays, 1, 365),
+    quotaMbPerProject: clampInt(raw.quotaMbPerProject, DEFAULT_IMAGE_GENERATOR_SETTINGS.quotaMbPerProject, 64, 100 * 1024),
+    defaultDeterministic: typeof raw.defaultDeterministic === 'boolean'
+      ? raw.defaultDeterministic
+      : DEFAULT_IMAGE_GENERATOR_SETTINGS.defaultDeterministic,
+    defaultWidth: clampInt(raw.defaultWidth, DEFAULT_IMAGE_GENERATOR_SETTINGS.defaultWidth, 256, 2048),
+    defaultHeight: clampInt(raw.defaultHeight, DEFAULT_IMAGE_GENERATOR_SETTINGS.defaultHeight, 256, 2048),
+    blockedTerms: Array.isArray(raw.blockedTerms)
+      ? raw.blockedTerms.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean)
+      : ['nsfw', 'nude', 'nudity', 'porn', 'gore', 'graphic violence', 'sexual content', 'minor', 'child sexual'],
+  };
+}
+
+function imageModelCatalog() {
+  const configured = appConfig && appConfig.imageGenerator && appConfig.imageGenerator.models && typeof appConfig.imageGenerator.models === 'object'
+    ? appConfig.imageGenerator.models
+    : {};
+  const merged = {};
+  Object.entries(IMAGE_MODEL_CATALOG).forEach(([id, base]) => {
+    const cfg = configured[id] && typeof configured[id] === 'object' ? configured[id] : {};
+    merged[id] = {
+      ...base,
+      ...cfg,
+      id,
+      label: String((cfg && cfg.label) || base.label || id),
+      vramProfile: String((cfg && cfg.vramProfile) || base.vramProfile || '8gb'),
+      fileName: String((cfg && cfg.fileName) || base.fileName || `${id}.safetensors`),
+      downloadUrl: cfg && typeof cfg.downloadUrl === 'string' ? cfg.downloadUrl.trim() : (base.downloadUrl || null),
+      sha256: cfg && typeof cfg.sha256 === 'string' ? cfg.sha256.trim().toLowerCase() : (base.sha256 || null),
+    };
+  });
+  return merged;
+}
+
+function ensureImageRuntimeState() {
+  ensureDir(IMAGE_RUNTIME_ROOT);
+  ensureDir(IMAGE_MODELS_ROOT);
+  ensureDir(IMAGE_CACHE_ROOT);
+  if (!imageRuntimeState) {
+    const fallback = {
+      initializedAt: nowIso(),
+      lastUpdatedAt: nowIso(),
+      models: {},
+      queue: { queued: 0, active: 0, completed: 0, failed: 0 },
+      downloads: {},
+      events: [],
+    };
+    imageRuntimeState = safeJsonRead(IMAGE_RUNTIME_STATE_PATH, fallback) || fallback;
+  }
+  if (!imageRuntimeState.models || typeof imageRuntimeState.models !== 'object') imageRuntimeState.models = {};
+  if (!imageRuntimeState.queue || typeof imageRuntimeState.queue !== 'object') {
+    imageRuntimeState.queue = { queued: 0, active: 0, completed: 0, failed: 0 };
+  }
+  if (!imageRuntimeState.downloads || typeof imageRuntimeState.downloads !== 'object') imageRuntimeState.downloads = {};
+  if (!Array.isArray(imageRuntimeState.events)) imageRuntimeState.events = [];
+  return imageRuntimeState;
+}
+
+function persistImageRuntimeState() {
+  ensureImageRuntimeState();
+  imageRuntimeState.lastUpdatedAt = nowIso();
+  fs.writeFileSync(IMAGE_RUNTIME_STATE_PATH, `${JSON.stringify(imageRuntimeState, null, 2)}\n`, 'utf-8');
+}
+
+function imageProgress(projectId, kind, payload = {}) {
+  const data = {
+    kind,
+    ts: nowIso(),
+    ...payload,
+  };
+  if (projectId) {
+    emitProjectEvent(projectId, 'image_progress', data);
+    const runtime = projectRuntimes.get(projectId);
+    if (runtime && runtime.state) {
+      appendProjectLog(runtime.state, 'message', {
+        kind: 'image_progress',
+        ...data,
+      });
+      persistProjectState(runtime.state);
+    }
+  }
+  const state = ensureImageRuntimeState();
+  state.events.unshift(data);
+  if (state.events.length > 200) state.events.length = 200;
+  persistImageRuntimeState();
+}
+
+function normalizeSeed(seedValue, deterministic) {
+  if (Number.isFinite(Number(seedValue))) {
+    const n = Math.abs(Math.floor(Number(seedValue))) % 2147483647;
+    return n || 1;
+  }
+  if (deterministic) {
+    const buf = crypto.randomBytes(4);
+    return buf.readUInt32BE(0) % 2147483647 || 1;
+  }
+  return null;
+}
+
+function sanitizePrompt(prompt, maxLen) {
+  const text = String(prompt || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  return text.slice(0, maxLen);
+}
+
+function moderateImagePrompt(prompt, blockedTerms = []) {
+  const text = String(prompt || '').toLowerCase();
+  const hits = blockedTerms.filter((term) => term && text.includes(term));
+  return {
+    ok: hits.length === 0,
+    hits,
+    reason: hits.length ? `Prompt blocked by safety policy (${hits.join(', ')}).` : null,
+  };
+}
+
+function gameAssetPackContract(input = {}) {
+  const style = String(input.style || 'stylized').trim() || 'stylized';
+  return [
+    { key: 'player_sprite', width: 512, height: 512, promptHint: `${style} 2d game player character sprite, transparent background` },
+    { key: 'enemy_sprite', width: 512, height: 512, promptHint: `${style} 2d game enemy character sprite, transparent background` },
+    { key: 'tileset', width: 1024, height: 1024, promptHint: `${style} seamless 2d game tileset, top down, transparent background` },
+    { key: 'ui_icon_set', width: 1024, height: 1024, promptHint: `${style} 2d game ui icon pack, transparent background` },
+    { key: 'promo_keyart', width: 1280, height: 720, promptHint: `${style} key art for indie 2d game cover` },
+  ];
+}
+
+function composeImagePrompt(input = {}, projectState = null) {
+  const settings = imageGeneratorSettings();
+  const templateId = String(input.templateId || (projectState && projectState.template_id) || '').trim().toLowerCase();
+  const style = sanitizePrompt(input.style || '', 80);
+  const subject = sanitizePrompt(input.subject || input.prompt || '', settings.maxPromptLength);
+  const intent = sanitizePrompt(input.intent || '', 120);
+  const camera = sanitizePrompt(input.camera || '', 80);
+  const lighting = sanitizePrompt(input.lighting || '', 80);
+  const quality = sanitizePrompt(input.quality || 'high detail', 80);
+  const base = [subject, intent, style, camera, lighting, quality].filter(Boolean).join(', ');
+  const templateSuffix = templateId === 'game_studio'
+    ? 'game-ready 2d asset, clean silhouette, production friendly'
+    : 'production asset, clean composition';
+  const prompt = sanitizePrompt(`${base}${base ? ', ' : ''}${templateSuffix}`, settings.maxPromptLength);
+  const negativePrompt = sanitizePrompt(
+    input.negativePrompt || 'blurry, low quality, distorted anatomy, watermark, text artifacts, jpeg artifacts, duplicate limbs',
+    settings.maxNegativePromptLength
+  );
+  return {
+    prompt,
+    negativePrompt,
+  };
+}
+
+function imageProjectArtifactsRoot(projectId) {
+  return path.join(projectDir(projectId), 'artifacts', 'images');
+}
+
+function listFilesRecursive(rootDir) {
+  if (!fs.existsSync(rootDir)) return [];
+  const out = [];
+  const walk = (current) => {
+    const entries = fs.readdirSync(current, { withFileTypes: true });
+    entries.forEach((entry) => {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile()) {
+        out.push(full);
+      }
+    });
+  };
+  walk(rootDir);
+  return out;
+}
+
+function applyImageStorageLifecycle(projectId) {
+  const settings = imageGeneratorSettings();
+  const root = imageProjectArtifactsRoot(projectId);
+  ensureDir(root);
+  const allFiles = listFilesRecursive(root);
+  const retentionCutoff = Date.now() - (settings.retentionDays * 24 * 60 * 60 * 1000);
+  let deletedCount = 0;
+  allFiles.forEach((filePath) => {
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.mtimeMs < retentionCutoff) {
+        fs.unlinkSync(filePath);
+        deletedCount += 1;
+      }
+    } catch (err) {}
+  });
+
+  const remaining = listFilesRecursive(root).map((filePath) => {
+    const stat = fs.statSync(filePath);
+    return { filePath, size: stat.size, mtimeMs: stat.mtimeMs };
+  }).sort((a, b) => a.mtimeMs - b.mtimeMs);
+  const maxBytes = settings.quotaMbPerProject * 1024 * 1024;
+  let totalBytes = remaining.reduce((sum, item) => sum + item.size, 0);
+  for (const item of remaining) {
+    if (totalBytes <= maxBytes) break;
+    try {
+      fs.unlinkSync(item.filePath);
+      totalBytes -= item.size;
+      deletedCount += 1;
+    } catch (err) {}
+  }
+  return {
+    deletedCount,
+    totalBytes,
+    quotaBytes: maxBytes,
+  };
+}
+
+function resolveImageModelEntry(modelId) {
+  const catalog = imageModelCatalog();
+  const selected = catalog[modelId] || catalog[imageGeneratorSettings().preferredModelId] || Object.values(catalog)[0] || null;
+  if (!selected) return null;
+  const fileName = selected.fileName || `${selected.id}.safetensors`;
+  return {
+    ...selected,
+    path: path.join(IMAGE_MODELS_ROOT, fileName),
+    partPath: path.join(IMAGE_MODELS_ROOT, `${fileName}.part`),
+  };
+}
+
+async function downloadFileWithResume(url, destination, partPath, onProgress = null) {
+  let existing = 0;
+  if (fs.existsSync(partPath)) {
+    try {
+      existing = fs.statSync(partPath).size;
+    } catch (err) {
+      existing = 0;
+    }
+  }
+  const headers = existing > 0 ? { Range: `bytes=${existing}-` } : {};
+  const resp = await fetchWithTimeout(url, { method: 'GET', headers }, 15 * 60 * 1000);
+  if (!resp.ok) {
+    return {
+      ok: false,
+      error: `Model download failed with HTTP ${resp.status}.`,
+    };
+  }
+  const totalFromHeader = Number(resp.headers.get('content-length') || 0);
+  const total = existing + (Number.isFinite(totalFromHeader) ? totalFromHeader : 0);
+  const mode = existing > 0 ? 'a' : 'w';
+  const file = fs.createWriteStream(partPath, { flags: mode });
+  let written = existing;
+
+  if (resp.body && typeof resp.body.getReader === 'function') {
+    const reader = resp.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      file.write(Buffer.from(value));
+      written += value.length;
+      if (typeof onProgress === 'function') onProgress({ written, total });
+    }
+  } else if (resp.body && typeof resp.body[Symbol.asyncIterator] === 'function') {
+    for await (const chunk of resp.body) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      file.write(buf);
+      written += buf.length;
+      if (typeof onProgress === 'function') onProgress({ written, total });
+    }
+  } else {
+    const arr = await resp.arrayBuffer();
+    const buf = Buffer.from(arr);
+    file.write(buf);
+    written += buf.length;
+    if (typeof onProgress === 'function') onProgress({ written, total });
+  }
+
+  await new Promise((resolve, reject) => {
+    file.end(() => resolve());
+    file.on('error', reject);
+  });
+  fs.renameSync(partPath, destination);
+  return {
+    ok: true,
+    bytes: written,
+  };
+}
+
+async function ensureImageModelReady(modelId, projectId = null) {
+  const runtime = ensureImageRuntimeState();
+  const model = resolveImageModelEntry(modelId || imageGeneratorSettings().preferredModelId);
+  if (!model) {
+    return {
+      ok: false,
+      errorCode: 'VALIDATION_ERROR',
+      message: 'No image model is configured.',
+      model: null,
+    };
+  }
+  if (fs.existsSync(model.path)) {
+    runtime.models[model.id] = {
+      id: model.id,
+      status: 'ready',
+      path: model.path,
+      updatedAt: nowIso(),
+    };
+    persistImageRuntimeState();
+    return { ok: true, model };
+  }
+  if (!model.downloadUrl) {
+    runtime.models[model.id] = {
+      id: model.id,
+      status: 'missing_download_url',
+      path: model.path,
+      updatedAt: nowIso(),
+    };
+    persistImageRuntimeState();
+    return {
+      ok: false,
+      errorCode: 'MODEL_URL_MISSING',
+      message: `Model ${model.id} has no download URL configured. Set appConfig.imageGenerator.models.${model.id}.downloadUrl first.`,
+      model,
+    };
+  }
+
+  runtime.models[model.id] = {
+    id: model.id,
+    status: 'downloading',
+    path: model.path,
+    updatedAt: nowIso(),
+  };
+  persistImageRuntimeState();
+  imageProgress(projectId, 'download_started', { modelId: model.id });
+  const download = await downloadFileWithResume(model.downloadUrl, model.path, model.partPath, ({ written, total }) => {
+    const pct = total > 0 ? Math.max(0, Math.min(100, Math.round((written / total) * 100))) : null;
+    imageProgress(projectId, 'download_progress', {
+      modelId: model.id,
+      written,
+      total,
+      progressPct: pct,
+    });
+  });
+  if (!download.ok) {
+    runtime.models[model.id] = {
+      id: model.id,
+      status: 'download_failed',
+      path: model.path,
+      updatedAt: nowIso(),
+      lastError: download.error,
+    };
+    persistImageRuntimeState();
+    return {
+      ok: false,
+      errorCode: 'CONNECTOR_FAILURE',
+      message: download.error || 'Model download failed.',
+      model,
+    };
+  }
+  runtime.models[model.id] = {
+    id: model.id,
+    status: 'ready',
+    path: model.path,
+    sizeBytes: download.bytes,
+    updatedAt: nowIso(),
+  };
+  persistImageRuntimeState();
+  imageProgress(projectId, 'download_complete', { modelId: model.id, bytes: download.bytes });
+  return { ok: true, model };
+}
+
+function safeSlug(value, fallback = 'item') {
+  const v = String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return v || fallback;
+}
+
+function writePlaceholderSvg(filePath, prompt, width, height, seed) {
+  const escapedPrompt = String(prompt || '').replace(/[<>&]/g, '');
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">\n  <defs>\n    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">\n      <stop offset="0%" stop-color="#10223d"/>\n      <stop offset="100%" stop-color="#1f4e79"/>\n    </linearGradient>\n  </defs>\n  <rect width="${width}" height="${height}" fill="url(#bg)"/>\n  <text x="24" y="56" fill="#e8f0fe" font-size="24" font-family="Segoe UI, Arial, sans-serif">HiveForge Image Placeholder</text>\n  <text x="24" y="96" fill="#c7d2e0" font-size="16" font-family="Segoe UI, Arial, sans-serif">seed: ${seed || 'auto'}</text>\n  <foreignObject x="24" y="120" width="${Math.max(100, width - 48)}" height="${Math.max(100, height - 140)}">\n    <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Segoe UI, Arial, sans-serif;color:#dbeafe;font-size:14px;line-height:1.45;white-space:pre-wrap;">${escapedPrompt}</div>\n  </foreignObject>\n</svg>\n`;
+  fs.writeFileSync(filePath, svg, 'utf-8');
+}
+
+async function runImageGenerationJob(job) {
+  const settings = imageGeneratorSettings();
+  const projectId = String(job.projectId || '').trim() || null;
+  const modelResult = await ensureImageModelReady(job.modelId, projectId);
+  if (!modelResult.ok) {
+    return {
+      ok: false,
+      errorCode: modelResult.errorCode || 'CONNECTOR_FAILURE',
+      message: modelResult.message,
+      data: null,
+    };
+  }
+
+  const policy = moderateImagePrompt(job.prompt, settings.blockedTerms);
+  if (!policy.ok) {
+    return {
+      ok: false,
+      errorCode: 'POLICY_BLOCKED',
+      message: policy.reason,
+      data: {
+        blockedTerms: policy.hits,
+      },
+    };
+  }
+
+  imageProgress(projectId, 'generation_started', {
+    jobId: job.id,
+    modelId: modelResult.model.id,
+  });
+  const outputRoot = imageProjectArtifactsRoot(projectId || 'global');
+  ensureDir(outputRoot);
+  const ts = new Date();
+  const dayDir = `${ts.getUTCFullYear()}-${String(ts.getUTCMonth() + 1).padStart(2, '0')}-${String(ts.getUTCDate()).padStart(2, '0')}`;
+  const dir = path.join(outputRoot, dayDir);
+  ensureDir(dir);
+  const assetKind = safeSlug(job.assetKind || 'image', 'image');
+  const base = `${safeSlug(job.projectName || projectId || 'project', 'project')}_${assetKind}_${job.seed || 'auto'}_${Date.now()}`;
+  const svgPath = path.join(dir, `${base}.svg`);
+  const metadataPath = path.join(dir, `${base}.json`);
+
+  writePlaceholderSvg(svgPath, job.prompt, job.width, job.height, job.seed);
+  const metadata = {
+    jobId: job.id,
+    modelId: modelResult.model.id,
+    prompt: job.prompt,
+    negativePrompt: job.negativePrompt,
+    seed: job.seed,
+    deterministic: job.deterministic,
+    width: job.width,
+    height: job.height,
+    templateId: job.templateId || null,
+    assetKind,
+    createdAt: nowIso(),
+    engine: 'hiveforge_internal_placeholder',
+    file: path.relative(projectDir(projectId || 'global'), svgPath).replace(/\\/g, '/'),
+  };
+  fs.writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf-8');
+  const lifecycle = applyImageStorageLifecycle(projectId || 'global');
+
+  imageProgress(projectId, 'generation_complete', {
+    jobId: job.id,
+    output: svgPath,
+    metadata: metadataPath,
+    deletedCount: lifecycle.deletedCount,
+  });
+  return {
+    ok: true,
+    message: 'Image generated successfully.',
+    data: {
+      outputPath: svgPath,
+      metadataPath,
+      metadata,
+      lifecycle,
+    },
+  };
+}
+
+async function enqueueImageGenerationJob(jobInput = {}) {
+  ensureImageRuntimeState();
+  const settings = imageGeneratorSettings();
+  const deterministic = typeof jobInput.deterministic === 'boolean' ? jobInput.deterministic : settings.defaultDeterministic;
+  const job = {
+    id: `img_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
+    projectId: jobInput.projectId || null,
+    projectName: jobInput.projectName || null,
+    modelId: String(jobInput.modelId || settings.preferredModelId).trim() || settings.preferredModelId,
+    prompt: sanitizePrompt(jobInput.prompt, settings.maxPromptLength),
+    negativePrompt: sanitizePrompt(jobInput.negativePrompt, settings.maxNegativePromptLength),
+    seed: normalizeSeed(jobInput.seed, deterministic),
+    deterministic,
+    width: clampInt(jobInput.width, settings.defaultWidth, 256, 2048),
+    height: clampInt(jobInput.height, settings.defaultHeight, 256, 2048),
+    templateId: String(jobInput.templateId || '').trim().toLowerCase() || null,
+    assetKind: String(jobInput.assetKind || 'image').trim() || 'image',
+    createdAt: nowIso(),
+  };
+
+  return new Promise((resolve) => {
+    imageGenerationQueue.push({
+      job,
+      resolve,
+    });
+    const state = ensureImageRuntimeState();
+    state.queue.queued = imageGenerationQueue.length;
+    persistImageRuntimeState();
+    drainImageGenerationQueue();
+  });
+}
+
+async function drainImageGenerationQueue() {
+  const settings = imageGeneratorSettings();
+  while (imageActiveWorkers < settings.workerSlots && imageGenerationQueue.length > 0) {
+    const item = imageGenerationQueue.shift();
+    if (!item) break;
+    imageActiveWorkers += 1;
+    const state = ensureImageRuntimeState();
+    state.queue.active = imageActiveWorkers;
+    state.queue.queued = imageGenerationQueue.length;
+    persistImageRuntimeState();
+    runImageGenerationJob(item.job)
+      .then((result) => {
+        const updated = ensureImageRuntimeState();
+        if (result.ok) updated.queue.completed = Number(updated.queue.completed || 0) + 1;
+        else updated.queue.failed = Number(updated.queue.failed || 0) + 1;
+        item.resolve({
+          ...result,
+          operation: 'generate_image',
+          actualCost: 0,
+        });
+      })
+      .catch((err) => {
+        const updated = ensureImageRuntimeState();
+        updated.queue.failed = Number(updated.queue.failed || 0) + 1;
+        item.resolve({
+          ok: false,
+          errorCode: 'CONNECTOR_FAILURE',
+          message: redactSensitive(err && err.message ? err.message : 'Image generation failed.'),
+          operation: 'generate_image',
+          actualCost: 0,
+          data: null,
+        });
+      })
+      .finally(() => {
+        imageActiveWorkers = Math.max(0, imageActiveWorkers - 1);
+        const updated = ensureImageRuntimeState();
+        updated.queue.active = imageActiveWorkers;
+        updated.queue.queued = imageGenerationQueue.length;
+        persistImageRuntimeState();
+        drainImageGenerationQueue();
+      });
+  }
+}
+
 function persistAppConfig() {
   ensureDir(path.dirname(CONFIG_PATH));
   fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(appConfig, null, 2)}\n`, 'utf-8');
@@ -3247,6 +3838,7 @@ function normalizeGoalKeywordTags(goalText) {
     marketplace: textContainsAny(source, ['marketplace', 'auction', 'bidding', 'bid', 'listing', 'buy and sell', 'seller', 'buyer', 'classifieds', 'peer-to-peer']),
     social: textContainsAny(source, ['social', 'profile', 'dating', 'match', 'matchmaking', 'network', 'community', 'forum', 'feed', 'follow', 'user-generated']),
     mobileMonetization: textContainsAny(source, ['monetize', 'monetization', 'iap', 'in-app purchase', 'freemium', 'premium unlock', 'rewarded ad', 'interstitial', 'banner ad', 'revenue model', 'play store revenue', 'app revenue']),
+    imageGeneration: textContainsAny(source, ['image generation', 'image generator', 'ai art', 'sprite', 'spritesheet', 'tileset', 'concept art', 'character art', 'game art', 'asset pack', 'illustration']),
   };
 }
 
@@ -3275,6 +3867,9 @@ function connectorHealthCheckActionForService(connector) {
   }
   if (key === 'google_play') {
     return { connector: 'google_play', operation: 'get_release_status', actorRole: 'DevOps Automator', phase: 'deployment' };
+  }
+  if (key === 'image_generator') {
+    return { connector: 'image_generator', operation: 'get_profile', actorRole: 'Backend Architect', phase: 'product_build' };
   }
   return null;
 }
@@ -3311,6 +3906,7 @@ function goalClarificationQuestions(templateId, goalText, tags = {}) {
 function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   const goalText = String(goal || '').trim();
   const normalizedTemplate = String(templateId || '').toLowerCase();
+  const isGameTemplate = normalizedTemplate === 'game_studio';
   const isSoftwareWebTemplate = normalizedTemplate === 'software_web_app' || normalizedTemplate === 'software_agency';
   const isMobileTemplate = normalizedTemplate === 'mobile_app';
   const isSoftwareTemplate = isSoftwareWebTemplate || isMobileTemplate;
@@ -3335,6 +3931,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   const connectorSet = new Set();
   if (isSoftwareWebTemplate || ((tags.deployment || tags.webApp) && !isMobileTemplate)) connectorSet.add('netlify');
   if (isMobileTemplate) connectorSet.add('google_play');
+  if (isGameTemplate || tags.imageGeneration) connectorSet.add('image_generator');
   if (tags.payments) connectorSet.add('stripe');
   if (tags.marketing) connectorSet.add('google_ads');
   if (needsManagedDatabase && planConfig.preferredDatabaseService === 'supabase') connectorSet.add('supabase');
@@ -3353,6 +3950,8 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   const requiredConnectors = Array.from(connectorSet);
   const metadata = readCredentialMetadata();
   const missingCredentialServices = requiredConnectors.filter((connector) => {
+    const connectorMeta = CONNECTOR_REGISTRY[connector] || null;
+    if (!connectorMeta || !connectorMeta.credentialService) return false;
     const service = CONNECTOR_REGISTRY[connector] && CONNECTOR_REGISTRY[connector].credentialService
       ? CONNECTOR_REGISTRY[connector].credentialService
       : connector;
@@ -3499,6 +4098,69 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       phase: 'finance',
       requiredRole: 'Finance Tracker',
       description: 'Define transaction recording, reconciliation workflows, and financial reporting outputs.',
+    });
+  }
+
+  if (isGameTemplate || tags.imageGeneration) {
+    addTask({
+      title: 'Configure image generation runtime profile and 8GB VRAM-safe defaults',
+      phase: 'strategy',
+      requiredRole: 'Backend Architect',
+      description: 'Select an image model profile for low-VRAM execution, set deterministic seed policy, and document retry/timeout guardrails for first-run downloads.',
+      autoAction: {
+        type: 'connector',
+        connector: 'image_generator',
+        operation: 'warmup',
+        input: {},
+        estimatedCost: 0,
+        actorRole: 'Backend Architect',
+        requiresPermission: false,
+      },
+    });
+    addTask({
+      title: 'Define template-aware asset contract for generated game art',
+      phase: 'strategy',
+      requiredRole: 'Game Designer',
+      description: 'Lock required asset pack outputs (sprites, tiles, UI icons, key art) with dimensions, naming, and acceptance criteria for downstream implementation tasks.',
+      autoAction: {
+        type: 'connector',
+        connector: 'image_generator',
+        operation: 'get_asset_pack_contract',
+        input: { templateId: 'game_studio' },
+        estimatedCost: 0,
+        actorRole: 'Backend Architect',
+        requiresPermission: false,
+      },
+    });
+    addTask({
+      title: 'Generate baseline visual asset pack for prototype gameplay loop',
+      phase: 'product_build',
+      requiredRole: 'Technical Artist',
+      description: 'Generate initial player/enemy sprites, tileset, icon set, and key art using template-aware prompts. Persist metadata for reproducibility.',
+      autoAction: {
+        type: 'connector',
+        connector: 'image_generator',
+        operation: 'generate_asset_pack',
+        input: { templateId: 'game_studio' },
+        estimatedCost: 0,
+        actorRole: 'Backend Architect',
+        requiresPermission: true,
+      },
+    });
+    addTask({
+      title: 'Run image safety/moderation and storage lifecycle governance checks',
+      phase: 'compliance',
+      requiredRole: 'Legal Compliance Checker',
+      description: 'Validate prompt safety policy enforcement, artifact metadata completeness, retention policy, and quota pruning behavior before release.',
+      autoAction: {
+        type: 'connector',
+        connector: 'image_generator',
+        operation: 'prune_storage',
+        input: {},
+        estimatedCost: 0,
+        actorRole: 'Backend Architect',
+        requiresPermission: false,
+      },
     });
   }
 
@@ -6109,6 +6771,9 @@ function startProjectTaskExecution(projectState, task, assignee) {
       `    ${sandboxGamePath}/index.html`,
       `    ${sandboxGamePath}/game.js`,
       `    ${sandboxGamePath}/style.css`,
+      '  Image generation is available through connector: image_generator (internal runtime).',
+      '  Prefer template-aware asset packs (player/enemy sprites, tileset, UI icon set, key art) with reproducible seeds and metadata.',
+      '  Keep prompts policy-safe; prohibited prompt classes are automatically blocked by moderation checks.',
       '  Existing files contain HIVEFORGE_SCAFFOLD_PLACEHOLDER; replace them with real implementation.',
       '  Do NOT output HIVEFORGE_SCAFFOLD_PLACEHOLDER anywhere in your written files.',
     ].join('\n');
@@ -8884,6 +9549,18 @@ async function executeConnectorPolicy(connectorId, options = {}) {
 
   const checks = [];
 
+  if (connector.localRuntime) {
+    const enabled = imageGeneratorSettings().enabled === true;
+    checks.push({
+      type: 'local_runtime',
+      target: connector.id,
+      ok: enabled,
+      message: enabled
+        ? `${connector.label} local runtime is enabled.`
+        : `${connector.label} local runtime is disabled in configuration.`,
+    });
+  }
+
   if (connector.provider) {
     const result = await testIntegration(connector.provider);
     checks.push({
@@ -10554,6 +11231,255 @@ async function executeGooglePlayConnector(options = {}) {
   };
 }
 
+async function executeImageGeneratorConnector(options = {}) {
+  const settings = imageGeneratorSettings();
+  const state = ensureImageRuntimeState();
+  const operation = String(options.operation || 'get_profile').trim().toLowerCase() || 'get_profile';
+  const input = options.input && typeof options.input === 'object' ? options.input : {};
+  const modelId = String(input.modelId || settings.preferredModelId).trim() || settings.preferredModelId;
+
+  if (!settings.enabled) {
+    return {
+      ok: false,
+      errorCode: 'DISABLED',
+      message: 'Image generator is disabled in appConfig.imageGenerator.enabled.',
+      operation,
+      actualCost: 0,
+      data: null,
+    };
+  }
+
+  if (operation === 'get_profile') {
+    const catalog = imageModelCatalog();
+    const modelStatus = Object.values(catalog).map((entry) => {
+      const runtimeModel = state.models[entry.id] || {};
+      const ready = fs.existsSync(path.join(IMAGE_MODELS_ROOT, entry.fileName || `${entry.id}.safetensors`));
+      return {
+        id: entry.id,
+        label: entry.label,
+        vramProfile: entry.vramProfile,
+        downloadConfigured: Boolean(entry.downloadUrl),
+        ready,
+        status: runtimeModel.status || (ready ? 'ready' : 'missing'),
+        updatedAt: runtimeModel.updatedAt || null,
+      };
+    });
+    return {
+      ok: true,
+      message: 'Image generator profile retrieved.',
+      operation,
+      actualCost: 0,
+      data: {
+        preferredModelId: settings.preferredModelId,
+        queue: {
+          ...state.queue,
+          queued: imageGenerationQueue.length,
+          active: imageActiveWorkers,
+        },
+        settings: {
+          workerSlots: settings.workerSlots,
+          retentionDays: settings.retentionDays,
+          quotaMbPerProject: settings.quotaMbPerProject,
+          defaultDeterministic: settings.defaultDeterministic,
+          defaultWidth: settings.defaultWidth,
+          defaultHeight: settings.defaultHeight,
+        },
+        models: modelStatus,
+      },
+    };
+  }
+
+  if (operation === 'list_models') {
+    const catalog = imageModelCatalog();
+    return {
+      ok: true,
+      message: `Found ${Object.keys(catalog).length} image model profile(s).`,
+      operation,
+      actualCost: 0,
+      data: {
+        models: Object.values(catalog),
+      },
+    };
+  }
+
+  if (operation === 'download_model' || operation === 'warmup') {
+    imageProgress(options.projectId || null, operation === 'warmup' ? 'warmup_started' : 'download_requested', {
+      modelId,
+    });
+    const ensured = await ensureImageModelReady(modelId, options.projectId || null);
+    if (!ensured.ok) {
+      return {
+        ok: false,
+        errorCode: ensured.errorCode || 'CONNECTOR_FAILURE',
+        message: ensured.message,
+        operation,
+        actualCost: 0,
+        data: {
+          modelId,
+        },
+      };
+    }
+    imageProgress(options.projectId || null, operation === 'warmup' ? 'warmup_complete' : 'download_complete', {
+      modelId,
+      modelPath: ensured.model.path,
+    });
+    return {
+      ok: true,
+      message: `Model ${modelId} is ready for generation.`,
+      operation,
+      actualCost: 0,
+      data: {
+        modelId,
+        modelPath: ensured.model.path,
+      },
+    };
+  }
+
+  if (operation === 'prune_storage') {
+    if (!options.projectId) {
+      return {
+        ok: false,
+        errorCode: 'VALIDATION_ERROR',
+        message: 'projectId is required for prune_storage.',
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    const lifecycle = applyImageStorageLifecycle(options.projectId);
+    return {
+      ok: true,
+      message: `Pruned image storage (deleted ${lifecycle.deletedCount} file(s)).`,
+      operation,
+      actualCost: 0,
+      data: lifecycle,
+    };
+  }
+
+  if (operation === 'get_asset_pack_contract') {
+    const templateId = String(input.templateId || '').trim().toLowerCase();
+    const assets = templateId === 'game_studio' ? gameAssetPackContract(input) : [];
+    return {
+      ok: true,
+      message: `Resolved ${assets.length} asset contract item(s).`,
+      operation,
+      actualCost: 0,
+      data: {
+        templateId,
+        assets,
+      },
+    };
+  }
+
+  if (operation === 'generate_asset_pack') {
+    const projectId = options.projectId || null;
+    const templateId = String(input.templateId || '').trim().toLowerCase();
+    const assets = templateId === 'game_studio' ? gameAssetPackContract(input) : [];
+    if (!projectId) {
+      return {
+        ok: false,
+        errorCode: 'VALIDATION_ERROR',
+        message: 'projectId is required for generate_asset_pack.',
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    if (!assets.length) {
+      return {
+        ok: false,
+        errorCode: 'VALIDATION_ERROR',
+        message: `No template-aware asset contract found for template ${templateId || 'unknown'}.`,
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+
+    const outputs = [];
+    for (const asset of assets) {
+      const composed = composeImagePrompt({
+        prompt: input.prompt || asset.promptHint,
+        style: input.style || '',
+        negativePrompt: input.negativePrompt || '',
+        templateId,
+      });
+      const generated = await enqueueImageGenerationJob({
+        projectId,
+        projectName: input.projectName || null,
+        modelId,
+        prompt: composed.prompt,
+        negativePrompt: composed.negativePrompt,
+        seed: input.seed,
+        deterministic: input.deterministic,
+        width: asset.width,
+        height: asset.height,
+        templateId,
+        assetKind: asset.key,
+      });
+      if (!generated.ok) return generated;
+      outputs.push({
+        key: asset.key,
+        width: asset.width,
+        height: asset.height,
+        outputPath: generated.data && generated.data.outputPath ? generated.data.outputPath : null,
+        metadataPath: generated.data && generated.data.metadataPath ? generated.data.metadataPath : null,
+      });
+    }
+
+    return {
+      ok: true,
+      message: `Generated ${outputs.length} image asset(s).`,
+      operation,
+      actualCost: 0,
+      data: {
+        templateId,
+        assets: outputs,
+      },
+    };
+  }
+
+  if (operation === 'generate_image') {
+    const projectState = options.projectId ? (projectRuntimes.get(options.projectId) && projectRuntimes.get(options.projectId).state) : null;
+    const composed = composeImagePrompt({
+      ...input,
+      templateId: input.templateId || (projectState && projectState.template_id) || null,
+    }, projectState);
+    if (!composed.prompt) {
+      return {
+        ok: false,
+        errorCode: 'VALIDATION_ERROR',
+        message: 'prompt is required for generate_image.',
+        operation,
+        actualCost: 0,
+        data: null,
+      };
+    }
+    return enqueueImageGenerationJob({
+      projectId: options.projectId || null,
+      projectName: projectState && projectState.name ? projectState.name : null,
+      modelId,
+      prompt: composed.prompt,
+      negativePrompt: composed.negativePrompt,
+      seed: input.seed,
+      deterministic: input.deterministic,
+      width: input.width,
+      height: input.height,
+      templateId: input.templateId || (projectState && projectState.template_id) || null,
+      assetKind: input.assetKind || 'image',
+    });
+  }
+
+  return {
+    ok: false,
+    errorCode: 'VALIDATION_ERROR',
+    message: `Unsupported image_generator operation: ${operation}. Use get_profile, list_models, download_model, warmup, generate_image, generate_asset_pack, get_asset_pack_contract, or prune_storage.`,
+    operation,
+    actualCost: 0,
+    data: null,
+  };
+}
+
 function publicationOperationKind(operation) {
   const normalized = String(operation || '').trim().toLowerCase();
   if (['publish_book', 'publish_post', 'publish_product'].includes(normalized)) return 'publish';
@@ -10875,6 +11801,9 @@ async function executeLiveConnector(connectorId, options = {}) {
   }
   if (connectorKey === 'google_play') {
     return executeGooglePlayConnector(options);
+  }
+  if (connectorKey === 'image_generator') {
+    return executeImageGeneratorConnector(options);
   }
   return {
     ok: false,
@@ -11410,6 +12339,8 @@ async function main() {
   appConfig.runtime = runtimeSettings();
   persistAppConfig();
   ensureMessageBus();
+  ensureImageRuntimeState();
+  persistImageRuntimeState();
   const endpoint = appConfig.llm?.endpoint || 'http://127.0.0.1:1234/v1';
   const provider = normalizeLlmProvider(appConfig.llm?.provider);
   const apiKey = resolveLlmApiKey(appConfig.llm);
