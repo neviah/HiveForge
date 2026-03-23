@@ -616,7 +616,7 @@ const MUTATING_CONNECTOR_OPERATIONS = {
   substack: new Set(['publish_post', 'update_post', 'unpublish_post']),
   custom_cms: new Set(['publish_book', 'update_publication', 'unpublish_publication']),
   google_play: new Set(['upload_bundle', 'create_release', 'update_release_notes', 'promote_release']),
-  image_generator: new Set(['download_model', 'warmup', 'generate_image', 'generate_asset_pack', 'self_test', 'prune_storage']),
+  image_generator: new Set(['download_model', 'warmup', 'generate_image', 'generate_asset_pack', 'self_test', 'golden_regression', 'prune_storage']),
 };
 const CONNECTOR_IDEMPOTENCY_PROFILES = {
   netlify: {
@@ -823,6 +823,10 @@ const CONNECTOR_IDEMPOTENCY_PROFILES = {
       reconciliation: 'artifact_state',
     },
     self_test: {
+      mode: 'ledger_only',
+      reconciliation: 'artifact_state',
+    },
+    golden_regression: {
       mode: 'ledger_only',
       reconciliation: 'artifact_state',
     },
@@ -2271,6 +2275,9 @@ function ensureImageRuntimeState() {
     imageRuntimeState.queue = { queued: 0, active: 0, completed: 0, failed: 0 };
   }
   if (!imageRuntimeState.downloads || typeof imageRuntimeState.downloads !== 'object') imageRuntimeState.downloads = {};
+  if (!imageRuntimeState.checks || typeof imageRuntimeState.checks !== 'object') imageRuntimeState.checks = {};
+  if (!imageRuntimeState.checks.selfTests || typeof imageRuntimeState.checks.selfTests !== 'object') imageRuntimeState.checks.selfTests = {};
+  if (!imageRuntimeState.checks.goldenPrompts || typeof imageRuntimeState.checks.goldenPrompts !== 'object') imageRuntimeState.checks.goldenPrompts = {};
   if (!Array.isArray(imageRuntimeState.events)) imageRuntimeState.events = [];
   return imageRuntimeState;
 }
@@ -2656,6 +2663,88 @@ function comfyDefaultStartCommand(appPath, endpoint) {
   const pythonPath = comfyVenvPythonPath(resolvedPath);
   const port = comfyEndpointPort(endpoint);
   return `"${pythonPath}" main.py --listen 127.0.0.1 --port ${port}`;
+}
+
+function resolveImagePythonCommand() {
+  const comfyPython = comfyVenvPythonPath(IMAGE_COMFY_ROOT);
+  if (fs.existsSync(comfyPython)) {
+    return { command: comfyPython, args: [] };
+  }
+  const bootstrap = resolvePythonBootstrapCommand();
+  return bootstrap ? { command: bootstrap.command, args: bootstrap.args } : null;
+}
+
+function pythonCommandDescription(cmd) {
+  if (!cmd) return 'none';
+  return [cmd.command, ...(Array.isArray(cmd.args) ? cmd.args : [])].join(' ').trim();
+}
+
+function ensurePythonPackageAvailable(commandSpec, moduleName, packageName = moduleName, allowInstall = true) {
+  if (!commandSpec) {
+    return { ok: false, error: 'No Python runtime available.' };
+  }
+  const probe = executeProvisionStep({
+    label: `Python module check (${moduleName})`,
+    command: commandSpec.command,
+    args: [...(commandSpec.args || []), '-c', `import ${moduleName}`],
+    cwd: __dirname,
+  });
+  if (probe.ok || !allowInstall) {
+    return probe.ok ? { ok: true } : { ok: false, error: probe.error };
+  }
+  const install = executeProvisionStep({
+    label: `Install Python package (${packageName})`,
+    command: commandSpec.command,
+    args: [...(commandSpec.args || []), '-m', 'pip', 'install', packageName],
+    cwd: __dirname,
+    timeout: 20 * 60 * 1000,
+  });
+  if (!install.ok) {
+    return install;
+  }
+  const verify = executeProvisionStep({
+    label: `Verify Python module (${moduleName})`,
+    command: commandSpec.command,
+    args: [...(commandSpec.args || []), '-c', `import ${moduleName}`],
+    cwd: __dirname,
+  });
+  return verify.ok ? { ok: true } : verify;
+}
+
+function resizeImageWithPython(inputPath, outputPath, width, height) {
+  const commandSpec = resolveImagePythonCommand();
+  const pillow = ensurePythonPackageAvailable(commandSpec, 'PIL', 'pillow', true);
+  if (!pillow.ok) {
+    return { ok: false, error: pillow.error || 'Pillow is unavailable.' };
+  }
+  const script = [
+    'from PIL import Image, ImageOps',
+    'import sys',
+    'src, dst, width, height = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])',
+    'img = Image.open(src).convert("RGBA")',
+    'fit = ImageOps.fit(img, (width, height), method=Image.LANCZOS, centering=(0.5, 0.5))',
+    'fit.save(dst)',
+  ].join('; ');
+  const resized = executeProvisionStep({
+    label: 'Resize image variant',
+    command: commandSpec.command,
+    args: [...(commandSpec.args || []), '-c', script, inputPath, outputPath, String(width), String(height)],
+    cwd: __dirname,
+  });
+  return resized.ok ? { ok: true, backend: pythonCommandDescription(commandSpec) } : resized;
+}
+
+async function secondaryBackendReachable() {
+  for (const endpoint of IMAGE_SECONDARY_SDAPI_ENDPOINTS) {
+    try {
+      const response = await fetchWithTimeout(`${endpoint}/sdapi/v1/options`, { method: 'GET' }, 4000);
+      if (response.ok) {
+        return { ok: true, endpoint };
+      }
+    } catch {
+    }
+  }
+  return { ok: false, endpoint: null };
 }
 
 function spawnSyncUtf8(command, args, options = {}) {
@@ -5219,6 +5308,21 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       },
     });
     addTask({
+      title: 'Run deterministic golden prompt regression suite',
+      phase: 'compliance',
+      requiredRole: 'Backend Architect',
+      description: 'Run deterministic template-specific golden prompts and verify output invariants so image generation regressions are caught before project completion.',
+      autoAction: {
+        type: 'connector',
+        connector: 'image_generator',
+        operation: 'golden_regression',
+        input: { templateId: imageTemplateContractId || normalizedTemplate },
+        estimatedCost: 0,
+        actorRole: 'Backend Architect',
+        requiresPermission: false,
+      },
+    });
+    addTask({
       title: 'Run image safety/moderation and storage lifecycle governance checks',
       phase: 'compliance',
       requiredRole: 'Legal Compliance Checker',
@@ -5895,6 +5999,18 @@ function createInjectedImageVariants(projectState, item, injectedAbs) {
   specs.forEach((spec) => {
     const ext = path.extname(injectedAbs) || '.png';
     const variantAbs = path.join(path.dirname(injectedAbs), `${safeSlug(item.key, 'asset')}__${safeSlug(spec.name, 'variant')}${ext}`);
+    const resized = resizeImageWithPython(injectedAbs, variantAbs, spec.width, spec.height);
+    if (resized.ok) {
+      variants.push({
+        name: spec.name,
+        targetWidth: spec.width,
+        targetHeight: spec.height,
+        injectedPath: path.relative(projectWorkspaceDir(projectState.id), variantAbs).replace(/\\/g, '/'),
+        deliveryMode: 'resized',
+        backend: resized.backend || null,
+      });
+      return;
+    }
     try {
       fs.copyFileSync(injectedAbs, variantAbs);
       variants.push({
@@ -5903,6 +6019,8 @@ function createInjectedImageVariants(projectState, item, injectedAbs) {
         targetHeight: spec.height,
         injectedPath: path.relative(projectWorkspaceDir(projectState.id), variantAbs).replace(/\\/g, '/'),
         deliveryMode: 'copied_master',
+        backend: null,
+        lastError: resized.error || null,
       });
     } catch {
     }
@@ -6086,6 +6204,111 @@ function validateTemplateImageAssets(projectState) {
     });
   });
   return { ok: gaps.length === 0, gaps };
+}
+
+function goldenPromptSuiteForTemplate(templateId) {
+  const normalized = String(templateId || '').trim().toLowerCase();
+  if (normalized === 'game_studio') {
+    return [
+      { id: 'game_keyart', prompt: 'indie action game key art, dramatic lighting, readable silhouettes', width: 1280, height: 720, assetKind: 'golden_keyart' },
+      { id: 'game_sprite', prompt: '2d player sprite concept, transparent background feel, bold shape language', width: 512, height: 512, assetKind: 'golden_sprite' },
+    ];
+  }
+  if (normalized === 'mobile_app') {
+    return [
+      { id: 'mobile_store', prompt: 'mobile app feature graphic, crisp modern illustration, premium product feel', width: 1024, height: 500, assetKind: 'golden_store' },
+      { id: 'mobile_splash', prompt: 'mobile splash artwork, portrait composition, clean focal point', width: 1080, height: 1920, assetKind: 'golden_splash' },
+    ];
+  }
+  return [
+    { id: 'web_hero', prompt: 'saas landing page hero illustration, modern visual hierarchy, editorial composition', width: 1536, height: 768, assetKind: 'golden_hero' },
+    { id: 'web_social', prompt: 'product social card image, launch announcement artwork, polished branding', width: 1200, height: 630, assetKind: 'golden_social' },
+  ];
+}
+
+async function runGoldenPromptRegressionSuite(projectId, templateId, modelId) {
+  const runtime = ensureImageRuntimeState();
+  const projectState = projectId ? (projectRuntimes.get(projectId) && projectRuntimes.get(projectId).state) : null;
+  const suite = goldenPromptSuiteForTemplate(templateId);
+  const results = [];
+  for (let index = 0; index < suite.length; index += 1) {
+    const test = suite[index];
+    const generated = await executeImageGeneratorConnector({
+      projectId,
+      operation: 'generate_image',
+      input: {
+        modelId,
+        prompt: test.prompt,
+        templateId,
+        width: test.width,
+        height: test.height,
+        deterministic: true,
+        seed: 1000 + index,
+        assetKind: test.assetKind,
+      },
+    });
+    const outputPath = generated && generated.data ? generated.data.outputPath : null;
+    const metadata = generated && generated.data ? generated.data.metadata : null;
+    const passed = Boolean(generated && generated.ok && outputPath && fs.existsSync(outputPath)
+      && metadata && Number(metadata.width) === Number(test.width) && Number(metadata.height) === Number(test.height));
+    results.push({
+      id: test.id,
+      prompt: test.prompt,
+      width: test.width,
+      height: test.height,
+      ok: passed,
+      outputPath: outputPath || null,
+      engine: metadata && metadata.engine ? metadata.engine : null,
+      createdAt: nowIso(),
+      reason: passed ? null : (generated && generated.message ? generated.message : 'golden_prompt_failed'),
+    });
+  }
+  const summary = {
+    templateId,
+    projectId: projectId || null,
+    executedAt: nowIso(),
+    ok: results.every((item) => item.ok),
+    results,
+  };
+  const key = projectId || String(templateId || 'global');
+  runtime.checks.goldenPrompts[key] = summary;
+  persistImageRuntimeState();
+  if (projectState) {
+    appendProjectLog(projectState, 'message', {
+      kind: 'image_golden_prompt_suite_completed',
+      ok: summary.ok,
+      templateId,
+      results: results.map((item) => ({ id: item.id, ok: item.ok, engine: item.engine })),
+    });
+  }
+  return summary;
+}
+
+async function buildImageReadinessScoreboard(projectId = null, modelId = null, templateId = null) {
+  const state = ensureImageRuntimeState();
+  const settings = imageGeneratorSettings();
+  const selectedModel = resolveImageModelEntry(modelId || settings.preferredModelId);
+  const comfyReady = await comfyIsHealthy();
+  const secondary = await secondaryBackendReachable();
+  const pythonCmd = resolveImagePythonCommand();
+  const pillowCheck = ensurePythonPackageAvailable(pythonCmd, 'PIL', 'pillow', false);
+  const key = projectId || String(templateId || 'global');
+  const selfTest = state.checks.selfTests[key] || null;
+  const golden = state.checks.goldenPrompts[key] || null;
+  return {
+    generatedAt: nowIso(),
+    modelReady: Boolean(selectedModel && fs.existsSync(selectedModel.path)),
+    comfyReady,
+    secondaryBackendReady: Boolean(secondary.ok),
+    secondaryBackendEndpoint: secondary.endpoint || null,
+    fallbackRendererAvailable: true,
+    resizeBackendReady: Boolean(pillowCheck.ok),
+    resizeBackend: pythonCommandDescription(pythonCmd),
+    selfTestOk: Boolean(selfTest && selfTest.ok),
+    selfTestAt: selfTest && selfTest.executedAt ? selfTest.executedAt : null,
+    goldenPromptSuiteOk: Boolean(golden && golden.ok),
+    goldenPromptSuiteAt: golden && golden.executedAt ? golden.executedAt : null,
+  };
 }
 
 function latestGameArtifactUpdatedAt(projectState) {
@@ -12665,6 +12888,9 @@ async function executeImageGeneratorConnector(options = {}) {
 
   if (operation === 'get_profile') {
     const catalog = imageModelCatalog();
+    const projectId = options.projectId || null;
+    const projectState = projectId ? (projectRuntimes.get(projectId) && projectRuntimes.get(projectId).state) : null;
+    const templateId = projectState && projectState.template ? projectState.template : input.templateId || null;
     const modelStatus = Object.values(catalog).map((entry) => {
       const runtimeModel = state.models[entry.id] || {};
       const ready = fs.existsSync(path.join(IMAGE_MODELS_ROOT, entry.fileName || `${entry.id}.safetensors`));
@@ -12678,6 +12904,8 @@ async function executeImageGeneratorConnector(options = {}) {
         updatedAt: runtimeModel.updatedAt || null,
       };
     });
+    const readiness = await buildImageReadinessScoreboard(projectId, modelId, templateId);
+    const checkKey = projectId || String(templateId || 'global');
     return {
       ok: true,
       message: 'Image generator profile retrieved.',
@@ -12708,6 +12936,11 @@ async function executeImageGeneratorConnector(options = {}) {
           fallbackRendererAvailable: true,
           processRunning: Boolean(imageEngineProcess && !imageEngineProcess.killed),
           lastStartAt: imageEngineLastStartAt,
+        },
+        readiness,
+        checks: {
+          selfTest: state.checks.selfTests[checkKey] || null,
+          goldenPromptSuite: state.checks.goldenPrompts[checkKey] || null,
         },
         models: modelStatus,
       },
@@ -12979,6 +13212,17 @@ async function executeImageGeneratorConnector(options = {}) {
       key: sample.key,
       manifestPath: injection && injection.manifestPath ? injection.manifestPath : null,
     });
+    const runtimeState = ensureImageRuntimeState();
+    const checkKey = projectId || String(templateId || 'global');
+    runtimeState.checks.selfTests[checkKey] = {
+      executedAt: nowIso(),
+      ok: true,
+      templateId,
+      modelId,
+      manifestPath: injection && injection.manifestPath ? injection.manifestPath : null,
+      sampleKey: sample.key,
+    };
+    persistImageRuntimeState();
     return {
       ok: true,
       message: 'Image pipeline self-test passed.',
@@ -12990,6 +13234,20 @@ async function executeImageGeneratorConnector(options = {}) {
         injection,
         validation,
       },
+    };
+  }
+
+  if (operation === 'golden_regression') {
+    const projectId = options.projectId || null;
+    const projectState = projectId ? (projectRuntimes.get(projectId) && projectRuntimes.get(projectId).state) : null;
+    const templateId = String(input.templateId || (projectState && projectState.template) || '').trim().toLowerCase();
+    const summary = await runGoldenPromptRegressionSuite(projectId, templateId, modelId);
+    return {
+      ok: Boolean(summary.ok),
+      message: summary.ok ? 'Golden prompt regression suite passed.' : 'Golden prompt regression suite found failures.',
+      operation,
+      actualCost: 0,
+      data: summary,
     };
   }
 
@@ -13033,7 +13291,7 @@ async function executeImageGeneratorConnector(options = {}) {
   return {
     ok: false,
     errorCode: 'VALIDATION_ERROR',
-    message: `Unsupported image_generator operation: ${operation}. Use get_profile, list_models, download_model, warmup, generate_image, generate_asset_pack, self_test, get_asset_pack_contract, or prune_storage.`,
+    message: `Unsupported image_generator operation: ${operation}. Use get_profile, list_models, download_model, warmup, generate_image, generate_asset_pack, self_test, golden_regression, get_asset_pack_contract, or prune_storage.`,
     operation,
     actualCost: 0,
     data: null,

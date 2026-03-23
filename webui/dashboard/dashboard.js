@@ -1499,8 +1499,27 @@ function renderImageRuntimePanel(profilePayload) {
     : 'unknown';
   setText('imageRuntimeModel', `Model: ${modelLabel}`);
 
+  const readiness = profile && profile.readiness && typeof profile.readiness === 'object' ? profile.readiness : null;
+  const readinessHost = document.getElementById('imageRuntimeReadiness');
+  if (readinessHost) {
+    const items = [
+      ['Model', readiness?.modelReady],
+      ['Comfy', readiness?.comfyReady],
+      ['Secondary', readiness?.secondaryBackendReady],
+      ['Resize', readiness?.resizeBackendReady],
+      ['Self-Test', readiness?.selfTestOk],
+      ['Golden', readiness?.goldenPromptSuiteOk],
+    ];
+    readinessHost.innerHTML = items.map(([label, ok]) => `
+      <div class="hf-card" style="padding:0.45rem;">
+        <div class="hf-card-label">${esc(label)}</div>
+        <div class="hf-card-value" style="font-size:0.95rem;color:${ok ? 'var(--ok,#22c55e)' : 'var(--muted)'};">${ok ? 'ready' : 'pending'}</div>
+      </div>
+    `).join('');
+  }
+
   const statusText = profile
-    ? `Worker slots: ${profile.settings?.workerSlots ?? 1} · retention: ${profile.settings?.retentionDays ?? '-'}d · quota: ${profile.settings?.quotaMbPerProject ?? '-'}MB`
+    ? `Worker slots: ${profile.settings?.workerSlots ?? 1} · retention: ${profile.settings?.retentionDays ?? '-'}d · quota: ${profile.settings?.quotaMbPerProject ?? '-'}MB${readiness?.secondaryBackendEndpoint ? ` · secondary: ${readiness.secondaryBackendEndpoint}` : ''}`
     : 'No runtime status loaded yet.';
   setText('imageRuntimeStatus', statusText);
   renderImageProgressStream();
@@ -1902,6 +1921,43 @@ const Dashboard = {
     } catch (err) {
       setText('imageRuntimeStatus', `Test generation failed: ${err.message}`);
       showToast(`Test generation failed: ${err.message}`, 'error');
+    }
+  },
+
+  async runImageSelfTest() {
+    const pid = state.activeProject?.id;
+    if (!pid) {
+      showToast('No active project selected.', 'error');
+      return;
+    }
+    setText('imageRuntimeStatus', 'Running image self-test...');
+    try {
+      const result = await runImageConnector(pid, 'self_test', { templateId: state.activeProject?.template || '' }, false);
+      if (!result?.ok) throw new Error(result?.reason || 'Image self-test failed.');
+      await this.refreshImageRuntime();
+      await this.refreshWorkspace();
+      showToast('Image self-test passed.', 'ok');
+    } catch (err) {
+      setText('imageRuntimeStatus', `Image self-test failed: ${err.message}`);
+      showToast(`Image self-test failed: ${err.message}`, 'error');
+    }
+  },
+
+  async runImageGoldenRegression() {
+    const pid = state.activeProject?.id;
+    if (!pid) {
+      showToast('No active project selected.', 'error');
+      return;
+    }
+    setText('imageRuntimeStatus', 'Running golden prompt regression suite...');
+    try {
+      const result = await runImageConnector(pid, 'golden_regression', { templateId: state.activeProject?.template || '' }, false);
+      if (!result?.ok) throw new Error(result?.reason || 'Golden prompt regression suite found failures.');
+      await this.refreshImageRuntime();
+      showToast('Golden prompt regression suite passed.', 'ok');
+    } catch (err) {
+      setText('imageRuntimeStatus', `Golden prompt regression failed: ${err.message}`);
+      showToast(`Golden prompt regression failed: ${err.message}`, 'error');
     }
   },
 
