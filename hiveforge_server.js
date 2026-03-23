@@ -2372,7 +2372,10 @@ function imageAssetPackContractForTemplate(templateId, input = {}) {
 function composeImagePrompt(input = {}, projectState = null) {
   const settings = imageGeneratorSettings();
   const templateId = String(input.templateId || (projectState && projectState.template_id) || '').trim().toLowerCase();
-  const style = sanitizePrompt(input.style || '', 80);
+  const styleProfile = projectState && projectState.imageStyleProfile && typeof projectState.imageStyleProfile === 'object'
+    ? projectState.imageStyleProfile
+    : (projectState ? ensureProjectImageStyleProfile(projectState) : null);
+  const style = sanitizePrompt(input.style || (styleProfile && styleProfile.promptStyle) || '', 120);
   const subject = sanitizePrompt(input.subject || input.prompt || '', settings.maxPromptLength);
   const intent = sanitizePrompt(input.intent || '', 120);
   const camera = sanitizePrompt(input.camera || '', 80);
@@ -3715,6 +3718,7 @@ function buildProjectWorkspaceBrief(projectState) {
   const tasks = Array.isArray(plan.tasks) ? plan.tasks : [];
   const connectors = Array.isArray(plan.requiredConnectors) ? plan.requiredConnectors : [];
   const assumptions = Array.isArray(plan.assumptions) ? plan.assumptions : [];
+  const styleProfile = ensureProjectImageStyleProfile(projectState) || null;
 
   const lines = [
     '# Project Brief',
@@ -3739,6 +3743,12 @@ function buildProjectWorkspaceBrief(projectState) {
     '',
     assumptions.length ? assumptions.map((entry) => `- ${entry}`).join('\n') : '- No explicit assumptions captured.',
     '',
+    '## Image Style Profile',
+    '',
+    styleProfile
+      ? [`- Visual direction: ${styleProfile.visualDirection}`, `- Composition: ${styleProfile.composition}`, `- Tone: ${styleProfile.tone}`, `- Palette: ${Array.isArray(styleProfile.palette) ? styleProfile.palette.join(', ') : 'n/a'}`].join('\n')
+      : '- No image style profile generated yet.',
+    '',
     '## Milestones',
     '',
     milestones.length
@@ -3754,6 +3764,61 @@ function buildProjectWorkspaceBrief(projectState) {
   ];
 
   return `${lines.join('\n')}\n`;
+}
+
+function deriveProjectImageStyleProfile(projectState) {
+  const templateId = String(projectState && projectState.template || '').toLowerCase();
+  const goal = String(projectState && projectState.goal || '').trim();
+  const name = String(projectState && projectState.name || '').trim();
+  const source = `${name} ${goal}`.toLowerCase();
+  const palette = /health|clinic|medical/.test(source)
+    ? ['#0b5fff', '#d9f3ff', '#ffffff']
+    : (/finance|bank|invoice|billing/.test(source)
+      ? ['#0f172a', '#22c55e', '#f8fafc']
+      : (/game|arcade|fantasy|pixel/.test(source)
+        ? ['#111827', '#f59e0b', '#ef4444']
+        : ['#0f172a', '#38bdf8', '#f8fafc']));
+  const visualDirection = templateId === 'game_studio'
+    ? (/pixel|retro/.test(source) ? 'pixel art' : 'stylized 2d concept art')
+    : (templateId === 'mobile_app'
+      ? 'clean mobile illustration system'
+      : 'modern product marketing illustration');
+  const composition = templateId === 'mobile_app'
+    ? 'portrait-friendly, bold focal point, clean negative space'
+    : (templateId === 'game_studio'
+      ? 'clear silhouettes, gameplay-readable framing, transparent-background friendly'
+      : 'editorial hero composition, crisp hierarchy, product-forward framing');
+  const tone = /luxury|premium|high end/.test(source)
+    ? 'premium'
+    : (/playful|kids|fun|casual/.test(source) ? 'playful' : 'confident');
+  return {
+    generatedAt: nowIso(),
+    templateId,
+    projectName: name || null,
+    visualDirection,
+    composition,
+    tone,
+    palette,
+    promptStyle: `${visualDirection}, ${composition}, ${tone} tone`,
+  };
+}
+
+function projectImageStyleProfilePath(projectState) {
+  if (!projectState || !projectState.id) return null;
+  return path.join(projectWorkspaceDir(projectState.id), 'docs', 'image_style_profile.json');
+}
+
+function ensureProjectImageStyleProfile(projectState) {
+  if (!projectState) return null;
+  if (!projectState.imageStyleProfile || typeof projectState.imageStyleProfile !== 'object') {
+    projectState.imageStyleProfile = deriveProjectImageStyleProfile(projectState);
+  }
+  const filePath = projectImageStyleProfilePath(projectState);
+  if (filePath) {
+    ensureDir(path.dirname(filePath));
+    fs.writeFileSync(filePath, `${JSON.stringify(projectState.imageStyleProfile, null, 2)}\n`, 'utf-8');
+  }
+  return projectState.imageStyleProfile;
 }
 
 function deriveGameStudioPromptProfile(projectState) {
@@ -3939,6 +4004,36 @@ function templateArtifactContract(templateId) {
 function scaffoldContentForContractPath(projectState, relativePath) {
   const title = String(projectState?.name || 'Project').trim() || 'Project';
   const lower = String(relativePath || '').toLowerCase();
+  if (lower === 'web/src/main.tsx') {
+    return `import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App';
+
+ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+`;
+  }
+  if (lower === 'web/src/app.tsx') {
+    return `import React from 'react';
+import { generatedImageAssets } from './generatedImageAssets';
+
+export default function App(): React.JSX.Element {
+  return (
+    <main style={{ fontFamily: 'ui-sans-serif, system-ui, sans-serif', minHeight: '100vh', background: '#0f172a', color: '#f8fafc', padding: '48px' }}>
+      <section style={{ maxWidth: 1120, margin: '0 auto', display: 'grid', gap: 24 }}>
+        <p style={{ textTransform: 'uppercase', letterSpacing: '0.14em', color: '#38bdf8' }}>HiveForge Generated Experience</p>
+        <h1 style={{ fontSize: 'clamp(2.5rem, 6vw, 5rem)', lineHeight: 1.05, margin: 0 }}>${title}</h1>
+        <p style={{ maxWidth: 680, color: '#cbd5e1', fontSize: '1.1rem' }}>Generated assets are wired automatically. Replace this with your finished product UI, but the template already knows where image outputs live.</p>
+        {generatedImageAssets.hero_banner ? <img src={generatedImageAssets.hero_banner} alt="Generated hero artwork" style={{ width: '100%', borderRadius: 24, display: 'block', boxShadow: '0 24px 80px rgba(0,0,0,0.35)' }} /> : null}
+      </section>
+    </main>
+  );
+}
+`;
+  }
   if (lower === 'web/package.json') {
     return `{
   "name": "${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'hiveforge-web-app'}",
@@ -3992,6 +4087,34 @@ function scaffoldContentForContractPath(projectState, relativePath) {
   }
 }\n`;
   }
+  if (lower === 'mobile/app.tsx') {
+    return `import React from 'react';
+import HomeScreen from './src/screens/HomeScreen';
+
+export default function App(): React.JSX.Element {
+  return <HomeScreen />;
+}
+`;
+  }
+  if (lower === 'mobile/src/screens/homescreen.tsx') {
+    return `import React from 'react';
+import { Image, SafeAreaView, ScrollView, Text, View } from 'react-native';
+import { generatedImageAssets } from '../generatedImageAssets';
+
+export default function HomeScreen(): React.JSX.Element {
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#07111f' }}>
+      <ScrollView contentContainerStyle={{ padding: 24, gap: 18 }}>
+        <Text style={{ color: '#38bdf8', textTransform: 'uppercase', letterSpacing: 2 }}>HiveForge Mobile Template</Text>
+        <Text style={{ color: '#f8fafc', fontSize: 34, fontWeight: '700' }}>${title}</Text>
+        <Text style={{ color: '#cbd5e1', fontSize: 16, lineHeight: 24 }}>Generated image outputs are already wired into this starter screen. Replace this with your final app flow when implementation is ready.</Text>
+        {generatedImageAssets.splash_background ? <Image source={generatedImageAssets.splash_background} style={{ width: '100%', height: 360, borderRadius: 24 }} resizeMode="cover" /> : null}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+`;
+  }
   if (lower.endsWith('.html')) {
     return `<!doctype html>\n<html lang="en">\n<head>\n  <meta charset="utf-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1" />\n  <title>${title}</title>\n  <link rel="stylesheet" href="./style.css" />\n</head>\n<body>\n  <main id="app">\n    <h1>${title}</h1>\n    <p>HIVEFORGE_SCAFFOLD_PLACEHOLDER</p>\n  </main>\n  <script src="./app.js"></script>\n</body>\n</html>\n`;
   }
@@ -4012,6 +4135,23 @@ export default function PlaceholderScreen(): React.JSX.Element {
     </SafeAreaView>
   );
 }
+
+function templateImageVariantSpecs(projectState, assetKey) {
+  const templateId = String(projectState && projectState.template || '').toLowerCase();
+  const key = String(assetKey || '').toLowerCase();
+  if (templateId === 'software_web_app' || templateId === 'software_agency') {
+    if (key === 'hero_banner') return [{ name: 'desktop', width: 1920, height: 960 }, { name: 'tablet', width: 1280, height: 640 }];
+    if (key === 'social_og_image') return [{ name: 'twitter', width: 1600, height: 900 }];
+  }
+  if (templateId === 'mobile_app') {
+    if (key === 'store_feature_graphic') return [{ name: 'play_store_backup', width: 2048, height: 1000 }];
+    if (key === 'splash_background') return [{ name: 'tablet', width: 1600, height: 2560 }];
+  }
+  if (templateId === 'game_studio') {
+    if (key === 'promo_keyart') return [{ name: 'itch_cover', width: 630, height: 500 }, { name: 'steam_capsule', width: 616, height: 353 }];
+  }
+  return [];
+}
 `;
   }
   if (lower.endsWith('.css')) {
@@ -4026,6 +4166,7 @@ function writeProjectWorkspaceArtifacts(projectState) {
   ensureDir(targetDir);
   const templateId = String(projectState.template || '').toLowerCase();
   const plan = projectState.goalPlan && typeof projectState.goalPlan === 'object' ? projectState.goalPlan : {};
+  ensureProjectImageStyleProfile(projectState);
   fs.writeFileSync(path.join(targetDir, 'project_brief.md'), buildProjectWorkspaceBrief(projectState), 'utf-8');
   fs.writeFileSync(path.join(targetDir, 'goal_plan.json'), `${JSON.stringify(plan, null, 2)}\n`, 'utf-8');
   fs.writeFileSync(path.join(targetDir, 'milestones.json'), `${JSON.stringify(Array.isArray(plan.milestones) ? plan.milestones : [], null, 2)}\n`, 'utf-8');
@@ -5729,6 +5870,55 @@ function writeTemplateImageAssetSummary(projectState, manifest) {
   fs.writeFileSync(docsPath, text, 'utf-8');
 }
 
+function createInjectedImageVariants(projectState, item, injectedAbs) {
+  const variants = [];
+  const specs = templateImageVariantSpecs(projectState, item.key);
+  specs.forEach((spec) => {
+    const ext = path.extname(injectedAbs) || '.png';
+    const variantAbs = path.join(path.dirname(injectedAbs), `${safeSlug(item.key, 'asset')}__${safeSlug(spec.name, 'variant')}${ext}`);
+    try {
+      fs.copyFileSync(injectedAbs, variantAbs);
+      variants.push({
+        name: spec.name,
+        targetWidth: spec.width,
+        targetHeight: spec.height,
+        injectedPath: path.relative(projectWorkspaceDir(projectState.id), variantAbs).replace(/\\/g, '/'),
+        deliveryMode: 'copied_master',
+      });
+    } catch {
+    }
+  });
+  return variants;
+}
+
+function ensureTemplateImageUiWiring(projectState, manifestItems) {
+  if (!projectState) return;
+  const templateId = String(projectState.template || '').toLowerCase();
+  const workspaceRoot = projectWorkspaceDir(projectState.id);
+  const filesToSeed = [];
+  if (templateId === 'software_web_app' || templateId === 'software_agency') {
+    filesToSeed.push('web/src/main.tsx', 'web/src/App.tsx');
+  }
+  if (templateId === 'mobile_app') {
+    filesToSeed.push('mobile/App.tsx', 'mobile/src/screens/HomeScreen.tsx');
+  }
+  filesToSeed.forEach((relPath) => {
+    const absPath = path.join(workspaceRoot, relPath);
+    if (shouldRewriteScaffoldFile(absPath)) {
+      ensureDir(path.dirname(absPath));
+      fs.writeFileSync(absPath, scaffoldContentForContractPath(projectState, relPath), 'utf-8');
+      return;
+    }
+    try {
+      const text = fs.readFileSync(absPath, 'utf-8');
+      if (!text.includes('generatedImageAssets') && text.includes('HIVEFORGE_SCAFFOLD_PLACEHOLDER')) {
+        fs.writeFileSync(absPath, scaffoldContentForContractPath(projectState, relPath), 'utf-8');
+      }
+    } catch {
+    }
+  });
+}
+
 function applyTemplateImageAssetInjection(projectState, generatedAssets = []) {
   if (!projectState || !projectState.id) {
     return { ok: false, reason: 'missing_project_state', gaps: ['Project state is required for image asset injection.'] };
@@ -5785,6 +5975,7 @@ function applyTemplateImageAssetInjection(projectState, generatedAssets = []) {
     const mobileRequirePath = injectedRel.startsWith('mobile/assets/')
       ? `../assets/${injectedRel.slice('mobile/assets/'.length)}`
       : null;
+    const variants = createInjectedImageVariants(projectState, expected, injectedAbs);
     items.push({
       key,
       expectedWidth: Number(expected.width || 0),
@@ -5794,6 +5985,7 @@ function applyTemplateImageAssetInjection(projectState, generatedAssets = []) {
       injectedPath: injectedRel,
       publicUrl,
       mobileRequirePath,
+      variants,
       sourceOutputPath: String(produced.outputPath),
       sourceMetadataPath: produced.metadataPath ? String(produced.metadataPath) : null,
       dimensionMatch: generatedWidth === Number(expected.width || 0) && generatedHeight === Number(expected.height || 0),
@@ -5816,6 +6008,7 @@ function applyTemplateImageAssetInjection(projectState, generatedAssets = []) {
   fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
   writeTemplateImageAssetModule(projectState, items);
   writeTemplateImageAssetSummary(projectState, manifest);
+  ensureTemplateImageUiWiring(projectState, items);
 
   const badDimensions = items.filter((item) => !item.dimensionMatch).map((item) => item.key);
   badDimensions.forEach((key) => gaps.push(`Asset ${key} has wrong dimensions vs template contract.`));
@@ -5858,6 +6051,20 @@ function validateTemplateImageAssets(projectState) {
     if (Number(item.generatedWidth || 0) !== expectedW || Number(item.generatedHeight || 0) !== expectedH) {
       gaps.push(`Asset ${key} dimensions mismatch (${item.generatedWidth}x${item.generatedHeight}, expected ${expectedW}x${expectedH}).`);
     }
+    const expectedVariants = templateImageVariantSpecs(projectState, key);
+    expectedVariants.forEach((variant) => {
+      const variantEntry = Array.isArray(item.variants)
+        ? item.variants.find((entry) => String(entry && entry.name || '') === String(variant.name || ''))
+        : null;
+      if (!variantEntry) {
+        gaps.push(`Missing image variant ${key}:${variant.name}.`);
+        return;
+      }
+      const variantAbs = path.join(projectWorkspaceDir(projectState.id), String(variantEntry.injectedPath || ''));
+      if (!fs.existsSync(variantAbs)) {
+        gaps.push(`Variant file missing for ${key}:${variant.name}.`);
+      }
+    });
   });
   return { ok: gaps.length === 0, gaps };
 }
@@ -7951,6 +8158,8 @@ function startProjectTaskExecution(projectState, task, assignee) {
       `    ${sandboxGamePath}/style.css`,
       '  Image generation is available through connector: image_generator (internal runtime).',
       '  Prefer template-aware asset packs (player/enemy sprites, tileset, UI icon set, key art) with reproducible seeds and metadata.',
+      `  Generated image style profile: ${sandboxRoot}/docs/image_style_profile.json`,
+      `  Generated assets manifest: ${sandboxRoot}/docs/generated_image_assets.json`,
       '  Keep prompts policy-safe; prohibited prompt classes are automatically blocked by moderation checks.',
       '  Existing files contain HIVEFORGE_SCAFFOLD_PLACEHOLDER; replace them with real implementation.',
       '  Do NOT output HIVEFORGE_SCAFFOLD_PLACEHOLDER anywhere in your written files.',
@@ -7967,6 +8176,8 @@ function startProjectTaskExecution(projectState, task, assignee) {
           '  Stack policy: mobile_app defaults to React Native + Expo + TypeScript.',
           '  Image generation is available through connector: image_generator (automatic runtime + local fallback).',
           '  Prefer template-aware asset packs for store graphics, onboarding illustration, splash art, and launch social cards.',
+          `  Generated image style profile: ${sandboxRoot}/docs/image_style_profile.json`,
+          `  Generated asset module: ${sandboxRoot}/mobile/src/generatedImageAssets.ts`,
           '  Include practical run commands in docs/qa_report.md (for example: npm install, npx expo start, npx expo run:android).',
           '  If Android output is required, document EAS Build steps for APK/AAB and required credentials/signing handoff.',
           '  Google Play release: if google_play connector is connected, DevOps Automator may submit the signed AAB to the Play Store internal testing track (upload_bundle, track=internal).',
@@ -7977,6 +8188,8 @@ function startProjectTaskExecution(projectState, task, assignee) {
             '  Stack policy: software_web_app defaults to React + TypeScript + Vite.',
             '  Image generation is available through connector: image_generator (automatic runtime + local fallback).',
             '  Prefer template-aware asset packs for hero/banner visuals, section illustrations, and OG/social artwork.',
+            `  Generated image style profile: ${sandboxRoot}/docs/image_style_profile.json`,
+            `  Generated asset module: ${sandboxRoot}/web/src/generatedImageAssets.ts`,
             '  Include practical run commands in docs/qa_report.md (for example: npm install, npm run dev, npm run build).',
             '  For draft preview, include a short walkthrough of key UI flows and expected states.',
           ]
@@ -12589,6 +12802,7 @@ async function executeImageGeneratorConnector(options = {}) {
     const projectId = options.projectId || null;
     const templateId = String(input.templateId || '').trim().toLowerCase();
     const assets = imageAssetPackContractForTemplate(templateId, input);
+    const projectState = projectId ? (projectRuntimes.get(projectId) && projectRuntimes.get(projectId).state) : null;
     if (!projectId) {
       return {
         ok: false,
@@ -12617,7 +12831,7 @@ async function executeImageGeneratorConnector(options = {}) {
         style: input.style || '',
         negativePrompt: input.negativePrompt || '',
         templateId,
-      });
+      }, projectState);
       const generated = await enqueueImageGenerationJob({
         projectId,
         projectName: input.projectName || null,
