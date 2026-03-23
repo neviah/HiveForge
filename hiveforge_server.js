@@ -616,7 +616,7 @@ const MUTATING_CONNECTOR_OPERATIONS = {
   substack: new Set(['publish_post', 'update_post', 'unpublish_post']),
   custom_cms: new Set(['publish_book', 'update_publication', 'unpublish_publication']),
   google_play: new Set(['upload_bundle', 'create_release', 'update_release_notes', 'promote_release']),
-  image_generator: new Set(['download_model', 'warmup', 'generate_image', 'generate_asset_pack', 'prune_storage']),
+  image_generator: new Set(['download_model', 'warmup', 'generate_image', 'generate_asset_pack', 'self_test', 'prune_storage']),
 };
 const CONNECTOR_IDEMPOTENCY_PROFILES = {
   netlify: {
@@ -819,6 +819,10 @@ const CONNECTOR_IDEMPOTENCY_PROFILES = {
       reconciliation: 'artifact_state',
     },
     generate_asset_pack: {
+      mode: 'ledger_only',
+      reconciliation: 'artifact_state',
+    },
+    self_test: {
       mode: 'ledger_only',
       reconciliation: 'artifact_state',
     },
@@ -5197,6 +5201,21 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
         estimatedCost: 0,
         actorRole: 'Backend Architect',
         requiresPermission: true,
+      },
+    });
+    addTask({
+      title: 'Run end-to-end image pipeline self-test and auto-wire assets',
+      phase: 'product_build',
+      requiredRole: 'Backend Architect',
+      description: 'Generate a smoke asset, inject it into template paths, verify manifest and dimension checks, and confirm template UI wiring can resolve generated assets.',
+      autoAction: {
+        type: 'connector',
+        connector: 'image_generator',
+        operation: 'self_test',
+        input: { templateId: imageTemplateContractId || normalizedTemplate },
+        estimatedCost: 0,
+        actorRole: 'Backend Architect',
+        requiresPermission: false,
       },
     });
     addTask({
@@ -12873,6 +12892,107 @@ async function executeImageGeneratorConnector(options = {}) {
     };
   }
 
+  if (operation === 'self_test') {
+    const projectId = options.projectId || null;
+    const projectState = projectId ? (projectRuntimes.get(projectId) && projectRuntimes.get(projectId).state) : null;
+    const templateId = String(input.templateId || (projectState && projectState.template) || '').trim().toLowerCase();
+    const contract = imageAssetPackContractForTemplate(templateId, input);
+    const sample = contract[0] || { key: 'smoke_asset', width: 768, height: 768, promptHint: 'high quality concept artwork' };
+    imageProgress(projectId, 'self_test_started', {
+      modelId,
+      templateId: templateId || null,
+      key: sample.key,
+    });
+
+    const composed = composeImagePrompt({
+      prompt: input.prompt || sample.promptHint,
+      style: input.style || '',
+      negativePrompt: input.negativePrompt || '',
+      templateId,
+    }, projectState);
+    const generated = await enqueueImageGenerationJob({
+      projectId,
+      projectName: projectState && projectState.name ? projectState.name : null,
+      modelId,
+      prompt: composed.prompt,
+      negativePrompt: composed.negativePrompt,
+      seed: input.seed,
+      deterministic: true,
+      width: sample.width,
+      height: sample.height,
+      steps: input.steps,
+      cfg: input.cfg,
+      samplerName: input.samplerName,
+      scheduler: input.scheduler,
+      timeoutMs: input.timeoutMs,
+      workflow: input.workflow,
+      templateId,
+      assetKind: sample.key,
+    });
+    if (!generated.ok) {
+      return {
+        ok: false,
+        errorCode: generated.errorCode || 'CONNECTOR_FAILURE',
+        message: generated.message || 'Image self-test failed while generating smoke asset.',
+        operation,
+        actualCost: 0,
+        data: generated.data || null,
+      };
+    }
+
+    let injection = null;
+    let validation = { ok: true, gaps: [] };
+    if (projectState) {
+      injection = applyTemplateImageAssetInjection(projectState, [{
+        key: sample.key,
+        width: sample.width,
+        height: sample.height,
+        outputPath: generated.data && generated.data.outputPath ? generated.data.outputPath : null,
+        metadataPath: generated.data && generated.data.metadataPath ? generated.data.metadataPath : null,
+      }]);
+      validation = validateTemplateImageAssets(projectState);
+      persistProjectState(projectState);
+    }
+
+    if ((injection && !injection.ok) || !validation.ok) {
+      return {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: `Image self-test failed: ${[
+          ...(injection && Array.isArray(injection.gaps) ? injection.gaps : []),
+          ...(Array.isArray(validation.gaps) ? validation.gaps : []),
+        ].join('; ') || 'asset injection/validation failed.'}`,
+        operation,
+        actualCost: 0,
+        data: {
+          templateId,
+          generated: generated.data || null,
+          injection,
+          validation,
+        },
+      };
+    }
+
+    imageProgress(projectId, 'self_test_complete', {
+      modelId,
+      templateId: templateId || null,
+      key: sample.key,
+      manifestPath: injection && injection.manifestPath ? injection.manifestPath : null,
+    });
+    return {
+      ok: true,
+      message: 'Image pipeline self-test passed.',
+      operation,
+      actualCost: 0,
+      data: {
+        templateId,
+        generated: generated.data || null,
+        injection,
+        validation,
+      },
+    };
+  }
+
   if (operation === 'generate_image') {
     const projectState = options.projectId ? (projectRuntimes.get(options.projectId) && projectRuntimes.get(options.projectId).state) : null;
     const composed = composeImagePrompt({
@@ -12913,7 +13033,7 @@ async function executeImageGeneratorConnector(options = {}) {
   return {
     ok: false,
     errorCode: 'VALIDATION_ERROR',
-    message: `Unsupported image_generator operation: ${operation}. Use get_profile, list_models, download_model, warmup, generate_image, generate_asset_pack, get_asset_pack_contract, or prune_storage.`,
+    message: `Unsupported image_generator operation: ${operation}. Use get_profile, list_models, download_model, warmup, generate_image, generate_asset_pack, self_test, get_asset_pack_contract, or prune_storage.`,
     operation,
     actualCost: 0,
     data: null,
