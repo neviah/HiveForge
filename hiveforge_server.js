@@ -27,6 +27,7 @@ const IMAGE_COMFY_REPO_URL = 'https://github.com/comfyanonymous/ComfyUI.git';
 const IMAGE_MODELS_ROOT = path.join(IMAGE_RUNTIME_ROOT, 'models');
 const IMAGE_CACHE_ROOT = path.join(IMAGE_RUNTIME_ROOT, 'cache');
 const IMAGE_RUNTIME_STATE_PATH = path.join(IMAGE_RUNTIME_ROOT, 'runtime_state.json');
+const IMAGE_SECONDARY_SDAPI_ENDPOINTS = ['http://127.0.0.1:7860', 'http://127.0.0.1:7861', 'http://127.0.0.1:7862'];
 const MAX_TASK_HISTORY = 100;
 const MAX_EVENTS_PER_TASK = 500;
 const DEFAULT_RUNTIME_SETTINGS = {
@@ -2338,6 +2339,36 @@ function gameAssetPackContract(input = {}) {
   ];
 }
 
+function webAppAssetPackContract(input = {}) {
+  const style = String(input.style || 'modern product design').trim() || 'modern product design';
+  return [
+    { key: 'hero_banner', width: 1536, height: 768, promptHint: `${style} hero banner illustration for SaaS landing page` },
+    { key: 'feature_illustration', width: 1280, height: 720, promptHint: `${style} feature section illustration with abstract UI motifs` },
+    { key: 'pricing_background', width: 1280, height: 720, promptHint: `${style} subtle pricing section background art` },
+    { key: 'blog_header', width: 1200, height: 630, promptHint: `${style} editorial header artwork for product blog` },
+    { key: 'social_og_image', width: 1200, height: 630, promptHint: `${style} social open graph preview image for app launch` },
+  ];
+}
+
+function mobileAppAssetPackContract(input = {}) {
+  const style = String(input.style || 'clean mobile product art').trim() || 'clean mobile product art';
+  return [
+    { key: 'store_feature_graphic', width: 1024, height: 500, promptHint: `${style} app store feature graphic, no tiny text` },
+    { key: 'store_promo_art', width: 1242, height: 2208, promptHint: `${style} app store promotional screenshot backdrop` },
+    { key: 'onboarding_illustration', width: 1080, height: 1920, promptHint: `${style} onboarding screen illustration for mobile app` },
+    { key: 'splash_background', width: 1080, height: 1920, promptHint: `${style} splash screen background artwork` },
+    { key: 'marketing_social_card', width: 1200, height: 630, promptHint: `${style} social marketing card for app launch` },
+  ];
+}
+
+function imageAssetPackContractForTemplate(templateId, input = {}) {
+  const normalized = String(templateId || '').trim().toLowerCase();
+  if (normalized === 'game_studio') return gameAssetPackContract(input);
+  if (normalized === 'software_web_app' || normalized === 'software_agency') return webAppAssetPackContract(input);
+  if (normalized === 'mobile_app') return mobileAppAssetPackContract(input);
+  return [];
+}
+
 function composeImagePrompt(input = {}, projectState = null) {
   const settings = imageGeneratorSettings();
   const templateId = String(input.templateId || (projectState && projectState.template_id) || '').trim().toLowerCase();
@@ -2350,7 +2381,11 @@ function composeImagePrompt(input = {}, projectState = null) {
   const base = [subject, intent, style, camera, lighting, quality].filter(Boolean).join(', ');
   const templateSuffix = templateId === 'game_studio'
     ? 'game-ready 2d asset, clean silhouette, production friendly'
-    : 'production asset, clean composition';
+    : (templateId === 'mobile_app'
+      ? 'mobile product artwork, high contrast, store-ready composition'
+      : (templateId === 'software_web_app' || templateId === 'software_agency'
+        ? 'web product marketing artwork, clean layout, modern visual hierarchy'
+        : 'production asset, clean composition'));
   const prompt = sanitizePrompt(`${base}${base ? ', ' : ''}${templateSuffix}`, settings.maxPromptLength);
   const negativePrompt = sanitizePrompt(
     input.negativePrompt || 'blurry, low quality, distorted anatomy, watermark, text artifacts, jpeg artifacts, duplicate limbs',
@@ -3183,6 +3218,116 @@ function renderFallbackImageResult(job, projectId, reason, modelId = null) {
   };
 }
 
+function renderBinaryImageResult(job, projectId, buffer, extension, engineName, extraMetadata = {}, modelId = null) {
+  const { dir, base, assetKind } = buildImageOutputBase(job, projectId);
+  const ext = String(extension || 'png').trim().toLowerCase() || 'png';
+  const outputPath = path.join(dir, `${base}.${ext}`);
+  const metadataPath = path.join(dir, `${base}.json`);
+  fs.writeFileSync(outputPath, buffer);
+  const metadata = {
+    jobId: job.id,
+    modelId: modelId || job.modelId || null,
+    prompt: job.prompt,
+    negativePrompt: job.negativePrompt,
+    seed: job.seed,
+    deterministic: job.deterministic,
+    width: job.width,
+    height: job.height,
+    templateId: job.templateId || null,
+    assetKind,
+    createdAt: nowIso(),
+    engine: engineName,
+    file: path.relative(projectDir(projectId || 'global'), outputPath).replace(/\\/g, '/'),
+    ...extraMetadata,
+  };
+  fs.writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf-8');
+  const lifecycle = applyImageStorageLifecycle(projectId || 'global');
+  return {
+    ok: true,
+    message: 'Image generated successfully.',
+    data: {
+      outputPath,
+      metadataPath,
+      metadata,
+      lifecycle,
+    },
+  };
+}
+
+function decodeBase64ImageBytes(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const normalized = text.startsWith('data:')
+    ? text.slice(text.indexOf(',') + 1)
+    : text;
+  try {
+    const buf = Buffer.from(normalized, 'base64');
+    return buf && buf.length ? buf : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+async function generateImageViaSecondaryLocalBackend(job, projectId = null) {
+  const seed = Number.isFinite(Number(job.seed)) ? Number(job.seed) : -1;
+  for (const endpoint of IMAGE_SECONDARY_SDAPI_ENDPOINTS) {
+    try {
+      const payload = {
+        prompt: job.prompt,
+        negative_prompt: job.negativePrompt || '',
+        width: clampInt(job.width, 768, 256, 2048),
+        height: clampInt(job.height, 768, 256, 2048),
+        steps: clampInt(job.steps, 20, 4, 60),
+        cfg_scale: Number.isFinite(Number(job.cfg)) ? Number(job.cfg) : 7,
+        sampler_name: String(job.samplerName || 'Euler a').trim() || 'Euler a',
+        seed,
+      };
+      const response = await fetchWithTimeout(`${endpoint}/sdapi/v1/txt2img`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }, clampInt(job.timeoutMs, 90 * 1000, 20 * 1000, 10 * 60 * 1000));
+      if (!response.ok) continue;
+      const data = await response.json().catch(() => null);
+      const encoded = data && Array.isArray(data.images) && data.images.length ? data.images[0] : null;
+      const buffer = decodeBase64ImageBytes(encoded);
+      if (!buffer) continue;
+      imageProgress(projectId, 'generation_secondary_backend_complete', {
+        jobId: job.id,
+        endpoint,
+      });
+      return {
+        ok: true,
+        buffer,
+        extension: 'png',
+        engine: 'local_sdapi',
+        endpoint,
+      };
+    } catch (err) {
+    }
+  }
+  return {
+    ok: false,
+    error: 'No secondary local image backend was reachable.',
+  };
+}
+
+async function renderWithSecondaryBackendOrFallback(job, projectId, reason, modelId = null) {
+  const secondary = await generateImageViaSecondaryLocalBackend(job, projectId);
+  if (secondary.ok) {
+    return renderBinaryImageResult(
+      job,
+      projectId,
+      secondary.buffer,
+      secondary.extension,
+      secondary.engine,
+      { secondaryEndpoint: secondary.endpoint, degradedReason: reason },
+      modelId
+    );
+  }
+  return renderFallbackImageResult(job, projectId, reason, modelId);
+}
+
 function firstComfyImageRef(historyEntry) {
   const outputs = historyEntry && historyEntry.outputs && typeof historyEntry.outputs === 'object'
     ? historyEntry.outputs
@@ -3234,7 +3379,7 @@ async function runImageGenerationJob(job) {
   const projectId = String(job.projectId || '').trim() || null;
   const modelResult = await ensureImageModelReady(job.modelId, projectId);
   if (!modelResult.ok) {
-    return renderFallbackImageResult(job, projectId, `model_unavailable:${modelResult.message || modelResult.errorCode || 'unknown'}`, null);
+    return renderWithSecondaryBackendOrFallback(job, projectId, `model_unavailable:${modelResult.message || modelResult.errorCode || 'unknown'}`, null);
   }
 
   const policy = moderateImagePrompt(job.prompt, settings.blockedTerms);
@@ -3256,7 +3401,7 @@ async function runImageGenerationJob(job) {
 
   const engineReady = await ensureComfyRuntimeReady(projectId);
   if (!engineReady.ok) {
-    return renderFallbackImageResult(job, projectId, `engine_unavailable:${engineReady.message || engineReady.errorCode || 'unknown'}`, modelResult.model.id);
+    return renderWithSecondaryBackendOrFallback(job, projectId, `engine_unavailable:${engineReady.message || engineReady.errorCode || 'unknown'}`, modelResult.model.id);
   }
 
   const modelSync = syncModelIntoComfyPaths(modelResult.model.path, modelResult.model.fileName || path.basename(modelResult.model.path));
@@ -3276,7 +3421,7 @@ async function runImageGenerationJob(job) {
     filenamePrefix: base,
   });
   if (!workflow) {
-    return renderFallbackImageResult(job, projectId, 'workflow_missing', modelResult.model.id);
+    return renderWithSecondaryBackendOrFallback(job, projectId, 'workflow_missing', modelResult.model.id);
   }
 
   const submit = await comfyApiRequest('/prompt', {
@@ -3287,11 +3432,11 @@ async function runImageGenerationJob(job) {
     },
   }, 30000);
   if (!submit.ok) {
-    return renderFallbackImageResult(job, projectId, `submit_failed:${submit.error || 'unknown'}`, modelResult.model.id);
+    return renderWithSecondaryBackendOrFallback(job, projectId, `submit_failed:${submit.error || 'unknown'}`, modelResult.model.id);
   }
   const promptId = String(submit.data && submit.data.prompt_id ? submit.data.prompt_id : '').trim();
   if (!promptId) {
-    return renderFallbackImageResult(job, projectId, 'missing_prompt_id', modelResult.model.id);
+    return renderWithSecondaryBackendOrFallback(job, projectId, 'missing_prompt_id', modelResult.model.id);
   }
 
   imageProgress(projectId, 'generation_queued', {
@@ -3324,17 +3469,17 @@ async function runImageGenerationJob(job) {
   }
 
   if (!historyEntry || !historyEntry.outputs || !Object.keys(historyEntry.outputs).length) {
-    return renderFallbackImageResult(job, projectId, `timeout:${promptId}`, modelResult.model.id);
+    return renderWithSecondaryBackendOrFallback(job, projectId, `timeout:${promptId}`, modelResult.model.id);
   }
 
   const imageRef = firstComfyImageRef(historyEntry);
   if (!imageRef || !imageRef.filename) {
-    return renderFallbackImageResult(job, projectId, `missing_output:${promptId}`, modelResult.model.id);
+    return renderWithSecondaryBackendOrFallback(job, projectId, `missing_output:${promptId}`, modelResult.model.id);
   }
 
   const fetched = await fetchComfyImageBinary(imageRef);
   if (!fetched.ok) {
-    return renderFallbackImageResult(job, projectId, `fetch_failed:${fetched.error || promptId}`, modelResult.model.id);
+    return renderWithSecondaryBackendOrFallback(job, projectId, `fetch_failed:${fetched.error || promptId}`, modelResult.model.id);
   }
 
   const extension = fetched.contentType.includes('jpeg') ? 'jpg' : fetched.contentType.includes('webp') ? 'webp' : 'png';
@@ -4681,11 +4826,19 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   const tags = normalizeGoalKeywordTags(goalText);
   const clarificationQuestions = goalClarificationQuestions(templateId, goalText, tags);
   const planConfig = planningSettings();
+  const imageTemplateContractId = isGameTemplate
+    ? 'game_studio'
+    : (isMobileTemplate
+      ? 'mobile_app'
+      : (isSoftwareWebTemplate ? 'software_web_app' : ''));
+  const imageTemplateLabel = imageTemplateContractId === 'game_studio'
+    ? 'game'
+    : (imageTemplateContractId === 'mobile_app' ? 'mobile app' : (imageTemplateContractId === 'software_web_app' ? 'web app' : 'project'));
   const needsManagedDatabase = Boolean(tags.webApp || tags.social || tags.marketplace || tags.property || tags.healthcare || tags.ecommerce || tags.fintech);
   const connectorSet = new Set();
   if (isSoftwareWebTemplate || ((tags.deployment || tags.webApp) && !isMobileTemplate)) connectorSet.add('netlify');
   if (isMobileTemplate) connectorSet.add('google_play');
-  if (isGameTemplate || tags.imageGeneration) connectorSet.add('image_generator');
+  if (isGameTemplate || isSoftwareTemplate || tags.imageGeneration) connectorSet.add('image_generator');
   if (tags.payments) connectorSet.add('stripe');
   if (tags.marketing) connectorSet.add('google_ads');
   if (needsManagedDatabase && planConfig.preferredDatabaseService === 'supabase') connectorSet.add('supabase');
@@ -4855,7 +5008,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
     });
   }
 
-  if (isGameTemplate || tags.imageGeneration) {
+  if (isGameTemplate || isSoftwareTemplate || tags.imageGeneration) {
     addTask({
       title: 'Configure image generation runtime profile and 8GB VRAM-safe defaults',
       phase: 'strategy',
@@ -4872,30 +5025,34 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       },
     });
     addTask({
-      title: 'Define template-aware asset contract for generated game art',
+      title: `Define template-aware asset contract for generated ${imageTemplateLabel} art`,
       phase: 'strategy',
-      requiredRole: 'Game Designer',
-      description: 'Lock required asset pack outputs (sprites, tiles, UI icons, key art) with dimensions, naming, and acceptance criteria for downstream implementation tasks.',
+      requiredRole: isGameTemplate ? 'Game Designer' : 'Backend Architect',
+      description: 'Lock required asset pack outputs with dimensions, naming, and acceptance criteria for downstream implementation tasks.',
       autoAction: {
         type: 'connector',
         connector: 'image_generator',
         operation: 'get_asset_pack_contract',
-        input: { templateId: 'game_studio' },
+        input: { templateId: imageTemplateContractId || normalizedTemplate },
         estimatedCost: 0,
         actorRole: 'Backend Architect',
         requiresPermission: false,
       },
     });
     addTask({
-      title: 'Generate baseline visual asset pack for prototype gameplay loop',
+      title: isGameTemplate
+        ? 'Generate baseline visual asset pack for prototype gameplay loop'
+        : `Generate baseline visual asset pack for ${imageTemplateLabel} MVP`,
       phase: 'product_build',
-      requiredRole: 'Technical Artist',
-      description: 'Generate initial player/enemy sprites, tileset, icon set, and key art using template-aware prompts. Persist metadata for reproducibility.',
+      requiredRole: isGameTemplate ? 'Technical Artist' : 'Backend Architect',
+      description: isGameTemplate
+        ? 'Generate initial player/enemy sprites, tileset, icon set, and key art using template-aware prompts. Persist metadata for reproducibility.'
+        : 'Generate initial marketing and interface artwork using template-aware prompts. Persist metadata for reproducibility.',
       autoAction: {
         type: 'connector',
         connector: 'image_generator',
         operation: 'generate_asset_pack',
-        input: { templateId: 'game_studio' },
+        input: { templateId: imageTemplateContractId || normalizedTemplate },
         estimatedCost: 0,
         actorRole: 'Backend Architect',
         requiresPermission: true,
@@ -7541,6 +7698,8 @@ function startProjectTaskExecution(projectState, task, assignee) {
       ...(templateId === 'mobile_app'
         ? [
           '  Stack policy: mobile_app defaults to React Native + Expo + TypeScript.',
+          '  Image generation is available through connector: image_generator (automatic runtime + local fallback).',
+          '  Prefer template-aware asset packs for store graphics, onboarding illustration, splash art, and launch social cards.',
           '  Include practical run commands in docs/qa_report.md (for example: npm install, npx expo start, npx expo run:android).',
           '  If Android output is required, document EAS Build steps for APK/AAB and required credentials/signing handoff.',
           '  Google Play release: if google_play connector is connected, DevOps Automator may submit the signed AAB to the Play Store internal testing track (upload_bundle, track=internal).',
@@ -7549,6 +7708,8 @@ function startProjectTaskExecution(projectState, task, assignee) {
         : templateId === 'software_web_app' || templateId === 'software_agency'
           ? [
             '  Stack policy: software_web_app defaults to React + TypeScript + Vite.',
+            '  Image generation is available through connector: image_generator (automatic runtime + local fallback).',
+            '  Prefer template-aware asset packs for hero/banner visuals, section illustrations, and OG/social artwork.',
             '  Include practical run commands in docs/qa_report.md (for example: npm install, npm run dev, npm run build).',
             '  For draft preview, include a short walkthrough of key UI flows and expected states.',
           ]
@@ -12144,7 +12305,7 @@ async function executeImageGeneratorConnector(options = {}) {
 
   if (operation === 'get_asset_pack_contract') {
     const templateId = String(input.templateId || '').trim().toLowerCase();
-    const assets = templateId === 'game_studio' ? gameAssetPackContract(input) : [];
+    const assets = imageAssetPackContractForTemplate(templateId, input);
     return {
       ok: true,
       message: `Resolved ${assets.length} asset contract item(s).`,
@@ -12160,7 +12321,7 @@ async function executeImageGeneratorConnector(options = {}) {
   if (operation === 'generate_asset_pack') {
     const projectId = options.projectId || null;
     const templateId = String(input.templateId || '').trim().toLowerCase();
-    const assets = templateId === 'game_studio' ? gameAssetPackContract(input) : [];
+    const assets = imageAssetPackContractForTemplate(templateId, input);
     if (!projectId) {
       return {
         ok: false,
