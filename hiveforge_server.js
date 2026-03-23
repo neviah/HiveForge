@@ -26,6 +26,7 @@ const IMAGE_COMFY_VENV_ROOT = path.join(IMAGE_RUNTIME_ROOT, 'venv');
 const IMAGE_COMFY_REPO_URL = 'https://github.com/comfyanonymous/ComfyUI.git';
 const IMAGE_MODELS_ROOT = path.join(IMAGE_RUNTIME_ROOT, 'models');
 const IMAGE_CACHE_ROOT = path.join(IMAGE_RUNTIME_ROOT, 'cache');
+const IMAGE_GOLDEN_BASELINES_ROOT = path.join(IMAGE_CACHE_ROOT, 'golden_baselines');
 const IMAGE_RUNTIME_STATE_PATH = path.join(IMAGE_RUNTIME_ROOT, 'runtime_state.json');
 const IMAGE_SECONDARY_SDAPI_ENDPOINTS = ['http://127.0.0.1:7860', 'http://127.0.0.1:7861', 'http://127.0.0.1:7862'];
 const MAX_TASK_HISTORY = 100;
@@ -2259,6 +2260,7 @@ function ensureImageRuntimeState() {
   ensureDir(IMAGE_RUNTIME_ROOT);
   ensureDir(IMAGE_MODELS_ROOT);
   ensureDir(IMAGE_CACHE_ROOT);
+  ensureDir(IMAGE_GOLDEN_BASELINES_ROOT);
   if (!imageRuntimeState) {
     const fallback = {
       initializedAt: nowIso(),
@@ -2732,6 +2734,263 @@ function resizeImageWithPython(inputPath, outputPath, width, height) {
     cwd: __dirname,
   });
   return resized.ok ? { ok: true, backend: pythonCommandDescription(commandSpec) } : resized;
+}
+
+function sha256File(filePath) {
+  try {
+    return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+function normalizeSvgText(raw) {
+  return String(raw || '').replace(/\r\n/g, '\n').trim();
+}
+
+function goldenRegressionScopeKey(projectId, templateId) {
+  return safeSlug(projectId || String(templateId || 'global'), 'global');
+}
+
+function goldenBaselineDirectory(projectId, templateId, modelId) {
+  return path.join(
+    IMAGE_GOLDEN_BASELINES_ROOT,
+    goldenRegressionScopeKey(projectId, templateId),
+    safeSlug(modelId || 'default', 'model'),
+  );
+}
+
+function goldenBaselineMetaPath(projectId, templateId, modelId, testId) {
+  return path.join(goldenBaselineDirectory(projectId, templateId, modelId), `${safeSlug(testId, 'golden')}.baseline.json`);
+}
+
+function resolveGoldenBaseline(projectId, templateId, modelId, test, outputPath, metadata = null) {
+  const dir = goldenBaselineDirectory(projectId, templateId, modelId);
+  ensureDir(dir);
+  const metaPath = goldenBaselineMetaPath(projectId, templateId, modelId, test && test.id ? test.id : 'golden');
+  const slug = safeSlug(test && test.id ? test.id : 'golden', 'golden');
+  const currentExt = path.extname(String(outputPath || '')).toLowerCase() || '.png';
+  const currentEngine = metadata && metadata.engine ? String(metadata.engine) : null;
+  const existingMeta = safeJsonRead(metaPath, null);
+  const existingBaselinePath = existingMeta && existingMeta.baselinePath && fs.existsSync(existingMeta.baselinePath)
+    ? String(existingMeta.baselinePath)
+    : null;
+
+  if (!existingBaselinePath) {
+    const seededPath = path.join(dir, `${slug}${currentExt}`);
+    try {
+      fs.copyFileSync(outputPath, seededPath);
+      const baselineMeta = {
+        testId: test && test.id ? test.id : slug,
+        templateId: templateId || null,
+        projectId: projectId || null,
+        modelId: modelId || null,
+        extension: currentExt,
+        baselinePath: seededPath,
+        engine: currentEngine,
+        seededAt: nowIso(),
+        sourceOutputPath: outputPath,
+      };
+      fs.writeFileSync(metaPath, `${JSON.stringify(baselineMeta, null, 2)}\n`, 'utf-8');
+      return { ok: true, seeded: true, upgraded: false, baselinePath: seededPath, metaPath, meta: baselineMeta };
+    } catch (err) {
+      return { ok: false, error: redactSensitive(err && err.message ? err.message : 'Failed to seed golden baseline.') };
+    }
+  }
+
+  const existingExt = path.extname(existingBaselinePath).toLowerCase() || '.png';
+  if (existingExt === '.svg' && currentExt !== '.svg') {
+    const upgradedPath = path.join(dir, `${slug}${currentExt}`);
+    try {
+      fs.copyFileSync(outputPath, upgradedPath);
+      if (existingBaselinePath !== upgradedPath && fs.existsSync(existingBaselinePath)) {
+        try {
+          fs.unlinkSync(existingBaselinePath);
+        } catch {
+        }
+      }
+      const upgradedMeta = {
+        ...(existingMeta && typeof existingMeta === 'object' ? existingMeta : {}),
+        testId: test && test.id ? test.id : slug,
+        templateId: templateId || null,
+        projectId: projectId || null,
+        modelId: modelId || null,
+        extension: currentExt,
+        baselinePath: upgradedPath,
+        engine: currentEngine,
+        upgradedAt: nowIso(),
+        upgradedFromExtension: existingExt,
+        sourceOutputPath: outputPath,
+      };
+      fs.writeFileSync(metaPath, `${JSON.stringify(upgradedMeta, null, 2)}\n`, 'utf-8');
+      return { ok: true, seeded: false, upgraded: true, baselinePath: upgradedPath, metaPath, meta: upgradedMeta };
+    } catch (err) {
+      return { ok: false, error: redactSensitive(err && err.message ? err.message : 'Failed to upgrade golden baseline.') };
+    }
+  }
+
+  return {
+    ok: true,
+    seeded: false,
+    upgraded: false,
+    baselinePath: existingBaselinePath,
+    metaPath,
+    meta: existingMeta && typeof existingMeta === 'object' ? existingMeta : null,
+  };
+}
+
+function compareGoldenArtifacts(outputPath, baselinePath) {
+  if (!outputPath || !baselinePath || !fs.existsSync(outputPath) || !fs.existsSync(baselinePath)) {
+    return {
+      ok: false,
+      error: 'Golden comparison requires both output and baseline files.',
+    };
+  }
+
+  const outputExt = path.extname(String(outputPath)).toLowerCase() || '.png';
+  const baselineExt = path.extname(String(baselinePath)).toLowerCase() || '.png';
+  const outputSha256 = sha256File(outputPath);
+  const baselineSha256 = sha256File(baselinePath);
+
+  if (outputExt === '.svg' || baselineExt === '.svg') {
+    if (outputExt !== '.svg' || baselineExt !== '.svg') {
+      return {
+        ok: true,
+        passed: false,
+        mode: 'mixed_svg_raster',
+        backend: 'builtin_sha256',
+        baselineSha256,
+        outputSha256,
+        hashDistance: null,
+        meanPixelDelta: 1,
+        rmsDelta: 1,
+        thresholds: null,
+        reason: outputExt === '.svg' ? 'degraded_to_svg_fallback' : 'legacy_svg_baseline',
+      };
+    }
+    try {
+      const baselineText = normalizeSvgText(fs.readFileSync(baselinePath, 'utf-8'));
+      const outputText = normalizeSvgText(fs.readFileSync(outputPath, 'utf-8'));
+      const passed = baselineText === outputText;
+      return {
+        ok: true,
+        passed,
+        mode: 'svg_text',
+        backend: 'builtin_sha256',
+        baselineSha256,
+        outputSha256,
+        hashDistance: passed ? 0 : 64,
+        meanPixelDelta: passed ? 0 : 1,
+        rmsDelta: passed ? 0 : 1,
+        thresholds: {
+          hashDistance: 0,
+          meanPixelDelta: 0,
+          rmsDelta: 0,
+        },
+        reason: passed ? null : 'svg_output_mismatch',
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        error: redactSensitive(err && err.message ? err.message : 'SVG golden comparison failed.'),
+      };
+    }
+  }
+
+  const commandSpec = resolveImagePythonCommand();
+  const pillow = ensurePythonPackageAvailable(commandSpec, 'PIL', 'pillow', true);
+  if (!pillow.ok) {
+    return {
+      ok: false,
+      error: pillow.error || 'Pillow is unavailable for perceptual comparison.',
+    };
+  }
+
+  const script = [
+    'from PIL import Image, ImageOps, ImageChops, ImageStat',
+    'import json',
+    'import sys',
+    '',
+    'base = Image.open(sys.argv[1]).convert("RGB")',
+    'cand = Image.open(sys.argv[2]).convert("RGB")',
+    'target_size = (128, 128)',
+    'base_fit = ImageOps.fit(base, target_size, method=Image.LANCZOS, centering=(0.5, 0.5))',
+    'cand_fit = ImageOps.fit(cand, target_size, method=Image.LANCZOS, centering=(0.5, 0.5))',
+    '',
+    'def dhash(img):',
+    '    gray = img.convert("L").resize((9, 8), Image.LANCZOS)',
+    '    pixels = list(gray.getdata())',
+    '    bits = []',
+    '    for y in range(8):',
+    '        row = pixels[y * 9:(y + 1) * 9]',
+    '        for x in range(8):',
+    '            bits.append("1" if row[x] > row[x + 1] else "0")',
+    '    bit_string = "".join(bits)',
+    '    return format(int(bit_string, 2), "016x")',
+    '',
+    'def hamming(left, right):',
+    '    value = int(left, 16) ^ int(right, 16)',
+    '    return value.bit_count() if hasattr(value, "bit_count") else bin(value).count("1")',
+    '',
+    'diff = ImageChops.difference(base_fit, cand_fit)',
+    'stat = ImageStat.Stat(diff)',
+    'mean_delta = sum(stat.mean) / (len(stat.mean) * 255.0)',
+    'rms_delta = sum(stat.rms) / (len(stat.rms) * 255.0)',
+    'base_hash = dhash(base_fit)',
+    'cand_hash = dhash(cand_fit)',
+    'hash_distance = hamming(base_hash, cand_hash)',
+    'thresholds = {"hashDistance": 10, "meanPixelDelta": 0.14, "rmsDelta": 0.18}',
+    'passed = hash_distance <= thresholds["hashDistance"] and mean_delta <= thresholds["meanPixelDelta"] and rms_delta <= thresholds["rmsDelta"]',
+    'print(json.dumps({',
+    '    "passed": passed,',
+    '    "baselineHash": base_hash,',
+    '    "outputHash": cand_hash,',
+    '    "hashDistance": hash_distance,',
+    '    "meanPixelDelta": round(mean_delta, 6),',
+    '    "rmsDelta": round(rms_delta, 6),',
+    '    "thresholds": thresholds',
+    '}))',
+  ].join('\n');
+  const compared = spawnSyncUtf8(commandSpec.command, [...(commandSpec.args || []), '-c', script, baselinePath, outputPath], {
+    cwd: __dirname,
+    env: {
+      ...process.env,
+      PYTHONIOENCODING: 'utf-8',
+      PYTHONUTF8: '1',
+    },
+    stdio: 'pipe',
+  });
+  const stderr = redactSensitive(String((compared && compared.stderr) || '').trim());
+  const stdout = String((compared && compared.stdout) || '').trim();
+  if (compared.error || Number(compared.status) !== 0) {
+    return {
+      ok: false,
+      error: stderr || redactSensitive(compared.error && compared.error.message ? compared.error.message : `Exit code ${compared.status}`),
+    };
+  }
+  try {
+    const parsed = JSON.parse(stdout || '{}');
+    return {
+      ok: true,
+      passed: Boolean(parsed.passed),
+      mode: 'pillow_perceptual_hash',
+      backend: pythonCommandDescription(commandSpec),
+      baselineSha256,
+      outputSha256,
+      baselineHash: parsed.baselineHash || null,
+      outputHash: parsed.outputHash || null,
+      hashDistance: Number.isFinite(Number(parsed.hashDistance)) ? Number(parsed.hashDistance) : null,
+      meanPixelDelta: Number.isFinite(Number(parsed.meanPixelDelta)) ? Number(parsed.meanPixelDelta) : null,
+      rmsDelta: Number.isFinite(Number(parsed.rmsDelta)) ? Number(parsed.rmsDelta) : null,
+      thresholds: parsed.thresholds && typeof parsed.thresholds === 'object' ? parsed.thresholds : null,
+      reason: parsed.passed ? null : 'perceptual_drift_detected',
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: redactSensitive(err && err.message ? err.message : 'Unable to parse perceptual comparison output.'),
+    };
+  }
 }
 
 async function secondaryBackendReachable() {
@@ -6249,18 +6508,59 @@ async function runGoldenPromptRegressionSuite(projectId, templateId, modelId) {
     });
     const outputPath = generated && generated.data ? generated.data.outputPath : null;
     const metadata = generated && generated.data ? generated.data.metadata : null;
-    const passed = Boolean(generated && generated.ok && outputPath && fs.existsSync(outputPath)
+    const structuralPass = Boolean(generated && generated.ok && outputPath && fs.existsSync(outputPath)
       && metadata && Number(metadata.width) === Number(test.width) && Number(metadata.height) === Number(test.height));
+    let baseline = null;
+    let visual = null;
+    if (structuralPass && outputPath) {
+      baseline = resolveGoldenBaseline(projectId, templateId, modelId, test, outputPath, metadata);
+      if (baseline.ok && !baseline.seeded && !baseline.upgraded) {
+        visual = compareGoldenArtifacts(outputPath, baseline.baselinePath);
+      } else if (baseline.ok) {
+        visual = {
+          ok: true,
+          passed: true,
+          mode: baseline.upgraded ? 'baseline_upgraded' : 'baseline_seeded',
+          backend: 'filesystem_copy',
+          reason: baseline.upgraded ? 'baseline_upgraded_from_svg_fallback' : 'baseline_seeded_on_first_run',
+          hashDistance: 0,
+          meanPixelDelta: 0,
+          rmsDelta: 0,
+          thresholds: null,
+        };
+      } else {
+        visual = {
+          ok: false,
+          passed: false,
+          mode: 'baseline_error',
+          backend: null,
+          reason: baseline.error || 'baseline_resolution_failed',
+          hashDistance: null,
+          meanPixelDelta: null,
+          rmsDelta: null,
+          thresholds: null,
+        };
+      }
+    }
+    const passed = Boolean(structuralPass && visual && visual.ok && visual.passed);
     results.push({
       id: test.id,
       prompt: test.prompt,
       width: test.width,
       height: test.height,
       ok: passed,
+      structuralOk: structuralPass,
       outputPath: outputPath || null,
+      baselinePath: baseline && baseline.baselinePath ? baseline.baselinePath : null,
+      baselineSeeded: Boolean(baseline && baseline.seeded),
+      baselineUpgraded: Boolean(baseline && baseline.upgraded),
       engine: metadata && metadata.engine ? metadata.engine : null,
+      visual,
       createdAt: nowIso(),
-      reason: passed ? null : (generated && generated.message ? generated.message : 'golden_prompt_failed'),
+      reason: passed
+        ? null
+        : (visual && visual.reason)
+          || (generated && generated.message ? generated.message : 'golden_prompt_failed'),
     });
   }
   const summary = {
@@ -6268,6 +6568,10 @@ async function runGoldenPromptRegressionSuite(projectId, templateId, modelId) {
     projectId: projectId || null,
     executedAt: nowIso(),
     ok: results.every((item) => item.ok),
+    visualOk: results.every((item) => item.structuralOk && item.visual && item.visual.ok && item.visual.passed),
+    baselineSeededCount: results.filter((item) => item.baselineSeeded).length,
+    baselineUpgradedCount: results.filter((item) => item.baselineUpgraded).length,
+    visualFailureCount: results.filter((item) => item.structuralOk && item.visual && item.visual.ok && !item.visual.passed).length,
     results,
   };
   const key = projectId || String(templateId || 'global');
@@ -6278,7 +6582,7 @@ async function runGoldenPromptRegressionSuite(projectId, templateId, modelId) {
       kind: 'image_golden_prompt_suite_completed',
       ok: summary.ok,
       templateId,
-      results: results.map((item) => ({ id: item.id, ok: item.ok, engine: item.engine })),
+      results: results.map((item) => ({ id: item.id, ok: item.ok, engine: item.engine, visualOk: Boolean(item.visual && item.visual.passed) })),
     });
   }
   return summary;
@@ -6308,6 +6612,8 @@ async function buildImageReadinessScoreboard(projectId = null, modelId = null, t
     selfTestAt: selfTest && selfTest.executedAt ? selfTest.executedAt : null,
     goldenPromptSuiteOk: Boolean(golden && golden.ok),
     goldenPromptSuiteAt: golden && golden.executedAt ? golden.executedAt : null,
+    goldenVisualOk: Boolean(golden && golden.visualOk),
+    goldenVisualAt: golden && golden.executedAt ? golden.executedAt : null,
   };
 }
 

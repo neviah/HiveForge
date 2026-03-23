@@ -1509,6 +1509,7 @@ function renderImageRuntimePanel(profilePayload) {
       ['Resize', readiness?.resizeBackendReady],
       ['Self-Test', readiness?.selfTestOk],
       ['Golden', readiness?.goldenPromptSuiteOk],
+      ['Visual', readiness?.goldenVisualOk],
     ];
     readinessHost.innerHTML = items.map(([label, ok]) => `
       <div class="hf-card" style="padding:0.45rem;">
@@ -1518,8 +1519,17 @@ function renderImageRuntimePanel(profilePayload) {
     `).join('');
   }
 
+  const goldenSuite = profile && profile.checks && profile.checks.goldenPromptSuite && typeof profile.checks.goldenPromptSuite === 'object'
+    ? profile.checks.goldenPromptSuite
+    : null;
+  const goldenDetails = [];
+  if (goldenSuite?.baselineSeededCount) goldenDetails.push(`seeded: ${goldenSuite.baselineSeededCount}`);
+  if (goldenSuite?.baselineUpgradedCount) goldenDetails.push(`upgraded: ${goldenSuite.baselineUpgradedCount}`);
+  if (Number.isFinite(Number(goldenSuite?.visualFailureCount)) && Number(goldenSuite.visualFailureCount) > 0) {
+    goldenDetails.push(`visual drift: ${goldenSuite.visualFailureCount}`);
+  }
   const statusText = profile
-    ? `Worker slots: ${profile.settings?.workerSlots ?? 1} · retention: ${profile.settings?.retentionDays ?? '-'}d · quota: ${profile.settings?.quotaMbPerProject ?? '-'}MB${readiness?.secondaryBackendEndpoint ? ` · secondary: ${readiness.secondaryBackendEndpoint}` : ''}`
+    ? `Worker slots: ${profile.settings?.workerSlots ?? 1} · retention: ${profile.settings?.retentionDays ?? '-'}d · quota: ${profile.settings?.quotaMbPerProject ?? '-'}MB${readiness?.secondaryBackendEndpoint ? ` · secondary: ${readiness.secondaryBackendEndpoint}` : ''}${goldenDetails.length ? ` · ${goldenDetails.join(' · ')}` : ''}`
     : 'No runtime status loaded yet.';
   setText('imageRuntimeStatus', statusText);
   renderImageProgressStream();
