@@ -5662,6 +5662,206 @@ function hasTemplateDeliveryArtifacts(projectState) {
   });
 }
 
+function templateImageContractItems(projectState) {
+  if (!projectState) return [];
+  const templateId = String(projectState.template || '').toLowerCase();
+  return imageAssetPackContractForTemplate(templateId, {});
+}
+
+function templateImageInjectionRoot(projectState) {
+  if (!projectState) return null;
+  const workspaceRoot = projectWorkspaceDir(projectState.id);
+  const templateId = String(projectState.template || '').toLowerCase();
+  if (templateId === 'game_studio') return path.join(workspaceRoot, 'game', 'assets', 'generated');
+  if (templateId === 'software_web_app' || templateId === 'software_agency') return path.join(workspaceRoot, 'web', 'public', 'assets', 'generated');
+  if (templateId === 'mobile_app') return path.join(workspaceRoot, 'mobile', 'assets', 'generated');
+  return null;
+}
+
+function templateImageManifestPath(projectState) {
+  if (!projectState) return null;
+  return path.join(projectWorkspaceDir(projectState.id), 'docs', 'generated_image_assets.json');
+}
+
+function writeTemplateImageAssetModule(projectState, manifestItems) {
+  if (!projectState) return;
+  const templateId = String(projectState.template || '').toLowerCase();
+  const workspaceRoot = projectWorkspaceDir(projectState.id);
+  if (templateId === 'software_web_app' || templateId === 'software_agency') {
+    const modulePath = path.join(workspaceRoot, 'web', 'src', 'generatedImageAssets.ts');
+    ensureDir(path.dirname(modulePath));
+    const lines = [
+      'export const generatedImageAssets = {',
+      ...manifestItems.map((item) => `  ${JSON.stringify(item.key)}: ${JSON.stringify(item.publicUrl || '')},`),
+      '} as const;',
+      '',
+    ];
+    fs.writeFileSync(modulePath, lines.join('\n'), 'utf-8');
+  }
+  if (templateId === 'mobile_app') {
+    const modulePath = path.join(workspaceRoot, 'mobile', 'src', 'generatedImageAssets.ts');
+    ensureDir(path.dirname(modulePath));
+    const lines = [
+      '/* eslint-disable @typescript-eslint/no-var-requires */',
+      'export const generatedImageAssets = {',
+      ...manifestItems.map((item) => `  ${JSON.stringify(item.key)}: require(${JSON.stringify(item.mobileRequirePath || '../assets/generated/placeholder.png')}),`),
+      '} as const;',
+      '',
+    ];
+    fs.writeFileSync(modulePath, lines.join('\n'), 'utf-8');
+  }
+}
+
+function writeTemplateImageAssetSummary(projectState, manifest) {
+  if (!projectState) return;
+  const docsPath = path.join(projectWorkspaceDir(projectState.id), 'docs', 'generated_image_assets.md');
+  ensureDir(path.dirname(docsPath));
+  const rows = (manifest.items || []).map((item) => `- ${item.key}: ${item.injectedPath} (${item.generatedWidth}x${item.generatedHeight})`).join('\n');
+  const text = [
+    '# Generated Image Assets',
+    '',
+    `Template: ${String(projectState.template || 'unknown')}`,
+    `Updated: ${nowIso()}`,
+    '',
+    rows || '- No assets generated yet.',
+    '',
+  ].join('\n');
+  fs.writeFileSync(docsPath, text, 'utf-8');
+}
+
+function applyTemplateImageAssetInjection(projectState, generatedAssets = []) {
+  if (!projectState || !projectState.id) {
+    return { ok: false, reason: 'missing_project_state', gaps: ['Project state is required for image asset injection.'] };
+  }
+  const contract = templateImageContractItems(projectState);
+  if (!contract.length) {
+    return { ok: true, skipped: true, reason: 'template_has_no_image_contract', manifestPath: null, items: [] };
+  }
+  const injectionRoot = templateImageInjectionRoot(projectState);
+  if (!injectionRoot) {
+    return { ok: false, reason: 'missing_injection_root', gaps: ['Template image injection root could not be resolved.'] };
+  }
+  ensureDir(injectionRoot);
+
+  const byKey = new Map((Array.isArray(generatedAssets) ? generatedAssets : [])
+    .filter((item) => item && item.key)
+    .map((item) => [String(item.key), item]));
+
+  const items = [];
+  const gaps = [];
+  for (const expected of contract) {
+    const key = String(expected.key || '').trim();
+    if (!key) continue;
+    const produced = byKey.get(key);
+    if (!produced || !produced.outputPath || !fs.existsSync(produced.outputPath)) {
+      gaps.push(`Missing generated image for key ${key}.`);
+      continue;
+    }
+
+    const ext = path.extname(String(produced.outputPath)).toLowerCase() || '.png';
+    const fileName = `${safeSlug(key, 'asset')}${ext}`;
+    const injectedAbs = path.join(injectionRoot, fileName);
+    ensureDir(path.dirname(injectedAbs));
+    try {
+      fs.copyFileSync(produced.outputPath, injectedAbs);
+    } catch (err) {
+      gaps.push(`Failed to inject image for key ${key}: ${redactSensitive(err && err.message ? err.message : 'copy_failed')}`);
+      continue;
+    }
+
+    let generatedWidth = Number(produced.width || expected.width || 0);
+    let generatedHeight = Number(produced.height || expected.height || 0);
+    if (produced.metadataPath && fs.existsSync(produced.metadataPath)) {
+      try {
+        const meta = safeJsonRead(produced.metadataPath, null);
+        if (meta && Number.isFinite(Number(meta.width))) generatedWidth = Number(meta.width);
+        if (meta && Number.isFinite(Number(meta.height))) generatedHeight = Number(meta.height);
+      } catch {}
+    }
+
+    const workspaceRoot = projectWorkspaceDir(projectState.id);
+    const injectedRel = path.relative(workspaceRoot, injectedAbs).replace(/\\/g, '/');
+    const publicUrl = injectedRel.startsWith('web/public/') ? `/${injectedRel.slice('web/public/'.length)}` : null;
+    const mobileRequirePath = injectedRel.startsWith('mobile/assets/')
+      ? `../assets/${injectedRel.slice('mobile/assets/'.length)}`
+      : null;
+    items.push({
+      key,
+      expectedWidth: Number(expected.width || 0),
+      expectedHeight: Number(expected.height || 0),
+      generatedWidth,
+      generatedHeight,
+      injectedPath: injectedRel,
+      publicUrl,
+      mobileRequirePath,
+      sourceOutputPath: String(produced.outputPath),
+      sourceMetadataPath: produced.metadataPath ? String(produced.metadataPath) : null,
+      dimensionMatch: generatedWidth === Number(expected.width || 0) && generatedHeight === Number(expected.height || 0),
+    });
+  }
+
+  const missingKeys = contract
+    .map((item) => String(item.key || ''))
+    .filter((key) => key && !items.some((entry) => entry.key === key));
+  missingKeys.forEach((key) => gaps.push(`Missing injected asset for key ${key}.`));
+
+  const manifest = {
+    templateId: String(projectState.template || '').toLowerCase(),
+    projectId: projectState.id,
+    generatedAt: nowIso(),
+    items,
+  };
+  const manifestPath = templateImageManifestPath(projectState);
+  ensureDir(path.dirname(manifestPath));
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
+  writeTemplateImageAssetModule(projectState, items);
+  writeTemplateImageAssetSummary(projectState, manifest);
+
+  const badDimensions = items.filter((item) => !item.dimensionMatch).map((item) => item.key);
+  badDimensions.forEach((key) => gaps.push(`Asset ${key} has wrong dimensions vs template contract.`));
+  return {
+    ok: gaps.length === 0,
+    reason: gaps.length ? 'image_asset_injection_incomplete' : 'ok',
+    manifestPath,
+    items,
+    gaps,
+  };
+}
+
+function validateTemplateImageAssets(projectState) {
+  const contract = templateImageContractItems(projectState);
+  if (!contract.length) return { ok: true, gaps: [] };
+  const manifestPath = templateImageManifestPath(projectState);
+  if (!manifestPath || !fs.existsSync(manifestPath)) {
+    return { ok: false, gaps: ['Image asset manifest is missing.'] };
+  }
+  const manifest = safeJsonRead(manifestPath, null);
+  if (!manifest || !Array.isArray(manifest.items)) {
+    return { ok: false, gaps: ['Image asset manifest is invalid.'] };
+  }
+
+  const gaps = [];
+  contract.forEach((expected) => {
+    const key = String(expected.key || '').trim();
+    const item = manifest.items.find((entry) => String(entry && entry.key || '') === key);
+    if (!item) {
+      gaps.push(`Missing generated asset ${key}.`);
+      return;
+    }
+    const injectedRel = String(item.injectedPath || '').trim();
+    const injectedAbs = injectedRel ? path.join(projectWorkspaceDir(projectState.id), injectedRel) : null;
+    if (!injectedAbs || !fs.existsSync(injectedAbs)) {
+      gaps.push(`Injected file missing for asset ${key}.`);
+    }
+    const expectedW = Number(expected.width || 0);
+    const expectedH = Number(expected.height || 0);
+    if (Number(item.generatedWidth || 0) !== expectedW || Number(item.generatedHeight || 0) !== expectedH) {
+      gaps.push(`Asset ${key} dimensions mismatch (${item.generatedWidth}x${item.generatedHeight}, expected ${expectedW}x${expectedH}).`);
+    }
+  });
+  return { ok: gaps.length === 0, gaps };
+}
+
 function latestGameArtifactUpdatedAt(projectState) {
   if (!projectState || String(projectState.template || '').toLowerCase() !== 'game_studio') return 0;
   const root = projectWorkspaceDir(projectState.id);
@@ -5778,6 +5978,10 @@ function verifyGoalDelivery(projectState) {
       gaps.push(`${templateName} artifacts missing/incomplete. Required files:\n${required.map((item) => `  ${item.path} (min ${item.minLines} non-empty lines)`).join('\n')}`);
     }
   }
+  const templateImageValidation = validateTemplateImageAssets(projectState);
+  if (!templateImageValidation.ok) {
+    gaps.push(`Template image assets incomplete:\n${templateImageValidation.gaps.map((item) => `  ${item}`).join('\n')}`);
+  }
   if (gaps.length === 0) {
     return { verified: true, gaps: [] };
   }
@@ -5863,6 +6067,26 @@ function validateGameStudioTaskArtifacts(projectState, task) {
     }
   }
 
+  return { ok: true };
+}
+
+function validateTemplateTaskArtifacts(projectState, task) {
+  const gameCheck = validateGameStudioTaskArtifacts(projectState, task);
+  if (!gameCheck.ok) return gameCheck;
+
+  const title = String(task?.title || '').toLowerCase();
+  const taskId = String(task?.id || '');
+  const needsImageValidation = title.includes('asset pack') || title.includes('image') || taskId === 'GOAL-DELIVERY-GAP';
+  if (!needsImageValidation) {
+    return { ok: true };
+  }
+  const imageCheck = validateTemplateImageAssets(projectState);
+  if (!imageCheck.ok) {
+    return {
+      ok: false,
+      reason: `template_image_assets_incomplete:${imageCheck.gaps.slice(0, 2).join(' | ')}`,
+    };
+  }
   return { ok: true };
 }
 
@@ -6700,7 +6924,7 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
       supportRouting: supportRouting.route,
       financeGuardrail: financeGuardrail.route,
     };
-    const execution = await executeLiveConnector(action.connector, {
+    let execution = await executeLiveConnector(action.connector, {
       operation: action.operation,
       input: actionInput,
       projectId: projectState.id,
@@ -6724,6 +6948,48 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
       });
       persistProjectState(projectState);
       return;
+    }
+
+    let imageInjection = null;
+    if (String(action.connector || '').toLowerCase() === 'image_generator' && String(action.operation || '').toLowerCase() === 'generate_asset_pack') {
+      const generatedAssets = execution && execution.data && Array.isArray(execution.data.assets)
+        ? execution.data.assets
+        : [];
+      imageInjection = applyTemplateImageAssetInjection(projectState, generatedAssets);
+      if (!imageInjection.ok) {
+        const failureReason = `Image asset injection failed: ${(imageInjection.gaps || []).join('; ') || imageInjection.reason || 'unknown'}`;
+        scheduleAutoActionRetry(projectState, task, failureReason, {
+          connector: action.connector,
+          operation: action.operation,
+          actorRole,
+          source,
+          executionKey,
+          imageInjection,
+        });
+        markConnectorExecutionRecord(projectState, executionKey, {
+          status: 'failed',
+          lastError: failureReason,
+          result: {
+            connectorResult: execution.data || null,
+            imageInjection,
+          },
+        });
+        persistProjectState(projectState);
+        return;
+      }
+      execution = {
+        ...execution,
+        data: {
+          ...(execution.data || {}),
+          imageInjection,
+        },
+      };
+      appendProjectLog(projectState, 'message', {
+        kind: 'image_assets_injected',
+        taskId: task.id,
+        manifestPath: imageInjection.manifestPath || null,
+        count: Array.isArray(imageInjection.items) ? imageInjection.items.length : 0,
+      });
     }
 
     const actualCost = Number.isFinite(Number(execution.actualCost)) ? Number(execution.actualCost) : Number(action.estimatedCost || 0);
@@ -6766,6 +7032,7 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
       supportRouting: supportRouting.route,
       financeGuardrail: financeGuardrail.route,
       financeExceptions,
+      imageInjection,
     });
     if (String(action.connector || '').toLowerCase() === 'netlify') {
       ensureProjectConnectorBindings(projectState);
@@ -7518,7 +7785,7 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
   const worker = runtime.state.agents.find((a) => a.id === task.assignee);
   let effectiveExitCode = exitCode;
   if (effectiveExitCode === 0) {
-    const artifactCheck = validateGameStudioTaskArtifacts(runtime.state, task);
+    const artifactCheck = validateTemplateTaskArtifacts(runtime.state, task);
     if (!artifactCheck.ok) {
       effectiveExitCode = 2;
       appendProjectLog(runtime.state, 'warning', {
