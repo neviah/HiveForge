@@ -13534,7 +13534,7 @@ async function executeImageGeneratorConnector(options = {}) {
     }
 
     let injection = null;
-    let validation = { ok: true, gaps: [] };
+    let validation = { ok: true, scope: 'self_test_sample', gaps: [] };
     if (projectState) {
       injection = applyTemplateImageAssetInjection(projectState, [{
         key: sample.key,
@@ -13543,7 +13543,28 @@ async function executeImageGeneratorConnector(options = {}) {
         outputPath: generated.data && generated.data.outputPath ? generated.data.outputPath : null,
         metadataPath: generated.data && generated.data.metadataPath ? generated.data.metadataPath : null,
       }]);
-      validation = validateTemplateImageAssets(projectState);
+      if (!injection || !injection.ok) {
+        validation.ok = false;
+        validation.gaps.push(...(injection && Array.isArray(injection.gaps) ? injection.gaps : ['Image self-test injection failed.']));
+      } else {
+        const sampleItem = Array.isArray(injection.items)
+          ? injection.items.find((item) => String(item && item.key || '') === String(sample.key || ''))
+          : null;
+        if (!sampleItem) {
+          validation.ok = false;
+          validation.gaps.push(`Self-test injected sample is missing for key ${sample.key}.`);
+        } else {
+          const injectedAbs = path.join(projectWorkspaceDir(projectState.id), String(sampleItem.injectedPath || ''));
+          if (!sampleItem.injectedPath || !fs.existsSync(injectedAbs)) {
+            validation.ok = false;
+            validation.gaps.push(`Self-test injected file is missing for key ${sample.key}.`);
+          }
+          if (!sampleItem.dimensionMatch) {
+            validation.ok = false;
+            validation.gaps.push(`Self-test injected sample has wrong dimensions for key ${sample.key}.`);
+          }
+        }
+      }
       persistProjectState(projectState);
     }
 
