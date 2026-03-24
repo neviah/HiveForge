@@ -572,6 +572,7 @@ const imageGenerationQueue = [];
 let imageEngineProcess = null;
 let imageEngineLastStartAt = null;
 let imageEngineBootstrapPromise = null;
+const imageModelDownloadPromises = new Map();
 const appState = {
   llm: {
     provider: 'lmstudio',
@@ -2581,49 +2582,74 @@ async function ensureImageModelReady(modelId, projectId = null) {
     };
   }
 
-  runtime.models[model.id] = {
-    id: model.id,
-    status: 'downloading',
-    path: model.path,
-    updatedAt: nowIso(),
-  };
-  persistImageRuntimeState();
-  imageProgress(projectId, 'download_started', { modelId: model.id });
-  const download = await downloadFileWithResume(model.downloadUrl, model.path, model.partPath, ({ written, total }) => {
-    const pct = total > 0 ? Math.max(0, Math.min(100, Math.round((written / total) * 100))) : null;
-    imageProgress(projectId, 'download_progress', {
-      modelId: model.id,
-      written,
-      total,
-      progressPct: pct,
-    });
-  });
-  if (!download.ok) {
+  const inFlight = imageModelDownloadPromises.get(model.id);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const downloadPromise = (async () => {
+    let lastEmittedPct = -1;
+    let lastEmittedWritten = -1;
+
     runtime.models[model.id] = {
       id: model.id,
-      status: 'download_failed',
+      status: 'downloading',
       path: model.path,
       updatedAt: nowIso(),
-      lastError: download.error,
     };
     persistImageRuntimeState();
-    return {
-      ok: false,
-      errorCode: 'CONNECTOR_FAILURE',
-      message: download.error || 'Model download failed.',
-      model,
+    imageProgress(projectId, 'download_started', { modelId: model.id });
+    const download = await downloadFileWithResume(model.downloadUrl, model.path, model.partPath, ({ written, total }) => {
+      const pct = total > 0 ? Math.max(0, Math.min(100, Math.round((written / total) * 100))) : null;
+      const writeDelta = lastEmittedWritten >= 0 ? Math.max(0, Number(written || 0) - lastEmittedWritten) : Number.MAX_SAFE_INTEGER;
+      const pctUnchanged = Number.isFinite(Number(pct)) && Number(pct) === Number(lastEmittedPct);
+      const finished = Number(total) > 0 && Number(written) >= Number(total);
+      if (pctUnchanged && !finished && writeDelta < (8 * 1024 * 1024)) {
+        return;
+      }
+      if (Number.isFinite(Number(pct))) lastEmittedPct = Number(pct);
+      if (Number.isFinite(Number(written))) lastEmittedWritten = Number(written);
+      imageProgress(projectId, 'download_progress', {
+        modelId: model.id,
+        written,
+        total,
+        progressPct: pct,
+      });
+    });
+    if (!download.ok) {
+      runtime.models[model.id] = {
+        id: model.id,
+        status: 'download_failed',
+        path: model.path,
+        updatedAt: nowIso(),
+        lastError: download.error,
+      };
+      persistImageRuntimeState();
+      return {
+        ok: false,
+        errorCode: 'CONNECTOR_FAILURE',
+        message: download.error || 'Model download failed.',
+        model,
+      };
+    }
+    runtime.models[model.id] = {
+      id: model.id,
+      status: 'ready',
+      path: model.path,
+      sizeBytes: download.bytes,
+      updatedAt: nowIso(),
     };
+    persistImageRuntimeState();
+    imageProgress(projectId, 'download_complete', { modelId: model.id, bytes: download.bytes });
+    return { ok: true, model };
+  })();
+
+  imageModelDownloadPromises.set(model.id, downloadPromise);
+  try {
+    return await downloadPromise;
+  } finally {
+    imageModelDownloadPromises.delete(model.id);
   }
-  runtime.models[model.id] = {
-    id: model.id,
-    status: 'ready',
-    path: model.path,
-    sizeBytes: download.bytes,
-    updatedAt: nowIso(),
-  };
-  persistImageRuntimeState();
-  imageProgress(projectId, 'download_complete', { modelId: model.id, bytes: download.bytes });
-  return { ok: true, model };
 }
 
 function safeSlug(value, fallback = 'item') {
