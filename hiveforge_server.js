@@ -5153,6 +5153,18 @@ function templateRoleCapabilities(templateData = null, agents = []) {
         : base.allowedConnectors,
     };
   });
+  const imageEnabled = imageGeneratorSettings().enabled;
+  if (imageEnabled) {
+    Object.keys(capabilities).forEach((roleName) => {
+      const defaults = DEFAULT_ROLE_CAPABILITIES[roleName] || null;
+      if (!defaults || !Array.isArray(defaults.allowedConnectors) || !defaults.allowedConnectors.includes('image_generator')) return;
+      const list = Array.isArray(capabilities[roleName].allowedConnectors)
+        ? capabilities[roleName].allowedConnectors
+        : [];
+      if (!list.includes('image_generator')) list.push('image_generator');
+      capabilities[roleName].allowedConnectors = list;
+    });
+  }
   return capabilities;
 }
 
@@ -9186,6 +9198,22 @@ function recoverProjectStateAfterRestart(state) {
         allowedConnectors: Array.isArray(defaults.allowedConnectors) ? [...defaults.allowedConnectors] : [],
       };
     });
+  }
+  if (state.roleCapabilities && typeof state.roleCapabilities === 'object') {
+    const imageEnabled = imageGeneratorSettings().enabled;
+    if (imageEnabled) {
+      Object.keys(state.roleCapabilities).forEach((roleName) => {
+        const defaults = DEFAULT_ROLE_CAPABILITIES[roleName] || null;
+        if (!defaults || !Array.isArray(defaults.allowedConnectors) || !defaults.allowedConnectors.includes('image_generator')) return;
+        const caps = state.roleCapabilities[roleName] && typeof state.roleCapabilities[roleName] === 'object'
+          ? state.roleCapabilities[roleName]
+          : null;
+        if (!caps) return;
+        if (!Array.isArray(caps.allowedConnectors)) caps.allowedConnectors = [];
+        caps.allowedConnectors = caps.allowedConnectors.map((v) => String(v || '').trim().toLowerCase()).filter(Boolean);
+        if (!caps.allowedConnectors.includes('image_generator')) caps.allowedConnectors.push('image_generator');
+      });
+    }
   }
 
   const requeuedTaskIds = [];
