@@ -1532,6 +1532,19 @@ function renderImageRuntimePanel(profilePayload) {
     ? `Worker slots: ${profile.settings?.workerSlots ?? 1} · retention: ${profile.settings?.retentionDays ?? '-'}d · quota: ${profile.settings?.quotaMbPerProject ?? '-'}MB${readiness?.secondaryBackendEndpoint ? ` · secondary: ${readiness.secondaryBackendEndpoint}` : ''}${goldenDetails.length ? ` · ${goldenDetails.join(' · ')}` : ''}`
     : 'No runtime status loaded yet.';
   setText('imageRuntimeStatus', statusText);
+
+  const runtimeBanner = document.getElementById('imageRuntimeBanner');
+  if (runtimeBanner) {
+    const healthy = Boolean(readiness?.modelReady && readiness?.selfTestOk && readiness?.goldenPromptSuiteOk && readiness?.goldenVisualOk);
+    runtimeBanner.style.display = 'block';
+    runtimeBanner.style.background = healthy ? 'rgba(34,197,94,0.08)' : 'rgba(59,130,246,0.08)';
+    runtimeBanner.style.borderColor = healthy ? 'rgba(34,197,94,0.35)' : 'rgba(59,130,246,0.35)';
+    runtimeBanner.style.color = healthy ? 'var(--ok,#22c55e)' : 'var(--text)';
+    runtimeBanner.textContent = healthy
+      ? 'Runtime is healthy. New projects auto-bootstrap image generation; manual tests are optional.'
+      : 'First-time setup is automatic on demand. You can run First Run Check once for extra confidence.';
+  }
+
   renderImageProgressStream();
 }
 
@@ -1968,6 +1981,33 @@ const Dashboard = {
     } catch (err) {
       setText('imageRuntimeStatus', `Golden prompt regression failed: ${err.message}`);
       showToast(`Golden prompt regression failed: ${err.message}`, 'error');
+    }
+  },
+
+  async runImageFirstRunCheck() {
+    const pid = state.activeProject?.id;
+    if (!pid) {
+      showToast('No active project selected.', 'error');
+      return;
+    }
+    const templateId = state.activeProject?.template || '';
+    setText('imageRuntimeStatus', 'Running first-run check: warmup -> self-test -> golden suite...');
+    try {
+      const warmup = await runImageConnector(pid, 'warmup', { templateId }, false);
+      if (!warmup?.ok) throw new Error(`Warmup: ${warmup?.reason || 'failed'}`);
+
+      const selfTest = await runImageConnector(pid, 'self_test', { templateId }, false);
+      if (!selfTest?.ok) throw new Error(`Self-Test: ${selfTest?.reason || 'failed'}`);
+
+      const golden = await runImageConnector(pid, 'golden_regression', { templateId }, false);
+      if (!golden?.ok) throw new Error(`Golden Suite: ${golden?.reason || 'failed'}`);
+
+      await this.refreshImageRuntime();
+      await this.refreshWorkspace();
+      showToast('First Run Check passed.', 'ok');
+    } catch (err) {
+      setText('imageRuntimeStatus', `First Run Check failed: ${err.message}`);
+      showToast(`First Run Check failed: ${err.message}`, 'error');
     }
   },
 

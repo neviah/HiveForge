@@ -308,6 +308,7 @@
               <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.generateImageProbe()">Generate Test Asset</button>
               <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.runImageSelfTest()">Run Self-Test</button>
               <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.runImageGoldenRegression()">Run Golden Suite</button>
+              <button class="hf-btn secondary hf-btn sm" onclick="Dashboard.runImageFirstRunCheck()">First Run Check</button>
             </div>
             <div id="imageRuntimeReadiness" class="hf-grid-4" style="margin-bottom:0.6rem;"></div>
             <div class="hf-grid-4" style="margin-bottom:0.6rem;">
@@ -330,6 +331,7 @@
             </div>
             <div id="imageRuntimeModel" style="font-size:0.84rem;margin-bottom:0.4rem;color:var(--muted);">Model: unknown</div>
             <div id="imageRuntimeStatus" style="font-size:0.82rem;margin-bottom:0.5rem;color:var(--muted);">No runtime status loaded yet.</div>
+            <div id="imageRuntimeBanner" style="display:none;font-size:0.82rem;margin-bottom:0.55rem;padding:0.5rem 0.6rem;border-radius:8px;border:1px solid var(--border);"></div>
             <div id="imageProgressStream" class="hf-log-stream" style="max-height:160px;">
               <div style="color:var(--muted);">No image runtime events yet.</div>
             </div>
