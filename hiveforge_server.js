@@ -4513,23 +4513,6 @@ export default function PlaceholderScreen(): React.JSX.Element {
     </SafeAreaView>
   );
 }
-
-function templateImageVariantSpecs(projectState, assetKey) {
-  const templateId = String(projectState && projectState.template || '').toLowerCase();
-  const key = String(assetKey || '').toLowerCase();
-  if (templateId === 'software_web_app' || templateId === 'software_agency') {
-    if (key === 'hero_banner') return [{ name: 'desktop', width: 1920, height: 960 }, { name: 'tablet', width: 1280, height: 640 }];
-    if (key === 'social_og_image') return [{ name: 'twitter', width: 1600, height: 900 }];
-  }
-  if (templateId === 'mobile_app') {
-    if (key === 'store_feature_graphic') return [{ name: 'play_store_backup', width: 2048, height: 1000 }];
-    if (key === 'splash_background') return [{ name: 'tablet', width: 1600, height: 2560 }];
-  }
-  if (templateId === 'game_studio') {
-    if (key === 'promo_keyart') return [{ name: 'itch_cover', width: 630, height: 500 }, { name: 'steam_capsule', width: 616, height: 353 }];
-  }
-  return [];
-}
 `;
   }
   if (lower.endsWith('.css')) {
@@ -6288,6 +6271,23 @@ function writeTemplateImageAssetSummary(projectState, manifest) {
     '',
   ].join('\n');
   fs.writeFileSync(docsPath, text, 'utf-8');
+}
+
+function templateImageVariantSpecs(projectState, assetKey) {
+  const templateId = String(projectState && projectState.template || '').toLowerCase();
+  const key = String(assetKey || '').toLowerCase();
+  if (templateId === 'software_web_app' || templateId === 'software_agency') {
+    if (key === 'hero_banner') return [{ name: 'desktop', width: 1920, height: 960 }, { name: 'tablet', width: 1280, height: 640 }];
+    if (key === 'social_og_image') return [{ name: 'twitter', width: 1600, height: 900 }];
+  }
+  if (templateId === 'mobile_app') {
+    if (key === 'store_feature_graphic') return [{ name: 'play_store_backup', width: 2048, height: 1000 }];
+    if (key === 'splash_background') return [{ name: 'tablet', width: 1600, height: 2560 }];
+  }
+  if (templateId === 'game_studio') {
+    if (key === 'promo_keyart') return [{ name: 'itch_cover', width: 630, height: 500 }, { name: 'steam_capsule', width: 616, height: 353 }];
+  }
+  return [];
 }
 
 function createInjectedImageVariants(projectState, item, injectedAbs) {
