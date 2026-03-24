@@ -6373,10 +6373,16 @@ function applyTemplateImageAssetInjection(projectState, generatedAssets = [], op
   const byKey = new Map((Array.isArray(generatedAssets) ? generatedAssets : [])
     .filter((item) => item && item.key)
     .map((item) => [String(item.key), item]));
+  const expectedItems = strictContract
+    ? contract
+    : contract.filter((entry) => {
+      const key = String(entry && entry.key || '').trim();
+      return key && byKey.has(key);
+    });
 
   const items = [];
   const gaps = [];
-  for (const expected of contract) {
+  for (const expected of expectedItems) {
     const key = String(expected.key || '').trim();
     if (!key) continue;
     const produced = byKey.get(key);
