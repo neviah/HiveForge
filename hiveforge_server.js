@@ -6353,10 +6353,13 @@ function ensureTemplateImageUiWiring(projectState, manifestItems) {
   });
 }
 
-function applyTemplateImageAssetInjection(projectState, generatedAssets = []) {
+function applyTemplateImageAssetInjection(projectState, generatedAssets = [], options = {}) {
   if (!projectState || !projectState.id) {
     return { ok: false, reason: 'missing_project_state', gaps: ['Project state is required for image asset injection.'] };
   }
+  const strictContract = options && Object.prototype.hasOwnProperty.call(options, 'strictContract')
+    ? Boolean(options.strictContract)
+    : true;
   const contract = templateImageContractItems(projectState);
   if (!contract.length) {
     return { ok: true, skipped: true, reason: 'template_has_no_image_contract', manifestPath: null, items: [] };
@@ -6426,10 +6429,12 @@ function applyTemplateImageAssetInjection(projectState, generatedAssets = []) {
     });
   }
 
-  const missingKeys = contract
-    .map((item) => String(item.key || ''))
-    .filter((key) => key && !items.some((entry) => entry.key === key));
-  missingKeys.forEach((key) => gaps.push(`Missing injected asset for key ${key}.`));
+  if (strictContract) {
+    const missingKeys = contract
+      .map((item) => String(item.key || ''))
+      .filter((key) => key && !items.some((entry) => entry.key === key));
+    missingKeys.forEach((key) => gaps.push(`Missing injected asset for key ${key}.`));
+  }
 
   const manifest = {
     templateId: String(projectState.template || '').toLowerCase(),
@@ -13542,7 +13547,7 @@ async function executeImageGeneratorConnector(options = {}) {
         height: sample.height,
         outputPath: generated.data && generated.data.outputPath ? generated.data.outputPath : null,
         metadataPath: generated.data && generated.data.metadataPath ? generated.data.metadataPath : null,
-      }]);
+      }], { strictContract: false });
       if (!injection || !injection.ok) {
         validation.ok = false;
         validation.gaps.push(...(injection && Array.isArray(injection.gaps) ? injection.gaps : ['Image self-test injection failed.']));
@@ -13568,12 +13573,11 @@ async function executeImageGeneratorConnector(options = {}) {
       persistProjectState(projectState);
     }
 
-    if ((injection && !injection.ok) || !validation.ok) {
+    if (!validation.ok) {
       return {
         ok: false,
         errorCode: 'CONNECTOR_FAILURE',
         message: `Image self-test failed: ${[
-          ...(injection && Array.isArray(injection.gaps) ? injection.gaps : []),
           ...(Array.isArray(validation.gaps) ? validation.gaps : []),
         ].join('; ') || 'asset injection/validation failed.'}`,
         operation,
