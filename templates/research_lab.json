@@ -15,7 +15,7 @@
                                    "alias":  "Trend Researcher",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/product/product-trend-researcher.md"
+                                                                    "agency-agents/product/product-trend-researcher.md"
                                                                 ]
                                },
                                {
@@ -23,7 +23,7 @@
                                    "alias":  "Trend Researcher",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/product/product-trend-researcher.md"
+                                                                    "agency-agents/product/product-trend-researcher.md"
                                                                 ]
                                },
                                {
@@ -31,7 +31,7 @@
                                    "alias":  "Analytics Reporter",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/support/support-analytics-reporter.md"
+                                                                    "agency-agents/support/support-analytics-reporter.md"
                                                                 ]
                                },
                                {
@@ -39,7 +39,7 @@
                                    "alias":  "Technical Writer",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/engineering/engineering-technical-writer.md"
+                                                                    "agency-agents/engineering/engineering-technical-writer.md"
                                                                 ]
                                },
                                {
@@ -47,7 +47,7 @@
                                    "alias":  "Reality Checker",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/testing/testing-reality-checker.md"
+                                                                    "agency-agents/testing/testing-reality-checker.md"
                                                                 ]
                                }
                            ],

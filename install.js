@@ -12,6 +12,14 @@ module.exports = {
       }
     },
     {
+      method: 'shell.run',
+      params: {
+        message: [
+          'git submodule update --init --recursive'
+        ]
+      }
+    },
+    {
       when: "{{!exists('sandbox/venv/Scripts/python.exe')}}",
       method: 'shell.run',
       params: {

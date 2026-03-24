@@ -15,7 +15,7 @@
                                    "alias":  "Backend Architect",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/engineering/engineering-backend-architect.md"
+                                                                    "agency-agents/engineering/engineering-backend-architect.md"
                                                                 ]
                                },
                                {
@@ -23,7 +23,7 @@
                                    "alias":  "Backend Architect",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/engineering/engineering-backend-architect.md"
+                                                                    "agency-agents/engineering/engineering-backend-architect.md"
                                                                 ]
                                },
                                {
@@ -31,7 +31,7 @@
                                    "alias":  "Frontend Developer",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/engineering/engineering-frontend-developer.md"
+                                                                    "agency-agents/engineering/engineering-frontend-developer.md"
                                                                 ]
                                },
                                {
@@ -39,7 +39,7 @@
                                    "alias":  "Reality Checker",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/testing/testing-reality-checker.md"
+                                                                    "agency-agents/testing/testing-reality-checker.md"
                                                                 ]
                                },
                                {
@@ -47,7 +47,7 @@
                                    "alias":  "DevOps Automator",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/engineering/engineering-devops-automator.md"
+                                                                    "agency-agents/engineering/engineering-devops-automator.md"
                                                                 ]
                                },
                                {
@@ -55,7 +55,7 @@
                                    "alias":  "Senior Project Manager",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/project-management/project-manager-senior.md"
+                                                                    "agency-agents/project-management/project-manager-senior.md"
                                                                 ]
                                }
                            ],

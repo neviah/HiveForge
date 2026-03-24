@@ -530,26 +530,26 @@ const DEFAULT_ROLE_CAPABILITIES = {
   'Finance Tracker': { canDeploy: false, canSpend: true, allowedConnectors: ['analytics', 'stripe', 'google_ads'] },
 };
 const OPTIONAL_AGENT_PERSONALITY_PATHS = {
-  'Security Engineer': ['../agency-agents/engineering/engineering-security-engineer.md'],
-  'Reality Checker': ['../agency-agents/testing/testing-reality-checker.md'],
-  'PPC Campaign Strategist': ['../agency-agents/marketing/marketing-ppc-campaign-strategist.md'],
-  'Brand Guardian': ['../agency-agents/marketing/marketing-brand-guardian.md'],
-  'Legal Compliance Checker': ['../agency-agents/support/support-legal-compliance-checker.md'],
-  'SEO Specialist': ['../agency-agents/marketing/marketing-seo-specialist.md'],
-  'Analytics Reporter': ['../agency-agents/support/support-analytics-reporter.md'],
-  'API Tester': ['../agency-agents/testing/testing-api-tester.md'],
-  'Incident Response Commander': ['../agency-agents/support/support-incident-response-commander.md'],
-  'Technical Writer': ['../agency-agents/engineering/engineering-technical-writer.md'],
-  'Feedback Synthesizer': ['../agency-agents/support/support-feedback-synthesizer.md'],
-  'Sprint Prioritizer': ['../agency-agents/project-management/project-manager-sprint-prioritizer.md'],
-  'Performance Benchmarker': ['../agency-agents/testing/testing-performance-benchmarker.md'],
-  'Narrative Designer': ['../agency-agents/game-development/game-narrative-designer.md'],
-  'Level Designer': ['../agency-agents/game-development/game-level-designer.md'],
-  'Technical Artist': ['../agency-agents/game-development/game-technical-artist.md'],
-  'Paid Social Strategist': ['../agency-agents/marketing/marketing-paid-social-strategist.md'],
-  'TikTok Strategist': ['../agency-agents/marketing/marketing-tiktok-strategist.md'],
-  'Instagram Curator': ['../agency-agents/marketing/marketing-instagram-curator.md'],
-  'LinkedIn Content Creator': ['../agency-agents/marketing/marketing-linkedin-content-creator.md'],
+  'Security Engineer': ['agency-agents/engineering/engineering-security-engineer.md'],
+  'Reality Checker': ['agency-agents/testing/testing-reality-checker.md'],
+  'PPC Campaign Strategist': ['agency-agents/marketing/marketing-ppc-campaign-strategist.md'],
+  'Brand Guardian': ['agency-agents/marketing/marketing-brand-guardian.md'],
+  'Legal Compliance Checker': ['agency-agents/support/support-legal-compliance-checker.md'],
+  'SEO Specialist': ['agency-agents/marketing/marketing-seo-specialist.md'],
+  'Analytics Reporter': ['agency-agents/support/support-analytics-reporter.md'],
+  'API Tester': ['agency-agents/testing/testing-api-tester.md'],
+  'Incident Response Commander': ['agency-agents/support/support-incident-response-commander.md'],
+  'Technical Writer': ['agency-agents/engineering/engineering-technical-writer.md'],
+  'Feedback Synthesizer': ['agency-agents/support/support-feedback-synthesizer.md'],
+  'Sprint Prioritizer': ['agency-agents/project-management/project-manager-sprint-prioritizer.md'],
+  'Performance Benchmarker': ['agency-agents/testing/testing-performance-benchmarker.md'],
+  'Narrative Designer': ['agency-agents/game-development/game-narrative-designer.md'],
+  'Level Designer': ['agency-agents/game-development/game-level-designer.md'],
+  'Technical Artist': ['agency-agents/game-development/game-technical-artist.md'],
+  'Paid Social Strategist': ['agency-agents/marketing/marketing-paid-social-strategist.md'],
+  'TikTok Strategist': ['agency-agents/marketing/marketing-tiktok-strategist.md'],
+  'Instagram Curator': ['agency-agents/marketing/marketing-instagram-curator.md'],
+  'LinkedIn Content Creator': ['agency-agents/marketing/marketing-linkedin-content-creator.md'],
 };
 const AGENT_PERSONALITY_ROOTS = [
   path.resolve(__dirname, 'agency-agents'),
@@ -4251,62 +4251,381 @@ function buildPromptDrivenScaffold(profile) {
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
-  <main class="app">
-    <h1>${safeTitle}</h1>
-    <p class="sub">Building by HiveForge agents&hellip;</p>
-    <section id="game-container" class="game-container">
-      <!-- Game canvas/board rendered here by game.js -->
-    </section>
-    <div class="hud" id="hud">
-      <span id="status">Loading&hellip;</span>
-      <button id="restartBtn">Restart</button>
+
+  <!-- ═══ SPLASH SCREEN ═══ -->
+  <div id="splash" class="overlay">
+    <div class="splash-inner">
+      <img src="./promo-keyart.svg" class="keyart" alt="${safeTitle} key art" onerror="this.style.display='none'" />
+      <h1 class="game-title">${safeTitle}</h1>
+      <p class="genre-tag">${safeGenre}</p>
+      <button id="splash-start" class="btn-primary cta-pulse">&#9654; Start Game</button>
+      <p class="studio-tag">Made with <span>HiveForge</span></p>
     </div>
-  </main>
+  </div>
+
+  <!-- ═══ TITLE MENU ═══ -->
+  <div id="title-menu" class="overlay hidden">
+    <div class="menu-panel">
+      <h2>How to Play</h2>
+      <ul class="controls-list" id="controls-list">
+        <!-- AGENTS: replace with genre-specific controls for ${safeGenre} -->
+        <li><span>Move</span><span><kbd>WASD</kbd> / <kbd>Arrows</kbd></span></li>
+        <li><span>Action</span><span><kbd>Space</kbd> / <kbd>Click</kbd></span></li>
+        <li><span>Pause</span><span><kbd>Esc</kbd> / <kbd>P</kbd></span></li>
+      </ul>
+      <button id="menu-play" class="btn-primary">&#9654; Play</button>
+      <button id="menu-settings" class="btn-secondary">&#9881; Settings</button>
+    </div>
+  </div>
+
+  <!-- ═══ HUD (gameplay only) ═══ -->
+  <div id="hud" class="hidden">
+    <div class="hud-left">
+      <img src="./player-sprite.svg" class="hud-avatar" alt="" onerror="this.style.display='none'" />
+      <div class="hud-stats">
+        <span id="hud-score">Score: 0</span>
+        <span id="hud-lives">&#9829; &#9829; &#9829;</span>
+      </div>
+    </div>
+    <div class="hud-center"><span id="hud-level">Level 1</span></div>
+    <div class="hud-right">
+      <button id="pause-btn" class="btn-icon" title="Pause (P)">&#9646;&#9646;</button>
+    </div>
+  </div>
+
+  <!-- ═══ GAME CANVAS ═══ -->
+  <div id="canvas-container" class="hidden">
+    <canvas id="game-canvas"></canvas>
+  </div>
+
+  <!-- ═══ PAUSE MENU ═══ -->
+  <div id="pause-menu" class="overlay hidden">
+    <div class="pause-panel">
+      <h2>&#9646;&#9646; Paused</h2>
+      <button id="resume-btn" class="btn-primary">&#9654; Resume</button>
+      <button id="quit-btn" class="btn-secondary">&#9646; Quit to Menu</button>
+    </div>
+  </div>
+
+  <!-- ═══ GAME OVER ═══ -->
+  <div id="game-over" class="overlay hidden">
+    <div class="result-panel">
+      <h2>Game Over</h2>
+      <p id="final-score">Score: 0</p>
+      <button id="retry-btn" class="btn-primary">&#8635; Try Again</button>
+      <button id="go-to-menu" class="btn-secondary">&#9646; Main Menu</button>
+    </div>
+  </div>
+
+  <!-- ═══ WIN SCREEN ═══ -->
+  <div id="win-screen" class="overlay hidden">
+    <div class="result-panel">
+      <h2>&#127942; You Win!</h2>
+      <p id="win-score">Score: 0</p>
+      <img src="./promo-keyart.svg" class="win-keyart" alt="" onerror="this.style.display='none'" />
+      <button id="win-retry" class="btn-primary">&#9654; Play Again</button>
+      <button id="win-menu" class="btn-secondary">&#9646; Main Menu</button>
+    </div>
+  </div>
+
   <script src="./game.js"></script>
 </body>
 </html>
 `,
-    styleCss: `/* HIVEFORGE_SCAFFOLD_PLACEHOLDER � agents: implement styles for ${safeTitle} */
+    styleCss: `/* HIVEFORGE_SCAFFOLD_PLACEHOLDER \u2014 agents: implement full visual design for ${safeTitle} (${safeGenre}) */
 :root {
-  color-scheme: dark;
-  --bg: #0f172a;
-  --panel: #1e293b;
+  --bg: #0b1120;
+  --bg-panel: rgba(11, 17, 32, 0.88);
   --ink: #e2e8f0;
+  --ink-muted: #94a3b8;
   --accent: #22d3ee;
+  --accent2: #f59e0b;
+  --danger: #ef4444;
+  --success: #22c55e;
+  --radius: 16px;
+  --font: "Segoe UI", system-ui, -apple-system, sans-serif;
 }
-* { box-sizing: border-box; }
-body { margin: 0; font-family: "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
-.app { max-width: 900px; margin: 0 auto; padding: 1.2rem; }
-.sub { color: #94a3b8; font-size: 0.9rem; }
-.game-container { margin-top: 1rem; min-height: 400px; border: 2px dashed var(--accent); border-radius: 12px; display: flex; align-items: center; justify-content: center; }
-.hud { display: flex; gap: 1rem; align-items: center; margin-top: 0.8rem; }
-button { background: var(--accent); color: #022d36; border: 0; border-radius: 8px; padding: 0.5rem 1rem; font-weight: 700; cursor: pointer; }
-button:hover { filter: brightness(1.15); }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; overflow: hidden; }
+body { font-family: var(--font); background: var(--bg) url('./promo-keyart.svg') center/cover no-repeat; color: var(--ink); }
+
+/* \u2500 OVERLAYS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+.overlay { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.75); backdrop-filter: blur(6px); }
+.overlay.hidden { display: none; }
+
+/* \u2500 SPLASH \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+.splash-inner { display: flex; flex-direction: column; align-items: center; gap: 1.2rem; text-align: center; padding: 2rem; }
+.keyart { max-width: min(580px, 88vw); max-height: 38vh; object-fit: contain; border-radius: 12px; box-shadow: 0 0 60px rgba(34,211,238,0.22); }
+.game-title { font-size: clamp(2rem, 6vw, 4rem); font-weight: 900; letter-spacing: -0.02em; background: linear-gradient(135deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.genre-tag { font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.15em; color: var(--ink-muted); }
+.studio-tag { font-size: 0.75rem; color: var(--ink-muted); }
+.studio-tag span { color: var(--accent); font-weight: 700; }
+
+/* \u2500 MENU / PAUSE PANELS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+.menu-panel, .pause-panel { background: var(--bg-panel); border: 1px solid rgba(255,255,255,0.1); border-radius: var(--radius); padding: 2.5rem; max-width: 480px; width: 90vw; display: flex; flex-direction: column; gap: 1.1rem; }
+.menu-panel h2, .pause-panel h2 { font-size: 1.5rem; font-weight: 700; color: var(--accent); }
+.controls-list { list-style: none; display: grid; gap: 0.45rem; }
+.controls-list li { display: flex; justify-content: space-between; font-size: 0.88rem; color: var(--ink-muted); border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 0.4rem; }
+.controls-list li kbd { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 0.1em 0.4em; font-family: monospace; font-size: 0.8em; color: var(--ink); }
+
+/* \u2500 BUTTONS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+.btn-primary, .btn-secondary { display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.72rem 1.9rem; border-radius: 10px; font-family: var(--font); font-size: 1rem; font-weight: 700; cursor: pointer; border: none; transition: filter 0.15s, transform 0.1s; }
+.btn-primary { background: linear-gradient(135deg, var(--accent), #0891b2); color: #012832; }
+.btn-secondary { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); color: var(--ink); }
+.btn-primary:hover, .btn-secondary:hover { filter: brightness(1.18); }
+.btn-primary:active, .btn-secondary:active { transform: scale(0.96); }
+.cta-pulse { animation: pulse 2.2s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(34,211,238,0.4); } 55% { box-shadow: 0 0 0 14px rgba(34,211,238,0); } }
+
+/* \u2500 HUD \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+#hud { position: fixed; top: 0; left: 0; right: 0; z-index: 50; display: flex; align-items: center; justify-content: space-between; padding: 0.55rem 1.1rem; background: rgba(0,0,0,0.62); backdrop-filter: blur(4px); border-bottom: 1px solid rgba(255,255,255,0.08); }
+#hud.hidden { display: none; }
+.hud-left { display: flex; align-items: center; gap: 0.7rem; }
+.hud-avatar { width: 34px; height: 34px; object-fit: contain; }
+.hud-stats { display: flex; flex-direction: column; gap: 0.05rem; font-size: 0.82rem; }
+#hud-score { color: var(--accent2); font-weight: 700; }
+#hud-lives { color: var(--danger); font-weight: 600; font-size: 0.95rem; letter-spacing: 0.1em; }
+.hud-center { font-size: 0.95rem; font-weight: 700; color: var(--accent); }
+.btn-icon { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.13); border-radius: 8px; color: var(--ink); font-size: 0.9rem; padding: 0.3rem 0.55rem; cursor: pointer; transition: filter 0.15s; }
+.btn-icon:hover { filter: brightness(1.3); }
+
+/* \u2500 CANVAS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+#canvas-container { position: fixed; inset: 50px 0 0 0; display: flex; align-items: center; justify-content: center; background: #070d1a; }
+#canvas-container.hidden { display: none; }
+#game-canvas { display: block; border-radius: 6px; box-shadow: 0 0 50px rgba(0,0,0,0.7); }
+
+/* \u2500 WIN / GAME OVER \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+.result-panel { background: var(--bg-panel); border: 1px solid rgba(255,255,255,0.1); border-radius: var(--radius); padding: 3rem 2.5rem; text-align: center; max-width: 420px; width: 90vw; display: flex; flex-direction: column; gap: 1.1rem; align-items: center; }
+.result-panel h2 { font-size: 2rem; font-weight: 900; }
+#game-over .result-panel h2 { color: var(--danger); }
+#win-screen .result-panel h2 { color: var(--success); }
+.result-panel p { font-size: 1.15rem; color: var(--ink-muted); }
+.win-keyart { max-width: 200px; border-radius: 8px; }
 `,
     gameJs: `// HIVEFORGE_SCAFFOLD_PLACEHOLDER
 // Game: ${safeTitle}
 // Genre: ${safeGenre}
 // Goal: ${safeGoal}
-// Agents: replace this entire file with a complete, playable ${safeGenre} game implementation.
+//
+// \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// AGENT IMPLEMENTATION GUIDE
+// \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// This scaffold provides a complete state machine: SPLASH \u2192 TITLE \u2192 PLAYING \u2192 PAUSED \u2192 WIN/GAME_OVER
+// All screen transitions, HUD, and button wiring are already done.
+//
+// Your job as the ${safeGenre} developer agent:
+//   1. updateFrame(dt)   \u2014 physics, AI, collision detection, win/lose logic
+//   2. renderFrame()     \u2014 Canvas 2D: tileset.svg bg, entity sprites, particles, effects
+//   3. wireControls()   \u2014 genre-appropriate keyboard / mouse / touch handlers
+//   4. startGame()init  \u2014 spawn initial entities, reset game world
+//
+// SVG assets ready to use (in same folder as index.html):
+//   player-sprite.svg   \u2014 player character (also shown in HUD)
+//   enemy-sprite.svg    \u2014 enemy / obstacle sprites
+//   tileset.svg         \u2014 world background / floor tiles
+//   ui-icon-set.svg     \u2014 item / pickup icons
+//   promo-keyart.svg    \u2014 already used on splash + win screens (no action needed)
+//
+// Triggers (call when condition met):
+//   triggerWin()        \u2014 player wins
+//   triggerGameOver()   \u2014 all lives lost
+// \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 (function () {
-  const container = document.getElementById('game-container');
-  const status = document.getElementById('status');
-  const restart = document.getElementById('restartBtn');
+  'use strict';
 
-  function init() {
-    if (container) {
-      container.textContent = 'Agents are building ${safeTitle}\u2026';
-    }
-    if (status) status.textContent = 'Scaffold � agents will implement the game';
+  // \u2500 STATE MACHINE \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  var S = { SPLASH: 'splash', TITLE: 'title', PLAYING: 'playing', PAUSED: 'paused', WIN: 'win', GAME_OVER: 'game_over' };
+  var state = S.SPLASH;
+  var score = 0;
+  var lives = 3;
+  var level = 1;
+  var animId = null;
+  var lastTs = 0;
+
+  // \u2500 CANVAS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  var canvas = document.getElementById('game-canvas');
+  var ctx = canvas ? canvas.getContext('2d') : null;
+
+  function resizeCanvas() {
+    if (!canvas) return;
+    var wrap = document.getElementById('canvas-container');
+    canvas.width  = wrap ? Math.min(wrap.clientWidth,  960) : Math.min(window.innerWidth,  960);
+    canvas.height = wrap ? Math.min(wrap.clientHeight - 8, 600) : Math.min(window.innerHeight - 52, 600);
   }
 
-  restart && restart.addEventListener('click', init);
-  init();
+  // \u2500 SCREEN ROUTING \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  var ALL_SCREENS = ['splash', 'title-menu', 'hud', 'canvas-container', 'pause-menu', 'game-over', 'win-screen'];
+  function showOnly() {
+    var ids = Array.prototype.slice.call(arguments);
+    ALL_SCREENS.forEach(function (id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      if (ids.indexOf(id) >= 0) { el.classList.remove('hidden'); } else { el.classList.add('hidden'); }
+    });
+  }
+
+  // \u2500 GAME LOOP \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function loop(ts) {
+    var dt = Math.min((ts - lastTs) / 1000, 0.05);
+    lastTs = ts;
+    if (state === S.PLAYING) { updateFrame(dt); renderFrame(); }
+    animId = requestAnimationFrame(loop);
+  }
+  function startLoop() { if (!animId) { lastTs = performance.now(); animId = requestAnimationFrame(loop); } }
+  function stopLoop()  { if (animId) { cancelAnimationFrame(animId); animId = null; } }
+
+  // \u2500 IMPLEMENT THESE \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function updateFrame(dt) {
+    // AGENTS: ${safeGenre} physics, AI, collision detection, scoring, win/lose checks
+    // Update entity positions, velocities, states based on dt (seconds since last frame)
+    // Increment score, decrement lives, update level as needed
+    // Call triggerWin() on win condition; triggerGameOver() when lives <= 0
+    void dt;
+    updateHud();
+  }
+
+  function renderFrame() {
+    if (!ctx || !canvas) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // AGENTS: implement full ${safeGenre} renderer \u2014 draw order:
+    //   1. Background / tileset  \u2014 drawImage(tilesetImg, 0, 0, canvas.width, canvas.height)
+    //   2. Pickups / items       \u2014 drawImage(uiIconImg, ...) per item
+    //   3. Enemies               \u2014 drawImage(enemyImg, ...) per enemy
+    //   4. Player                \u2014 drawImage(playerImg, ...) at player position
+    //   5. Particles / effects   \u2014 ctx.fillStyle + ctx.fillRect/arc for hits, sparks
+    ctx.fillStyle = '#070d1a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#334155';
+    ctx.font = '500 14px "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('${safeTitle} \u2014 agents: implement renderFrame() for ${safeGenre}', canvas.width / 2, canvas.height / 2 - 12);
+    ctx.fillStyle = '#475569';
+    ctx.font = '12px "Segoe UI", sans-serif';
+    ctx.fillText('Score: ' + score + '  \u2502  Lives: ' + lives + '  \u2502  Level: ' + level, canvas.width / 2, canvas.height / 2 + 16);
+  }
+
+  function wireControls() {
+    // AGENTS: wire genre-appropriate controls for ${safeGenre}
+    // Keyboard, mouse, and touch handlers \u2014 call onKeyDown / onCanvasClick / onCanvasTouch
+    document.addEventListener('keydown', onKeyDown);
+    if (canvas) {
+      canvas.addEventListener('click', onCanvasClick);
+      canvas.addEventListener('touchstart', onCanvasTouch, { passive: true });
+    }
+  }
+
+  function onKeyDown(e) {
+    if (e.code === 'Escape' || e.code === 'KeyP') { togglePause(); return; }
+    if (state !== S.PLAYING) return;
+    // AGENTS: handle ${safeGenre} keydown events here
+  }
+
+  function onCanvasClick(e) {
+    if (state !== S.PLAYING) return;
+    var r = canvas.getBoundingClientRect();
+    var x = (e.clientX - r.left) * (canvas.width  / r.width);
+    var y = (e.clientY - r.top)  * (canvas.height / r.height);
+    // AGENTS: handle click/tap at (x, y) for ${safeGenre} mechanics
+    void x; void y;
+  }
+
+  function onCanvasTouch(e) {
+    if (state !== S.PLAYING || !e.touches[0]) return;
+    var t = e.touches[0];
+    var r = canvas.getBoundingClientRect();
+    var x = (t.clientX - r.left) * (canvas.width  / r.width);
+    var y = (t.clientY - r.top)  * (canvas.height / r.height);
+    // AGENTS: handle touch at (x, y) for ${safeGenre} mechanics
+    void x; void y;
+  }
+
+  // \u2500 HUD UPDATE \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function updateHud() {
+    var el;
+    el = document.getElementById('hud-score'); if (el) el.textContent = 'Score: ' + score.toLocaleString();
+    el = document.getElementById('hud-lives'); if (el) el.textContent = ('\u2665 ').repeat(Math.max(0, lives)).trim() || '\u2620';
+    el = document.getElementById('hud-level'); if (el) el.textContent = 'Level ' + level;
+  }
+
+  // \u2500 TRANSITIONS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function startGame() {
+    score = 0; lives = 3; level = 1;
+    state = S.PLAYING;
+    resizeCanvas();
+    updateHud();
+    showOnly('hud', 'canvas-container');
+    startLoop();
+    // AGENTS: initialize entities, player position, first wave/level here
+  }
+
+  function togglePause() {
+    if (state === S.PLAYING) {
+      state = S.PAUSED;
+      showOnly('hud', 'canvas-container', 'pause-menu');
+    } else if (state === S.PAUSED) {
+      state = S.PLAYING;
+      lastTs = performance.now();
+      showOnly('hud', 'canvas-container');
+    }
+  }
+
+  function triggerGameOver() {
+    state = S.GAME_OVER;
+    var el = document.getElementById('final-score');
+    if (el) el.textContent = 'Score: ' + score.toLocaleString();
+    showOnly('game-over');
+  }
+
+  function triggerWin() {
+    state = S.WIN;
+    var el = document.getElementById('win-score');
+    if (el) el.textContent = 'Score: ' + score.toLocaleString();
+    showOnly('win-screen');
+  }
+
+  // \u2500 BUTTON WIRING \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function wire(id, fn) { var el = document.getElementById(id); if (el) el.addEventListener('click', fn); }
+
+  function wireSplash()   { wire('splash-start', function () { state = S.TITLE; showOnly('title-menu'); }); }
+  function wireMenu()     { wire('menu-play', startGame); wire('menu-settings', function () { /* AGENTS: open settings panel */ }); }
+  function wirePause()    {
+    wire('pause-btn', togglePause);
+    wire('resume-btn', togglePause);
+    wire('quit-btn', function () { stopLoop(); state = S.TITLE; showOnly('title-menu'); });
+  }
+  function wireGameOver() {
+    wire('retry-btn',   function () { stopLoop(); animId = null; startGame(); });
+    wire('go-to-menu',  function () { stopLoop(); state = S.TITLE; showOnly('title-menu'); });
+  }
+  function wireWin()      {
+    wire('win-retry',   function () { stopLoop(); animId = null; startGame(); });
+    wire('win-menu',    function () { stopLoop(); state = S.TITLE; showOnly('title-menu'); });
+  }
+
+  // \u2500 INIT \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function init() {
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+    wireSplash();
+    wireMenu();
+    wirePause();
+    wireGameOver();
+    wireWin();
+    wireControls();
+    showOnly('splash');
+    startLoop();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
 }());
 `,
     readme: `# ${safeTitle}
 
-Generated by HiveForge � Game Studio template.
+Generated by HiveForge \u2014 Game Studio template.
 
 **Genre**: ${safeGenre}
 **Goal**: ${safeGoal}
@@ -4315,13 +4634,22 @@ Generated by HiveForge � Game Studio template.
 
 Open \`index.html\` in a browser or serve this folder with any static file server.
 
-## Status
+## Asset files
 
-Scaffold placeholder � HiveForge agents will implement the full game.
+- \`player-sprite.svg\` \u2014 player character
+- \`enemy-sprite.svg\` \u2014 enemy sprites
+- \`tileset.svg\` \u2014 world tileset / background
+- \`ui-icon-set.svg\` \u2014 item / pickup icons
+- \`promo-keyart.svg\` \u2014 promotional key art (splash + win screens)
+
+## Agent implementation targets
+
+1. \`game.js\` \u2014 \`updateFrame(dt)\`, \`renderFrame()\`, \`wireControls()\`
+2. \`style.css\` \u2014 visual polish, animations, responsive layout
+3. \`index.html\` \u2014 update controls list in \`#title-menu\` for genre
 `,
   };
 }
-
 function templateArtifactContract(templateId) {
   const key = String(templateId || '').toLowerCase();
   const map = {

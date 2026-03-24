@@ -15,7 +15,7 @@
                                    "alias":  "Senior Project Manager",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/project-management/project-manager-senior.md"
+                                                                    "agency-agents/project-management/project-manager-senior.md"
                                                                 ]
                                },
                                {
@@ -23,7 +23,7 @@
                                    "alias":  "Content Creator",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/marketing/marketing-content-creator.md"
+                                                                    "agency-agents/marketing/marketing-content-creator.md"
                                                                 ]
                                },
                                {
@@ -31,7 +31,7 @@
                                    "alias":  "Trend Researcher",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/product/product-trend-researcher.md"
+                                                                    "agency-agents/product/product-trend-researcher.md"
                                                                 ]
                                },
                                {
@@ -39,7 +39,7 @@
                                    "alias":  "Reality Checker",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/testing/testing-reality-checker.md"
+                                                                    "agency-agents/testing/testing-reality-checker.md"
                                                                 ]
                                },
                                {
@@ -47,7 +47,7 @@
                                    "alias":  "Visual Storyteller",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/design/design-visual-storyteller.md"
+                                                                    "agency-agents/design/design-visual-storyteller.md"
                                                                 ]
                                },
                                {
@@ -55,7 +55,7 @@
                                    "alias":  "Growth Hacker",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/marketing/marketing-growth-hacker.md"
+                                                                    "agency-agents/marketing/marketing-growth-hacker.md"
                                                                 ]
                                }
                            ],

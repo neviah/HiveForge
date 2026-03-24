@@ -15,7 +15,7 @@
                                    "alias":  "Content Creator",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/marketing/marketing-content-creator.md"
+                                                                    "agency-agents/marketing/marketing-content-creator.md"
                                                                 ]
                                },
                                {
@@ -23,7 +23,7 @@
                                    "alias":  "Reality Checker",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/testing/testing-reality-checker.md"
+                                                                    "agency-agents/testing/testing-reality-checker.md"
                                                                 ]
                                },
                                {
@@ -31,14 +31,14 @@
                                    "alias":  "Image Prompt Engineer",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/design/design-image-prompt-engineer.md"
+                                                                    "agency-agents/design/design-image-prompt-engineer.md"
                                                                 ]
                                },
                                {
                                    "role":  "SEO Specialist",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/marketing/marketing-seo-specialist.md"
+                                                                    "agency-agents/marketing/marketing-seo-specialist.md"
                                                                 ]
                                },
                                {
@@ -46,7 +46,7 @@
                                    "alias":  "Social Media Strategist",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/marketing/marketing-social-media-strategist.md"
+                                                                    "agency-agents/marketing/marketing-social-media-strategist.md"
                                                                 ]
                                }
                            ],

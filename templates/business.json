@@ -14,7 +14,7 @@
                                    "role":  "CEO",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/specialized/agents-orchestrator.md"
+                                                                    "agency-agents/specialized/agents-orchestrator.md"
                                                                 ]
                                },
                                {
@@ -22,7 +22,7 @@
                                    "alias":  "Senior Project Manager",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/project-management/project-manager-senior.md"
+                                                                    "agency-agents/project-management/project-manager-senior.md"
                                                                 ]
                                },
                                {
@@ -30,7 +30,7 @@
                                    "alias":  "Backend Architect",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/engineering/engineering-backend-architect.md"
+                                                                    "agency-agents/engineering/engineering-backend-architect.md"
                                                                 ]
                                },
                                {
@@ -38,7 +38,7 @@
                                    "alias":  "UI Designer",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/design/design-ui-designer.md"
+                                                                    "agency-agents/design/design-ui-designer.md"
                                                                 ]
                                },
                                {
@@ -46,8 +46,8 @@
                                    "alias":  "Growth Hacker + Content Creator",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/marketing/marketing-growth-hacker.md",
-                                                                    "../agency-agents/marketing/marketing-content-creator.md"
+                                                                    "agency-agents/marketing/marketing-growth-hacker.md",
+                                                                    "agency-agents/marketing/marketing-content-creator.md"
                                                                 ]
                                },
                                {
@@ -55,7 +55,7 @@
                                    "alias":  "Support Responder",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/support/support-support-responder.md"
+                                                                    "agency-agents/support/support-support-responder.md"
                                                                 ]
                                },
                                {
@@ -63,7 +63,7 @@
                                    "alias":  "Finance Tracker",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/support/support-finance-tracker.md"
+                                                                    "agency-agents/support/support-finance-tracker.md"
                                                                 ]
                                }
                            ],

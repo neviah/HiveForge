@@ -15,14 +15,14 @@
                                    "alias":  "Studio Producer",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/project-management/project-management-studio-producer.md"
+                                                                    "agency-agents/project-management/project-management-studio-producer.md"
                                                                 ]
                                },
                                {
                                    "role":  "Composer",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/game-development/game-audio-engineer.md"
+                                                                    "agency-agents/game-development/game-audio-engineer.md"
                                                                 ]
                                },
                                {
@@ -30,14 +30,14 @@
                                    "alias":  "Content Creator",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/marketing/marketing-content-creator.md"
+                                                                    "agency-agents/marketing/marketing-content-creator.md"
                                                                 ]
                                },
                                {
                                    "role":  "Mixing Engineer",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/game-development/game-audio-engineer.md"
+                                                                    "agency-agents/game-development/game-audio-engineer.md"
                                                                 ]
                                },
                                {
@@ -45,7 +45,7 @@
                                    "alias":  "Social Media Strategist",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/marketing/marketing-social-media-strategist.md"
+                                                                    "agency-agents/marketing/marketing-social-media-strategist.md"
                                                                 ]
                                },
                                {
@@ -53,7 +53,7 @@
                                    "alias":  "Image Prompt Engineer",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/design/design-image-prompt-engineer.md"
+                                                                    "agency-agents/design/design-image-prompt-engineer.md"
                                                                 ]
                                }
                            ],

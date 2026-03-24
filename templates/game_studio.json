@@ -15,14 +15,14 @@
                                    "alias":  "Studio Producer",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/project-management/project-management-studio-producer.md"
+                                                                    "agency-agents/project-management/project-management-studio-producer.md"
                                                                 ]
                                },
                                {
                                    "role":  "Game Designer",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/game-development/game-designer.md"
+                                                                    "agency-agents/game-development/game-designer.md"
                                                                 ]
                                },
                                {
@@ -30,7 +30,7 @@
                                    "alias":  "Backend Architect",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/engineering/engineering-backend-architect.md"
+                                                                    "agency-agents/engineering/engineering-backend-architect.md"
                                                                 ]
                                },
                                {
@@ -38,7 +38,7 @@
                                    "alias":  "UI Designer",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/design/design-ui-designer.md"
+                                                                    "agency-agents/design/design-ui-designer.md"
                                                                 ]
                                },
                                {
@@ -46,7 +46,7 @@
                                    "alias":  "Game Audio Engineer",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/game-development/game-audio-engineer.md"
+                                                                    "agency-agents/game-development/game-audio-engineer.md"
                                                                 ]
                                },
                                {
@@ -54,7 +54,7 @@
                                    "alias":  "Evidence Collector",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/testing/testing-evidence-collector.md"
+                                                                    "agency-agents/testing/testing-evidence-collector.md"
                                                                 ]
                                },
                                {
@@ -62,7 +62,7 @@
                                    "alias":  "Social Media Strategist",
                                    "required":  true,
                                    "personality_prompt_paths":  [
-                                                                    "../agency-agents/marketing/marketing-social-media-strategist.md"
+                                                                    "agency-agents/marketing/marketing-social-media-strategist.md"
                                                                 ]
                                }
                            ],
@@ -141,8 +141,16 @@
                                 "heartbeat_enabled":  true
                             },
                 "asset_strategy":  {
-                                       "bootstrap_mode":  "primitive_squares_and_shapes",
-                                       "human_art_handoff_required":  true,
+                                       "bootstrap_mode":  "ai_generated_svg_assets",
+                                       "all_assets_must_be_used_in_gameplay":  true,
+                                       "required_assets":  [
+                                           "player-sprite.svg",
+                                           "enemy-sprite.svg",
+                                           "tileset.svg",
+                                           "ui-icon-set.svg",
+                                           "promo-keyart.svg"
+                                       ],
+                                       "human_art_handoff_required":  false,
                                        "handoff_directory":  "workspace/assets/final_art"
                                    },
                 "release_tracks":  [
@@ -169,29 +177,149 @@
                                          },
     "task_breakdown":  [
                            {
-                               "id":  "GAME-1",
-                                           "title":  "Define 2D web-first scope, single-player core loop, and optional P2P multiplayer assumptions",
-                               "phase":  "concept"
+                               "id": "GAME-1",
+                               "title": "Write Game Design Document (GDD) — genre, core loop, entities, scoring, win/lose conditions",
+                               "phase": "concept",
+                               "owner_role": "Game Designer",
+                               "required_outputs": [
+                                   "GDD.md in workspace root with genre, player goals, entity descriptions, scoring rules, win condition, game-over condition, and difficulty progression",
+                                   "List of all 5 required SVG assets with artistic brief for each",
+                                   "Genre-specific controls list (keyboard + mouse + touch) for the #controls-list in index.html"
+                               ]
                            },
                            {
-                               "id":  "GAME-2",
-                                           "title":  "Build vertical-slice prototype using placeholder squares/shapes UI and sprites",
-                               "phase":  "prototype"
+                               "id": "GAME-2",
+                               "title": "Generate all 5 SVG art assets: player-sprite, enemy-sprite, tileset, ui-icon-set, promo-keyart",
+                               "phase": "concept",
+                               "owner_role": "Artist",
+                               "required_outputs": [
+                                   "player-sprite.svg — playable character, minimum 1 idle pose, expressive silhouette",
+                                   "enemy-sprite.svg — enemy / obstacle that fits the genre and opposes the player",
+                                   "tileset.svg — world background or floor tile sheet usable as a CSS/canvas background",
+                                   "ui-icon-set.svg — icon sprites for pickups, power-ups, or inventory items",
+                                   "promo-keyart.svg — cinematic key art (16:9, min 800x450 viewBox) combining all major characters for splash and win screens"
+                               ]
                            },
                            {
-                               "id":  "GAME-3",
-                                           "title":  "Automate Netlify test deploy lane and telemetry smoke checks",
-                               "phase":  "production"
+                               "id": "GAME-3",
+                               "title": "Implement splash screen using promo-keyart.svg, genre tag, and animated Start button",
+                               "phase": "prototype",
+                               "owner_role": "Developer",
+                               "required_outputs": [
+                                   "#splash overlay fully styled and wired: keyart visible, game-title gradient text, genre-tag, cta-pulse button transitions to title menu",
+                                   "promo-keyart.svg displayed at correct aspect ratio with fallback on onerror",
+                                   "CSS cta-pulse animation verified in browser"
+                               ]
                            },
                            {
-                               "id":  "GAME-4",
-                                           "title":  "Integrate human-delivered art/audio assets and execute QA matrix",
-                               "phase":  "qa"
+                               "id": "GAME-4",
+                               "title": "Implement title menu with genre-specific controls list and Play / Settings buttons",
+                               "phase": "prototype",
+                               "owner_role": "Developer",
+                               "required_outputs": [
+                                   "#title-menu overlay: #controls-list populated with actual genre controls from GDD",
+                                   "#menu-play button starts the game loop",
+                                   "#menu-settings stub logs 'settings TODO' (full settings optional stretch goal)"
+                               ]
                            },
                            {
-                               "id":  "GAME-5",
-                                           "title":  "Ship release lanes for itch.io web build and Steam desktop packaging",
-                               "phase":  "release"
+                               "id": "GAME-5",
+                               "title": "Implement full core game loop: updateFrame(), renderFrame(), entity system, collision detection",
+                               "phase": "production",
+                               "owner_role": "Developer",
+                               "required_outputs": [
+                                   "updateFrame(dt): physics, entity movement, AI, collision detection, score increment, lives decrement",
+                                   "renderFrame(): Canvas 2D draws tileset.svg as background, enemy-sprite.svg per enemy, player-sprite.svg at player position, ui-icon-set.svg per pickup",
+                                   "wireControls(): keyboard + mouse/touch handlers matching GDD controls list",
+                                   "triggerWin() and triggerGameOver() called on correct conditions"
+                               ]
+                           },
+                           {
+                               "id": "GAME-6",
+                               "title": "Implement HUD: live score, lives hearts, level indicator, player-sprite.svg avatar",
+                               "phase": "production",
+                               "owner_role": "Developer",
+                               "required_outputs": [
+                                   "#hud-score updates every frame via updateHud()",
+                                   "#hud-lives shows heart glyphs equal to remaining lives (shows skull at 0)",
+                                   "#hud-level shows current level number",
+                                   ".hud-avatar displays player-sprite.svg with onerror fallback"
+                               ]
+                           },
+                           {
+                               "id": "GAME-7",
+                               "title": "Implement pause menu, game-over screen, and win screen with final scores",
+                               "phase": "production",
+                               "owner_role": "Developer",
+                               "required_outputs": [
+                                   "Esc/P key and #pause-btn toggle pause state correctly via togglePause()",
+                                   "#resume-btn returns to PLAYING state",
+                                   "#quit-btn returns to title menu and stops loop",
+                                   "#game-over shows #final-score; #retry-btn restarts; #go-to-menu returns to title",
+                                   "#win-screen shows #win-score and promo-keyart.svg; both buttons functional"
+                               ]
+                           },
+                           {
+                               "id": "GAME-8",
+                               "title": "Implement progression system: multi-level difficulty scaling, enemy waves, scoring bonuses",
+                               "phase": "production",
+                               "owner_role": "Game Designer",
+                               "required_outputs": [
+                                   "At least 3 levels with increasing difficulty (more enemies, faster speed, or new patterns per GDD)",
+                                   "Level-up trigger: clear wave, reach score threshold, or time-based — must match GDD",
+                                   "#hud-level increments correctly on level-up",
+                                   "Win condition fires only after final level is cleared"
+                               ]
+                           },
+                           {
+                               "id": "GAME-9",
+                               "title": "Integrate all 5 SVG assets into gameplay: verify tileset background, enemy sprites, player sprite, pickup icons",
+                               "phase": "production",
+                               "owner_role": "Developer",
+                               "required_outputs": [
+                                   "tileset.svg used as Canvas drawImage background every renderFrame()",
+                                   "enemy-sprite.svg drawn at each enemy entity position",
+                                   "player-sprite.svg drawn at player position (distinct from HUD avatar)",
+                                   "ui-icon-set.svg drawn at each pickup/item position",
+                                   "promo-keyart.svg visible on splash screen and win screen (already wired in scaffold)"
+                               ]
+                           },
+                           {
+                               "id": "GAME-10",
+                               "title": "Add Web Audio API sound effects and music loop",
+                               "phase": "production",
+                               "owner_role": "Sound Designer",
+                               "required_outputs": [
+                                   "AudioContext created on first user gesture to comply with browser autoplay policy",
+                                   "At minimum: jump/action sound, hit/damage sound, score pickup sound, game-over sound, win fanfare",
+                                   "Background music loop (OscillatorNode or AudioBuffer) that starts on Play and stops on game-over/win",
+                                   "All audio gracefully silent if AudioContext is unavailable"
+                               ]
+                           },
+                           {
+                               "id": "GAME-11",
+                               "title": "QA pass: visual polish, animation, damage flash, win particles, mobile responsiveness",
+                               "phase": "qa",
+                               "owner_role": "QA",
+                               "required_outputs": [
+                                   "Player damage flash (red overlay or sprite flash for ~200ms)",
+                                   "Win screen particle burst or keyart glow animation",
+                                   "Canvas resizes correctly on window resize for 360px–1920px viewports",
+                                   "All buttons reachable and functional on mobile touch (min tap target 44px)",
+                                   "No uncaught JS exceptions in browser console during full playthrough"
+                               ]
+                           },
+                           {
+                               "id": "GAME-12",
+                               "title": "Automate Netlify deploy lane, produce itch.io zip, and package Steam Electron/Tauri build",
+                               "phase": "release",
+                               "owner_role": "Backend Architect",
+                               "required_outputs": [
+                                   "Netlify deploy triggered and smoke-check passed (HTTP 200 on index.html)",
+                                   "itch.io zip bundle: index.html + style.css + game.js + all 5 SVG assets",
+                                   "Steam desktop wrapper: Electron or Tauri project wrapping the web build, signed and ready for upload",
+                                   "RELEASE_NOTES.md committed with version, changelog, and asset credits"
+                               ]
                            }
                        ],
     "readiness_checklist": [
@@ -227,21 +355,18 @@
         }
     ],
     "dependency_graph":  {
-                             "GAME-1":  [
-
-                                        ],
-                             "GAME-2":  [
-                                            "GAME-1"
-                                        ],
-                             "GAME-3":  [
-                                            "GAME-2"
-                                        ],
-                             "GAME-4":  [
-                                            "GAME-3"
-                                        ],
-                             "GAME-5":  [
-                                            "GAME-4"
-                                        ]
+                             "GAME-1":  [],
+                             "GAME-2":  ["GAME-1"],
+                             "GAME-3":  ["GAME-2"],
+                             "GAME-4":  ["GAME-2"],
+                             "GAME-5":  ["GAME-1", "GAME-2", "GAME-3", "GAME-4"],
+                             "GAME-6":  ["GAME-5"],
+                             "GAME-7":  ["GAME-5"],
+                             "GAME-8":  ["GAME-5"],
+                             "GAME-9":  ["GAME-2", "GAME-5"],
+                             "GAME-10": ["GAME-5"],
+                             "GAME-11": ["GAME-6", "GAME-7", "GAME-8", "GAME-9", "GAME-10"],
+                             "GAME-12": ["GAME-11"]
                          }
 }
 
