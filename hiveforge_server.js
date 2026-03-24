@@ -7992,6 +7992,7 @@ function nextRunnableTask(projectState) {
   const done = projectDoneTaskIds(projectState);
   return projectState.tasks.find((task) => {
     if (task.status !== 'backlog') return false;
+    if (task.autoAction && task.autoAction.type === 'connector') return false;
     const deps = Array.isArray(task.dependencies) ? task.dependencies : [];
     return deps.every((depId) => done.has(depId));
   }) || null;
