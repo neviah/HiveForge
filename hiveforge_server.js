@@ -9030,10 +9030,12 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
 
   const worker = runtime.state.agents.find((a) => a.id === task.assignee);
   let effectiveExitCode = exitCode;
+  let failureReason = `exit_code_${exitCode}`;
   if (effectiveExitCode === 0) {
     const artifactCheck = validateTemplateTaskArtifacts(runtime.state, task);
     if (!artifactCheck.ok) {
       effectiveExitCode = 2;
+      failureReason = artifactCheck.reason || 'task_output_validation_failed';
       appendProjectLog(runtime.state, 'warning', {
         kind: 'task_output_validation_failed',
         taskId: task.id,
@@ -9101,7 +9103,10 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
       return;
     }
   } else {
-    requeueTaskToBacklog(task, `exit_code_${effectiveExitCode}`, true);
+    if (effectiveExitCode !== 2) {
+      failureReason = `exit_code_${effectiveExitCode}`;
+    }
+    requeueTaskToBacklog(task, failureReason, true);
     runtime.state.heartbeat.autoFixCount = (runtime.state.heartbeat.autoFixCount || 0) + 1;
 
     if (worker) {
@@ -9290,6 +9295,21 @@ function startProjectTaskExecution(projectState, task, assignee) {
     task.description ? `Task Description:\n${task.description.replace(/\{projectId\}/g, projectState.id)}` : '',
     personalityPrompt ? `Agent Personality Guidance:\n${personalityPrompt}` : '',
     workspaceContext,
+    task.lastError
+      ? [
+        'Previous attempt failed. Fix this issue before ending with TASK_DONE:',
+        `  ${task.lastError}`,
+        ...(String(task.lastError).includes('gameplay_loop_incomplete')
+          ? [
+            'For gameplay_loop_incomplete errors, include these exact elements in game.js:',
+            '  - requestAnimationFrame(...) main loop scheduler',
+            '  - updateFrame(...) function called by the loop',
+            '  - renderFrame(...) function called by the loop',
+            '  - explicit win + game over conditions and a restart path',
+          ]
+          : []),
+      ].join('\n')
+      : '',
     'Execute the task and provide concrete output artifacts or decisions. End with TASK_DONE when complete.'
   ].filter(Boolean).join('\n\n');
 
