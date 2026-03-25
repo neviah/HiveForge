@@ -532,6 +532,7 @@ const DEFAULT_ROLE_CAPABILITIES = {
 const OPTIONAL_AGENT_PERSONALITY_PATHS = {
   'Security Engineer': ['agency-agents/engineering/engineering-security-engineer.md'],
   'Reality Checker': ['agency-agents/testing/testing-reality-checker.md'],
+  'QA Validator': ['agency-agents/testing/testing-reality-checker.md'],
   'PPC Campaign Strategist': ['agency-agents/marketing/marketing-ppc-campaign-strategist.md'],
   'Brand Guardian': ['agency-agents/marketing/marketing-brand-guardian.md'],
   'Legal Compliance Checker': ['agency-agents/support/support-legal-compliance-checker.md'],
@@ -6280,6 +6281,30 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       ].join('\n'),
     });
     addTask({
+      title: '[QA GATE] Validate game loop: requestAnimationFrame, update, render, win/lose, restart',
+      phase: 'product_build',
+      requiredRole: 'QA Validator',
+      description: [
+        `Strict validation gate for: "${goalText}".`,
+        '',
+        'This is a BLOCKING GATE. Do NOT proceed to CSS until all checks pass.',
+        '',
+        'ACTION: Read game.js and confirm these exact elements exist:',
+        '  1. requestAnimationFrame(...) or setInterval(...) main loop scheduler',
+        '  2. updateFrame(dt) function definition (updates state, collision, scoring)',
+        '  3. renderFrame() function definition (draws canvas with entities)',
+        '  4. Explicit win condition check and triggerWin() call',
+        '  5. Explicit game-over condition check and triggerGameOver() call',
+        '  6. restart/startGame path that resets world state and returns to PLAYING',
+        '',
+        'If ANY element is missing or commented out:',
+        '  Immediately reject this task (exit 1) so a remediation subtask is created.',
+        '',
+        'If ALL elements are present and verified:',
+        '  End with TASK_DONE to unblock CSS and subsequent tasks.',
+      ].join('\n'),
+    });
+    addTask({
       title: 'Implement game CSS styles (style.css)',
       phase: 'product_build',
       requiredRole: 'UI Designer',
@@ -9138,6 +9163,65 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
       payload: { taskId: task.id, taskRunId, exitCode: effectiveExitCode },
     });
     emitProjectEvent(projectId, 'task_update', task);
+
+    // Auto-remediation: detect repeated failures and escalate to explicit fix task
+    if (effectiveExitCode === 2 && failureReason.includes('gameplay_loop_incomplete')) {
+      const failureCount = (task.failureStreak || 0) + 1;
+      task.failureStreak = failureCount;
+      if (failureCount >= 2) {
+        const remediationTaskId = `${task.id}-REMEDIATE`;
+        const existingRemediation = runtime.state.tasks.find((t) => t.id === remediationTaskId);
+        if (!existingRemediation) {
+          const remediationTask = {
+            id: remediationTaskId,
+            title: `[REMEDIATE] Fix gameplay loop in game.js`,
+            phase: 'product_build',
+            status: 'backlog',
+            assignee: null,
+            blockedBy: task.id,
+            dependencies: [task.id],
+            requiredRole: 'Backend Architect',
+            executionState: 'queued',
+            retryCount: 0,
+            lastFailedAt: null,
+            lastError: null,
+            lastProgressAt: null,
+            executionTaskRunId: null,
+            inprogressCycles: 0,
+            pendingApproval: null,
+            autoActionNotBeforeAt: null,
+            deadLetteredAt: null,
+            createdAt: nowIso(),
+            completedAt: null,
+            startedAt: null,
+            failureStreak: 0,
+            description: [
+              `The game loop validation failed ${failureCount}x: ${failureReason}`,
+              '',
+              'EXPLICIT REQUIREMENTS (all five are mandatory):',
+              '  1. Main loop scheduler: requestAnimationFrame(...) or setInterval(...) that runs updateFrame/renderFrame every tick.',
+              '  2. updateFrame(dt) function that updates entity positions, collision checks, score/level/lives.',
+              '  3. renderFrame() function that draws canvas: tileset background → enemies → player → pickups.',
+              '  4. Win condition test and Game Over condition test; call triggerWin() or triggerGameOver() when met.',
+              '  5. Restart path: startGame() or equivalent that resets the world and returns to PLAYING state.',
+              '',
+              'Review current game.js structure first. Add only the missing stubs. End with TASK_DONE once all five are present.',
+            ].join('\n'),
+            assistanceRequestedAt: null,
+          };
+          runtime.state.tasks.push(remediationTask);
+          appendProjectLog(runtime.state, 'message', {
+            kind: 'remediation_task_created',
+            sourceTaskId: task.id,
+            failureReason,
+            failureCount,
+            remediationTaskId,
+          });
+        }
+      }
+    } else {
+      task.failureStreak = 0;
+    }
 
     if (runtime.state.heartbeat.autoFixCount >= settings.maxAutoFixes) {
       markProjectFailed(runtime.state);
