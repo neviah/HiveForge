@@ -30,6 +30,7 @@ const {
   readApprovalDecisionAudit,
   refreshWeeklyKpiPlan,
   shouldBlockMutatingConnectorInDraftMode,
+  shouldSkipConnectorPolicyFailureInDraft,
   isOperationalLoopSuspended,
   ensureOperationalLoopState,
   summarizeIdleBlockers,
@@ -171,6 +172,33 @@ test('draft mode blocks mutating connector actions only', () => {
   assert.equal(shouldBlockMutatingConnectorInDraftMode('draft', 'netlify', 'trigger_deploy'), true);
   assert.equal(shouldBlockMutatingConnectorInDraftMode('draft', 'analytics', 'get_profile'), false);
   assert.equal(shouldBlockMutatingConnectorInDraftMode('production', 'netlify', 'trigger_deploy'), false);
+});
+
+test('draft mode soft-skips connector policy failures for auto-actions', () => {
+  assert.equal(
+    shouldSkipConnectorPolicyFailureInDraft(
+      { mode: 'draft' },
+      { type: 'connector', connector: 'google_ads', operation: 'optimize_campaigns' },
+      { ok: false, reason: 'Credential google_ads is not connected.' },
+    ),
+    true,
+  );
+  assert.equal(
+    shouldSkipConnectorPolicyFailureInDraft(
+      { mode: 'production' },
+      { type: 'connector', connector: 'google_ads', operation: 'optimize_campaigns' },
+      { ok: false, reason: 'Credential google_ads is not connected.' },
+    ),
+    false,
+  );
+  assert.equal(
+    shouldSkipConnectorPolicyFailureInDraft(
+      { mode: 'draft' },
+      { type: 'connector', connector: 'google_ads', operation: 'optimize_campaigns' },
+      { ok: true, reason: 'ok' },
+    ),
+    false,
+  );
 });
 
 test('operational loop suspension clears after expiry', () => {

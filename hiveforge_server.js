@@ -998,6 +998,14 @@ function shouldBlockMutatingConnectorInDraftMode(mode, connectorId, operation) {
   return isMutatingConnectorOperation(connectorId, operation);
 }
 
+function shouldSkipConnectorPolicyFailureInDraft(projectState, action, policyResult) {
+  const modeKey = String(projectState && projectState.mode ? projectState.mode : '').trim().toLowerCase();
+  if (modeKey !== 'draft') return false;
+  if (!action || action.type !== 'connector') return false;
+  if (!policyResult || policyResult.ok) return false;
+  return true;
+}
+
 function connectorIdempotencyProfile(connectorId, operation) {
   const connector = String(connectorId || '').trim().toLowerCase();
   const operationKey = String(operation || '').trim().toLowerCase();
@@ -8327,6 +8335,33 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
     operation: action.operation,
   }).then(async (policyResult) => {
     if (!policyResult.ok) {
+      if (shouldSkipConnectorPolicyFailureInDraft(projectState, action, policyResult)) {
+        finalizeAutoActionTask(projectState, task, true, `Skipped ${action.connector}:${action.operation} in draft mode because connector readiness is incomplete.`, {
+          connector: action.connector,
+          operation: action.operation,
+          source,
+          skipped: true,
+          skippedReason: 'draft_connector_policy_unavailable',
+          policyReason: policyResult.reason,
+          checks: policyResult.checks,
+          executionKey,
+        });
+        markConnectorExecutionRecord(projectState, executionKey, {
+          status: 'succeeded',
+          message: `Skipped in draft mode: ${policyResult.reason || 'connector readiness incomplete'}`,
+          completedAt: nowIso(),
+          actualCost: 0,
+          result: {
+            skipped: true,
+            skippedReason: 'draft_connector_policy_unavailable',
+            policyReason: policyResult.reason || null,
+            checks: policyResult.checks || [],
+          },
+        });
+        persistProjectState(projectState);
+        return;
+      }
+
       const needsPermission = Boolean(action.requiresPermission);
       if (needsPermission) {
         await notifyOperator(projectState, `Permission needed for ${action.connector}:${action.operation}`, {
@@ -17759,6 +17794,7 @@ module.exports = {
   connectorMutationExecutionKey,
   isMutatingConnectorOperation,
   shouldBlockMutatingConnectorInDraftMode,
+  shouldSkipConnectorPolicyFailureInDraft,
   connectorIdempotencyMode,
   shouldReconcileConnectorExecution,
   reconcileConnectorExecution,
