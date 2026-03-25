@@ -36,6 +36,7 @@ const {
   summarizeIdleBlockers,
   makeAnalyticsSnapshot,
   shouldEscalateGameplayRemediation,
+  shouldEscalateGenericTaskRemediation,
   ensureCredentialStorage,
   upsertProjectCredentialPolicy,
   recordCredentialSpend,
@@ -290,6 +291,25 @@ test('gameplay remediation escalation remains scoped to game_studio game.js task
 
   assert.equal(shouldEscalateWrongTemplate, false);
   assert.equal(shouldEscalateWrongTask, false);
+});
+
+test('generic remediation escalation triggers for repeated non-remediation failures', () => {
+  assert.equal(
+    shouldEscalateGenericTaskRemediation({ id: 'GOAL-5' }, 1, 2),
+    true,
+  );
+  assert.equal(
+    shouldEscalateGenericTaskRemediation({ id: 'GOAL-5' }, 0, 2),
+    false,
+  );
+  assert.equal(
+    shouldEscalateGenericTaskRemediation({ id: 'GOAL-5-REMEDIATE' }, 1, 3),
+    false,
+  );
+  assert.equal(
+    shouldEscalateGenericTaskRemediation({ id: 'GOAL-5' }, 1, 1),
+    false,
+  );
 });
 
 test('publication incident dashboard tracks mttr, runbook hotspots, and cooldown trends', () => {

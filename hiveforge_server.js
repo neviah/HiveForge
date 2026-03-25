@@ -7512,6 +7512,14 @@ function shouldEscalateGameplayRemediation(projectState, task, effectiveExitCode
   return effectiveExitCode !== 0;
 }
 
+function shouldEscalateGenericTaskRemediation(task, effectiveExitCode, failureCount) {
+  if (failureCount < 2) return false;
+  if (effectiveExitCode === 0) return false;
+  const taskId = String(task && task.id ? task.id : '');
+  if (taskId.endsWith('-REMEDIATE')) return false;
+  return true;
+}
+
 function summarizeProjectAutomation(projectState) {
   ensureRecurringState(projectState);
   ensureDeadLetterState(projectState);
@@ -9431,7 +9439,8 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
     });
     emitProjectEvent(projectId, 'task_update', task);
 
-    // Auto-remediation: escalate repeated game.js failures (validation or runtime) into an explicit fix task.
+    // Auto-remediation: escalate repeated failures into explicit fix tasks before global auto-fix budget is exhausted.
+    let remediationCreated = false;
     if (shouldEscalateGameplayRemediation(runtime.state, task, effectiveExitCode, failureReason, failureCount)) {
       const remediationTaskId = `${task.id}-REMEDIATE`;
       const existingRemediation = runtime.state.tasks.find((t) => t.id === remediationTaskId);
@@ -9482,12 +9491,72 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
         task.blockedBy = remediationTaskId;
 
         countAgainstAutoFixBudget = false;
+        remediationCreated = true;
         appendProjectLog(runtime.state, 'message', {
           kind: 'remediation_task_created',
           sourceTaskId: task.id,
           failureReason,
           failureCount,
           remediationTaskId,
+        });
+      }
+    }
+
+    if (!remediationCreated && shouldEscalateGenericTaskRemediation(task, effectiveExitCode, failureCount)) {
+      const remediationTaskId = `${task.id}-REMEDIATE`;
+      const existingRemediation = runtime.state.tasks.find((t) => t.id === remediationTaskId);
+      if (!existingRemediation) {
+        const fallbackRole = worker && worker.role ? worker.role : 'Backend Architect';
+        const remediationTask = {
+          id: remediationTaskId,
+          title: `[REMEDIATE] Resolve repeated failure: ${task.title}`,
+          phase: task.phase || 'product_build',
+          status: 'backlog',
+          assignee: null,
+          blockedBy: null,
+          dependencies: [],
+          requiredRole: task.requiredRole || fallbackRole,
+          executionState: 'queued',
+          retryCount: 0,
+          lastFailedAt: null,
+          lastError: null,
+          lastProgressAt: null,
+          executionTaskRunId: null,
+          inprogressCycles: 0,
+          pendingApproval: null,
+          autoActionNotBeforeAt: null,
+          deadLetteredAt: null,
+          createdAt: nowIso(),
+          completedAt: null,
+          startedAt: null,
+          failureStreak: 0,
+          description: [
+            `Task ${task.id} failed ${failureCount} times with reason: ${failureReason}`,
+            '',
+            'Remediation requirements:',
+            `  1. Read the current artifacts and task brief for "${task.title}".`,
+            '  2. Identify the concrete failing step and implement only the missing/corrective changes.',
+            '  3. Produce the required output artifacts and verify they are non-scaffold quality.',
+            '  4. End with TASK_DONE only when this specific task can pass without requeue.',
+          ].join('\n'),
+          assistanceRequestedAt: null,
+        };
+        runtime.state.tasks.push(remediationTask);
+
+        const taskDeps = Array.isArray(task.dependencies) ? task.dependencies.filter(Boolean) : [];
+        if (!taskDeps.includes(remediationTaskId)) {
+          task.dependencies = [...taskDeps, remediationTaskId];
+        }
+        task.blockedBy = remediationTaskId;
+
+        countAgainstAutoFixBudget = false;
+        appendProjectLog(runtime.state, 'message', {
+          kind: 'remediation_task_created',
+          sourceTaskId: task.id,
+          failureReason,
+          failureCount,
+          remediationTaskId,
+          strategy: 'generic_repeated_failure',
         });
       }
     }
@@ -17817,6 +17886,7 @@ module.exports = {
   isOperationalLoopSuspended,
   makeAnalyticsSnapshot,
   shouldEscalateGameplayRemediation,
+  shouldEscalateGenericTaskRemediation,
   runProjectHeartbeat,
   evaluateProductionPreflight,
   ensureMessageBus,
