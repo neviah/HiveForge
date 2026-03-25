@@ -9074,6 +9074,25 @@ function startProjectTaskExecution(projectState, task, assignee) {
 
   if (templateId === 'game_studio') {
     const sandboxGamePath = `${sandboxRoot}/game`;
+
+    // Inject actual generated SVG asset paths so agents can reference them directly
+    const assetManifestPath = path.join(projectWorkspaceDir(projectState.id), 'docs', 'generated_image_assets.json');
+    const assetLines = [];
+    try {
+      const assetManifest = JSON.parse(fs.readFileSync(assetManifestPath, 'utf-8'));
+      const items = Array.isArray(assetManifest.items) ? assetManifest.items : [];
+      if (items.length) {
+        assetLines.push('  Generated SVG assets — ALL must be used in gameplay (canvas drawImage or <img src>):');
+        items.forEach((item) => {
+          const rel = String(item.injectedPath || '').replace(/\\/g, '/');
+          // injectedPath is relative to project workspace root, e.g. "game/assets/generated/player-sprite.svg"
+          // From inside the game/ folder the src path strips the "game/" prefix
+          const srcRef = rel.startsWith('game/') ? rel.slice(5) : rel;
+          assetLines.push(`    ${item.key}: use src="${srcRef}" (full sandbox path: ${sandboxGamePath}/${srcRef.replace(/^\//, '')})`);
+        });
+      }
+    } catch (_e) { /* manifest not yet written — asset generation task hasn't run */ }
+
     workspaceContext = [
       '',
       'WORKSPACE CONTEXT - Game Studio:',
@@ -9082,13 +9101,39 @@ function startProjectTaskExecution(projectState, task, assignee) {
       `    ${sandboxGamePath}/index.html`,
       `    ${sandboxGamePath}/game.js`,
       `    ${sandboxGamePath}/style.css`,
-      '  Image generation is available through connector: image_generator (internal runtime).',
-      '  Prefer template-aware asset packs (player/enemy sprites, tileset, UI icon set, key art) with reproducible seeds and metadata.',
-      `  Generated image style profile: ${sandboxRoot}/docs/image_style_profile.json`,
+      '',
+      '  *** CRITICAL SCAFFOLD RULE — READ BEFORE WRITING ANY FILE ***',
+      '  index.html already contains the COMPLETE HTML shell:',
+      '    #splash overlay (promo-keyart.svg hero + animated Start button)',
+      '    #title-menu overlay (controls list + Play button)',
+      '    #hud bar (avatar, score, lives, level, pause button)',
+      '    #canvas-container with <canvas id="game-canvas">',
+      '    #pause-menu, #game-over, #win-screen overlays',
+      '  DO NOT rewrite index.html from scratch. PRESERVE this structure.',
+      '  Only update the <ul id="controls-list"> entries with genre-specific controls.',
+      '',
+      '  game.js scaffold already has the state machine (SPLASH/TITLE/PLAYING/PAUSED/WIN/GAME_OVER),',
+      '  requestAnimationFrame loop, screen routing, HUD update, and all button wiring.',
+      '  Implement ONLY these stub functions — do not touch anything else:',
+      '    updateFrame(dt)   — physics, AI, collision detection, scoring, win/lose logic',
+      '    renderFrame()     — Canvas 2D: draw tileset → enemies → player → pickups → effects',
+      '    wireControls()    — keyboard/mouse/touch handlers for this genre',
+      '    startGame() body  — spawn initial entities and reset world state',
+      '  Call triggerWin() when the player wins. Call triggerGameOver() when lives reach 0.',
+      '',
+      '  style.css — extend the scaffold design system, do NOT remove scaffold layout rules:',
+      '    Customize CSS custom properties (--accent, --accent2, etc.) for this genre.',
+      '    Add genre-specific animations, tile patterns, character effects.',
+      '    Never remove or redefine: .overlay, #hud, #canvas-container, .btn-primary, .result-panel.',
+      '',
+      ...assetLines,
+      '',
+      '  Image generation connector: image_generator (internal runtime)',
       `  Generated assets manifest: ${sandboxRoot}/docs/generated_image_assets.json`,
+      `  Image style profile: ${sandboxRoot}/docs/image_style_profile.json`,
       '  Keep prompts policy-safe; prohibited prompt classes are automatically blocked by moderation checks.',
-      '  Existing files contain HIVEFORGE_SCAFFOLD_PLACEHOLDER; replace them with real implementation.',
-      '  Do NOT output HIVEFORGE_SCAFFOLD_PLACEHOLDER anywhere in your written files.',
+      '  Remove the HIVEFORGE_SCAFFOLD_PLACEHOLDER comment from any file you write.',
+      '  Do NOT output HIVEFORGE_SCAFFOLD_PLACEHOLDER in any written file.',
     ].join('\n');
   } else if (requiredArtifacts.length) {
     workspaceContext = [
