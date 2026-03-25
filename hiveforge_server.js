@@ -4378,7 +4378,7 @@ body { font-family: var(--font); background: var(--bg) url('./promo-keyart.svg')
 #hud { position: fixed; top: 0; left: 0; right: 0; z-index: 50; display: flex; align-items: center; justify-content: space-between; padding: 0.55rem 1.1rem; background: rgba(0,0,0,0.62); backdrop-filter: blur(4px); border-bottom: 1px solid rgba(255,255,255,0.08); }
 #hud.hidden { display: none; }
 .hud-left { display: flex; align-items: center; gap: 0.7rem; }
-.hud-avatar { width: 34px; height: 34px; object-fit: contain; }
+.hud-avatar { width: 34px; height: 34px; object-fit: contain; image-rendering: pixelated; flex: 0 0 34px; }
 .hud-stats { display: flex; flex-direction: column; gap: 0.05rem; font-size: 0.82rem; }
 #hud-score { color: var(--accent2); font-weight: 700; }
 #hud-lives { color: var(--danger); font-weight: 600; font-size: 0.95rem; letter-spacing: 0.1em; }
@@ -4438,10 +4438,13 @@ body { font-family: var(--font); background: var(--bg) url('./promo-keyart.svg')
   var level = 1;
   var animId = null;
   var lastTs = 0;
+  var keyState = Object.create(null);
 
   // \u2500 CANVAS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   var canvas = document.getElementById('game-canvas');
   var ctx = canvas ? canvas.getContext('2d') : null;
+  var playerSprite = new Image();
+  playerSprite.src = './assets/generated/player-sprite.svg';
 
   function resizeCanvas() {
     if (!canvas) return;
@@ -4484,6 +4487,25 @@ body { font-family: var(--font); background: var(--bg) url('./promo-keyart.svg')
     // Update entity positions, velocities, states based on dt (seconds since last frame)
     // Increment score, decrement lives, update level as needed
     // Call triggerWin() on win condition; triggerGameOver() when lives <= 0
+    var dx = 0;
+    var dy = 0;
+    if (keyState.KeyW || keyState.ArrowUp) dy -= 1;
+    if (keyState.KeyS || keyState.ArrowDown) dy += 1;
+    if (keyState.KeyA || keyState.ArrowLeft) dx -= 1;
+    if (keyState.KeyD || keyState.ArrowRight) dx += 1;
+    if (dx || dy) {
+      var len = Math.sqrt(dx * dx + dy * dy) || 1;
+      var speed = 180;
+      var minX = 24;
+      var minY = 24;
+      var maxX = canvas ? canvas.width - 24 : 936;
+      var maxY = canvas ? canvas.height - 24 : 576;
+      if (!window.__hfPlayer) window.__hfPlayer = { x: 96, y: 96 };
+      window.__hfPlayer.x += (dx / len) * speed * dt;
+      window.__hfPlayer.y += (dy / len) * speed * dt;
+      window.__hfPlayer.x = Math.max(minX, Math.min(window.__hfPlayer.x, maxX));
+      window.__hfPlayer.y = Math.max(minY, Math.min(window.__hfPlayer.y, maxY));
+    }
     void dt;
     updateHud();
   }
@@ -4499,19 +4521,28 @@ body { font-family: var(--font); background: var(--bg) url('./promo-keyart.svg')
     //   5. Particles / effects   \u2014 ctx.fillStyle + ctx.fillRect/arc for hits, sparks
     ctx.fillStyle = '#070d1a';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#334155';
-    ctx.font = '500 14px "Segoe UI", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('${safeTitle} \u2014 agents: implement renderFrame() for ${safeGenre}', canvas.width / 2, canvas.height / 2 - 12);
-    ctx.fillStyle = '#475569';
-    ctx.font = '12px "Segoe UI", sans-serif';
-    ctx.fillText('Score: ' + score + '  \u2502  Lives: ' + lives + '  \u2502  Level: ' + level, canvas.width / 2, canvas.height / 2 + 16);
+    ctx.fillStyle = '#1f8f5a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (!window.__hfPlayer) window.__hfPlayer = { x: 96, y: 96 };
+    var spriteW = 48;
+    var spriteH = 56;
+    var drawX = window.__hfPlayer.x - spriteW / 2;
+    var drawY = window.__hfPlayer.y - spriteH + 16;
+    if (playerSprite.complete && playerSprite.naturalWidth > 0) {
+      ctx.drawImage(playerSprite, drawX, drawY, spriteW, spriteH);
+    } else {
+      ctx.fillStyle = '#ef4444';
+      ctx.beginPath();
+      ctx.arc(window.__hfPlayer.x, window.__hfPlayer.y, 16, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   function wireControls() {
     // AGENTS: wire genre-appropriate controls for ${safeGenre}
     // Keyboard, mouse, and touch handlers \u2014 call onKeyDown / onCanvasClick / onCanvasTouch
     document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keyup', onKeyUp);
     if (canvas) {
       canvas.addEventListener('click', onCanvasClick);
       canvas.addEventListener('touchstart', onCanvasTouch, { passive: true });
@@ -4521,7 +4552,12 @@ body { font-family: var(--font); background: var(--bg) url('./promo-keyart.svg')
   function onKeyDown(e) {
     if (e.code === 'Escape' || e.code === 'KeyP') { togglePause(); return; }
     if (state !== S.PLAYING) return;
+    keyState[e.code] = true;
     // AGENTS: handle ${safeGenre} keydown events here
+  }
+
+  function onKeyUp(e) {
+    keyState[e.code] = false;
   }
 
   function onCanvasClick(e) {
