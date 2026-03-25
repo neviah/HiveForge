@@ -4255,7 +4255,7 @@ function buildPromptDrivenScaffold(profile) {
   <!-- ═══ SPLASH SCREEN ═══ -->
   <div id="splash" class="overlay">
     <div class="splash-inner">
-      <img src="./promo-keyart.svg" class="keyart" alt="${safeTitle} key art" onerror="this.style.display='none'" />
+      <img src="./assets/generated/promo-keyart.svg" class="keyart" alt="${safeTitle} key art" onerror="this.style.display='none'" />
       <h1 class="game-title">${safeTitle}</h1>
       <p class="genre-tag">${safeGenre}</p>
       <button id="splash-start" class="btn-primary cta-pulse">&#9654; Start Game</button>
@@ -4281,7 +4281,7 @@ function buildPromptDrivenScaffold(profile) {
   <!-- ═══ HUD (gameplay only) ═══ -->
   <div id="hud" class="hidden">
     <div class="hud-left">
-      <img src="./player-sprite.svg" class="hud-avatar" alt="" onerror="this.style.display='none'" />
+      <img src="./assets/generated/player-sprite.svg" class="hud-avatar" alt="" onerror="this.style.display='none'" />
       <div class="hud-stats">
         <span id="hud-score">Score: 0</span>
         <span id="hud-lives">&#9829; &#9829; &#9829;</span>
@@ -4322,7 +4322,7 @@ function buildPromptDrivenScaffold(profile) {
     <div class="result-panel">
       <h2>&#127942; You Win!</h2>
       <p id="win-score">Score: 0</p>
-      <img src="./promo-keyart.svg" class="win-keyart" alt="" onerror="this.style.display='none'" />
+      <img src="./assets/generated/promo-keyart.svg" class="win-keyart" alt="" onerror="this.style.display='none'" />
       <button id="win-retry" class="btn-primary">&#9654; Play Again</button>
       <button id="win-menu" class="btn-secondary">&#9646; Main Menu</button>
     </div>
@@ -4419,12 +4419,12 @@ body { font-family: var(--font); background: var(--bg) url('./promo-keyart.svg')
 //   3. wireControls()   \u2014 genre-appropriate keyboard / mouse / touch handlers
 //   4. startGame()init  \u2014 spawn initial entities, reset game world
 //
-// SVG assets ready to use (in same folder as index.html):
-//   player-sprite.svg   \u2014 player character (also shown in HUD)
-//   enemy-sprite.svg    \u2014 enemy / obstacle sprites
-//   tileset.svg         \u2014 world background / floor tiles
-//   ui-icon-set.svg     \u2014 item / pickup icons
-//   promo-keyart.svg    \u2014 already used on splash + win screens (no action needed)
+// SVG assets ready to use (in ./assets/generated/):
+//   assets/generated/player-sprite.svg   \u2014 player character (also shown in HUD)
+//   assets/generated/enemy-sprite.svg    \u2014 enemy / obstacle sprites
+//   assets/generated/tileset.svg         \u2014 world background / floor tiles
+//   assets/generated/ui-icon-set.svg     \u2014 item / pickup icons
+//   assets/generated/promo-keyart.svg    \u2014 already used on splash + win screens (no action needed)
 //
 // Triggers (call when condition met):
 //   triggerWin()        \u2014 player wins
@@ -4460,7 +4460,14 @@ body { font-family: var(--font); background: var(--bg) url('./promo-keyart.svg')
     ALL_SCREENS.forEach(function (id) {
       var el = document.getElementById(id);
       if (!el) return;
-      if (ids.indexOf(id) >= 0) { el.classList.remove('hidden'); } else { el.classList.add('hidden'); }
+      var shouldShow = ids.indexOf(id) >= 0;
+      if (shouldShow) {
+        el.classList.remove('hidden');
+        el.style.display = '';
+      } else {
+        el.classList.add('hidden');
+        el.style.display = 'none';
+      }
     });
   }
 
