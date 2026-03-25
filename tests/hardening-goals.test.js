@@ -29,6 +29,9 @@ const {
   appendApprovalDecisionAudit,
   readApprovalDecisionAudit,
   refreshWeeklyKpiPlan,
+  shouldBlockMutatingConnectorInDraftMode,
+  isOperationalLoopSuspended,
+  ensureOperationalLoopState,
   makeAnalyticsSnapshot,
   shouldEscalateGameplayRemediation,
   ensureCredentialStorage,
@@ -161,6 +164,24 @@ test('goal prompt analysis asks auth clarification for web app goals without aut
     plan.clarificationQuestions.some((question) => /account-based authentication/i.test(String(question || ''))),
     true,
   );
+});
+
+test('draft mode blocks mutating connector actions only', () => {
+  assert.equal(shouldBlockMutatingConnectorInDraftMode('draft', 'netlify', 'trigger_deploy'), true);
+  assert.equal(shouldBlockMutatingConnectorInDraftMode('draft', 'analytics', 'get_profile'), false);
+  assert.equal(shouldBlockMutatingConnectorInDraftMode('production', 'netlify', 'trigger_deploy'), false);
+});
+
+test('operational loop suspension clears after expiry', () => {
+  const state = { operationalLoops: null };
+  ensureOperationalLoopState(state);
+  state.operationalLoops.safety.suspendedUntil = new Date(Date.now() - 60 * 1000).toISOString();
+  state.operationalLoops.safety.lastSuspendReason = 'test_reason';
+
+  const status = isOperationalLoopSuspended(state);
+  assert.equal(status.suspended, false);
+  assert.equal(state.operationalLoops.safety.suspendedUntil, null);
+  assert.equal(state.operationalLoops.safety.lastSuspendReason, null);
 });
 
 test('gameplay remediation escalation triggers for repeated game.js execution failures', () => {

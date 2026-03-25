@@ -108,6 +108,12 @@ const DEFAULT_PUBLICATION_RELIABILITY_POLICY = {
   maxReplayAttemptsPerTargetPerWindow: 3,
   alertCooldownMinutes: 60,
 };
+const DEFAULT_OPERATIONAL_LOOP_SAFETY = {
+  maxAutoActionFailuresInWindow: 4,
+  failureWindowMs: 45 * 60 * 1000,
+  suspendForMs: 60 * 60 * 1000,
+  notifyCooldownMs: 15 * 60 * 1000,
+};
 const DEFAULT_KPI_GOALS = {
   weeklyTasksDoneTarget: 15,
   maxBacklog: 10,
@@ -984,6 +990,12 @@ function isMutatingConnectorOperation(connectorId, operation) {
   const operationKey = String(operation || '').trim().toLowerCase();
   const allowed = MUTATING_CONNECTOR_OPERATIONS[connector];
   return Boolean(allowed && allowed.has(operationKey));
+}
+
+function shouldBlockMutatingConnectorInDraftMode(mode, connectorId, operation) {
+  const modeKey = String(mode || '').trim().toLowerCase();
+  if (modeKey !== 'draft') return false;
+  return isMutatingConnectorOperation(connectorId, operation);
 }
 
 function connectorIdempotencyProfile(connectorId, operation) {
@@ -5283,11 +5295,128 @@ function ensureOperationalLoopState(projectState) {
       weekStart: startOfUtcWeekIso(),
       generatedAt: null,
       objectives: [],
+      safety: {
+        recentAutoActionFailures: [],
+        suspendedUntil: null,
+        lastSuspendedAt: null,
+        lastSuspendReason: null,
+        lastNotifyAt: null,
+      },
     };
   }
   if (!Array.isArray(projectState.operationalLoops.objectives)) {
     projectState.operationalLoops.objectives = [];
   }
+  if (!projectState.operationalLoops.safety || typeof projectState.operationalLoops.safety !== 'object') {
+    projectState.operationalLoops.safety = {
+      recentAutoActionFailures: [],
+      suspendedUntil: null,
+      lastSuspendedAt: null,
+      lastSuspendReason: null,
+      lastNotifyAt: null,
+    };
+  }
+  if (!Array.isArray(projectState.operationalLoops.safety.recentAutoActionFailures)) {
+    projectState.operationalLoops.safety.recentAutoActionFailures = [];
+  }
+}
+
+function pruneOperationalLoopAutoActionFailures(projectState, nowMs = Date.now()) {
+  ensureOperationalLoopState(projectState);
+  const safety = projectState.operationalLoops.safety;
+  safety.recentAutoActionFailures = safety.recentAutoActionFailures.filter((entry) => {
+    const atMs = Date.parse(entry && entry.at ? entry.at : '');
+    return Number.isFinite(atMs) && (nowMs - atMs) <= DEFAULT_OPERATIONAL_LOOP_SAFETY.failureWindowMs;
+  });
+}
+
+function isOperationalLoopSuspended(projectState, ts = nowIso()) {
+  ensureOperationalLoopState(projectState);
+  const safety = projectState.operationalLoops.safety;
+  const untilMs = Date.parse(safety.suspendedUntil || '');
+  const nowMs = Date.parse(ts);
+  if (Number.isFinite(untilMs) && Number.isFinite(nowMs) && nowMs < untilMs) {
+    return {
+      suspended: true,
+      suspendedUntil: safety.suspendedUntil,
+      reason: safety.lastSuspendReason || 'operational_loop_safety_suspended',
+      failureCount: safety.recentAutoActionFailures.length,
+    };
+  }
+  if (Number.isFinite(untilMs) && Number.isFinite(nowMs) && nowMs >= untilMs) {
+    safety.suspendedUntil = null;
+    safety.lastSuspendReason = null;
+  }
+  return {
+    suspended: false,
+    suspendedUntil: null,
+    reason: null,
+    failureCount: safety.recentAutoActionFailures.length,
+  };
+}
+
+function recordOperationalLoopAutoActionFailure(projectState, task, reason, detail = {}) {
+  ensureOperationalLoopState(projectState);
+  const safety = projectState.operationalLoops.safety;
+  const at = nowIso();
+  safety.recentAutoActionFailures.push({
+    at,
+    taskId: task && task.id ? task.id : null,
+    recurringKey: task && task.recurringKey ? task.recurringKey : null,
+    connector: task && task.autoAction && task.autoAction.connector ? task.autoAction.connector : null,
+    operation: task && task.autoAction && task.autoAction.operation ? task.autoAction.operation : null,
+    reason: String(reason || 'auto_action_failed'),
+  });
+  pruneOperationalLoopAutoActionFailures(projectState, Date.parse(at));
+
+  const suspended = isOperationalLoopSuspended(projectState, at);
+  if (suspended.suspended) {
+    return suspended;
+  }
+
+  const failureCount = safety.recentAutoActionFailures.length;
+  if (failureCount < DEFAULT_OPERATIONAL_LOOP_SAFETY.maxAutoActionFailuresInWindow) {
+    return { suspended: false, failureCount };
+  }
+
+  safety.suspendedUntil = new Date(Date.now() + DEFAULT_OPERATIONAL_LOOP_SAFETY.suspendForMs).toISOString();
+  safety.lastSuspendedAt = at;
+  safety.lastSuspendReason = String(reason || 'auto_action_failures_threshold_reached');
+  const summary = `Recurring automation paused for ${Math.round(DEFAULT_OPERATIONAL_LOOP_SAFETY.suspendForMs / 60000)}m after ${failureCount} auto-action failures in ${Math.round(DEFAULT_OPERATIONAL_LOOP_SAFETY.failureWindowMs / 60000)}m.`;
+  appendProjectLog(projectState, 'warning', {
+    kind: 'operational_loop_safety_suspended',
+    summary,
+    suspendedUntil: safety.suspendedUntil,
+    failureCount,
+    reason: safety.lastSuspendReason,
+    detail,
+  });
+
+  const nowMs = Date.now();
+  const lastNotifyMs = Date.parse(safety.lastNotifyAt || '');
+  const notifyEligible = !Number.isFinite(lastNotifyMs)
+    || (nowMs - lastNotifyMs) >= DEFAULT_OPERATIONAL_LOOP_SAFETY.notifyCooldownMs;
+  if (notifyEligible) {
+    safety.lastNotifyAt = at;
+    notifyOperator(projectState, 'Operational loop safety pause activated', {
+      summary,
+      suspendedUntil: safety.suspendedUntil,
+      failureCount,
+      reason: safety.lastSuspendReason,
+    }).catch(() => {});
+  }
+
+  return {
+    suspended: true,
+    suspendedUntil: safety.suspendedUntil,
+    reason: safety.lastSuspendReason,
+    failureCount,
+  };
+}
+
+function clearOperationalLoopAutoActionFailures(projectState) {
+  ensureOperationalLoopState(projectState);
+  projectState.operationalLoops.safety.recentAutoActionFailures = [];
 }
 
 function projectLeadRoleFromRoles(roles = []) {
@@ -7804,6 +7933,9 @@ function finalizeAutoActionTask(projectState, task, ok, reason, detail = {}) {
     },
   });
   emitProjectEvent(projectState.id, 'task_update', task);
+  if (ok) {
+    clearOperationalLoopAutoActionFailures(projectState);
+  }
 }
 
 function sendTaskToDeadLetter(projectState, task, reason, detail = {}) {
@@ -7846,6 +7978,7 @@ function sendTaskToDeadLetter(projectState, task, reason, detail = {}) {
     kind: 'recurring_auto_action_dead_lettered',
     ...record,
   });
+  recordOperationalLoopAutoActionFailure(projectState, task, reason, detail);
   appendMessageBusEntry({
     projectId: projectState.id,
     from: 'coordinator',
@@ -7942,6 +8075,7 @@ function scheduleAutoActionRetry(projectState, task, reason, detail = {}) {
   }
 
   maybeEscalateAutoActionAssistance(projectState, task, reason, detail);
+  recordOperationalLoopAutoActionFailure(projectState, task, reason, detail);
 
   appendProjectLog(projectState, 'fix', {
     kind: 'recurring_auto_action_retry_scheduled',
@@ -7978,6 +8112,18 @@ function executeRecurringAutoAction(projectState, task, source = 'interval') {
   const action = task.autoAction;
   if (!action || action.type !== 'connector') {
     return false;
+  }
+
+  if (shouldBlockMutatingConnectorInDraftMode(projectState.mode, action.connector, action.operation)) {
+    finalizeAutoActionTask(projectState, task, true, `Skipped ${action.connector}:${action.operation} in draft mode. Promote to production to allow mutating connector actions.`, {
+      connector: action.connector,
+      operation: action.operation,
+      source,
+      skipped: true,
+      skippedReason: 'draft_mode_mutation_blocked',
+    });
+    persistProjectState(projectState);
+    return true;
   }
 
   ensureConnectorExecutionState(projectState);
@@ -9564,7 +9710,10 @@ function runProjectHeartbeat(projectState, source = 'interval') {
   projectState.heartbeat.cycleCount = (projectState.heartbeat.cycleCount || 0) + 1;
   refreshWeeklyKpiPlan(projectState, beatTs);
   evaluateAndNotifyKpiAlerts(projectState, beatTs);
-  enqueueRecurringTasks(projectState, beatTs, source);
+  const loopSafety = isOperationalLoopSuspended(projectState, beatTs);
+  if (!loopSafety.suspended) {
+    enqueueRecurringTasks(projectState, beatTs, source);
+  }
   evaluateAutoStaffing(projectState, beatTs);
   if (projectState.goalPlan && Array.isArray(projectState.goalPlan.milestones)) {
     evaluateMilestoneCompletion(projectState);
@@ -9604,16 +9753,18 @@ function runProjectHeartbeat(projectState, source = 'interval') {
       }
     }
   } else {
-    const autoActionTask = pickRunnableAutoActionTask(projectState);
-    if (autoActionTask) {
-      const startedAutoAction = executeRecurringAutoAction(projectState, autoActionTask, source);
-      if (startedAutoAction) {
-        appendProjectLog(projectState, 'message', {
-          kind: 'heartbeat',
-          message: `Heartbeat cycle ${projectState.heartbeat.cycleCount} (${source})`,
-        });
-        persistProjectState(projectState);
-        return;
+    if (!loopSafety.suspended) {
+      const autoActionTask = pickRunnableAutoActionTask(projectState);
+      if (autoActionTask) {
+        const startedAutoAction = executeRecurringAutoAction(projectState, autoActionTask, source);
+        if (startedAutoAction) {
+          appendProjectLog(projectState, 'message', {
+            kind: 'heartbeat',
+            message: `Heartbeat cycle ${projectState.heartbeat.cycleCount} (${source})`,
+          });
+          persistProjectState(projectState);
+          return;
+        }
       }
     }
 
@@ -12290,6 +12441,19 @@ async function executeConnectorPolicy(connectorId, options = {}) {
             : `Role ${roleName} cannot trigger deploy operations.`,
         });
       }
+    }
+  }
+
+  if (options.projectId) {
+    const runtime = projectRuntimes.get(options.projectId);
+    const mode = runtime && runtime.state ? runtime.state.mode : null;
+    if (shouldBlockMutatingConnectorInDraftMode(mode, connector.id, options.operation)) {
+      checks.push({
+        type: 'mode_guard',
+        target: mode || 'unknown',
+        ok: false,
+        message: `Draft mode blocks mutating connector actions (${connector.id}:${String(options.operation || '').toLowerCase()}). Promote to production first.`,
+      });
     }
   }
 
@@ -17525,6 +17689,7 @@ module.exports = {
   connectorExecutionKey,
   connectorMutationExecutionKey,
   isMutatingConnectorOperation,
+  shouldBlockMutatingConnectorInDraftMode,
   connectorIdempotencyMode,
   shouldReconcileConnectorExecution,
   reconcileConnectorExecution,
@@ -17543,6 +17708,7 @@ module.exports = {
   readApprovalDecisionAudit,
   refreshWeeklyKpiPlan,
   ensureOperationalLoopState,
+  isOperationalLoopSuspended,
   makeAnalyticsSnapshot,
   shouldEscalateGameplayRemediation,
   runProjectHeartbeat,
