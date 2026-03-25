@@ -324,34 +324,34 @@
                        ],
     "readiness_checklist": [
         {
-            "id": "nat_traversal",
-            "title": "NAT Traversal/Relay Fallback",
-            "description": "STUN/TURN relay fallback tested, relay budget alarms configured, P2P connection success rate tracked."
+            "id": "loop_scheduler",
+            "title": "Main Loop Scheduler",
+            "description": "Game includes a continuous main loop using requestAnimationFrame or an equivalent timer."
         },
         {
-            "id": "host_migration",
-            "title": "Host Migration",
-            "description": "Session continuity rules defined and tested for host disconnects."
+            "id": "input_handlers",
+            "title": "Player Input",
+            "description": "Game responds to at least one player input path (keyboard, mouse, or touch)."
         },
         {
-            "id": "relay_budget",
-            "title": "Relay Budget Guardrail",
-            "description": "Relay usage tracked, coordinator escalation on spend spikes."
+            "id": "update_render",
+            "title": "Update and Render Steps",
+            "description": "Each loop iteration performs state update logic and visual render logic."
         },
         {
-            "id": "steam_compliance",
-            "title": "Steam Compliance Checklist",
-            "description": "Build signing, store assets, QA, and compliance requirements met for Steam release."
+            "id": "progress_metric",
+            "title": "Progress Metric",
+            "description": "Game tracks player progress with a metric such as score, objective count, timer, currency, or level."
         },
         {
-            "id": "itch_lane",
-            "title": "itch.io Release Lane",
-            "description": "Web build tested and ready for itch.io deployment."
+            "id": "success_failure",
+            "title": "Success and Failure Conditions",
+            "description": "Game has explicit success and failure conditions that transition to clear end states."
         },
         {
-            "id": "telemetry",
-            "title": "Multiplayer Telemetry Minimum",
-            "description": "Match success, disconnect reasons, relay usage, host churn, crash-free sessions tracked."
+            "id": "restart_path",
+            "title": "Restartability",
+            "description": "Game provides a restart path that returns from end states to a playable state."
         }
     ],
     "dependency_graph":  {

@@ -6267,7 +6267,13 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
         '  /sandbox/workspace/projects/{projectId}/game/game.js',
         'Requirements:',
         '  - Vanilla JavaScript only � no imports, no npm packages.',
-        '  - Full game loop: initialization, player input, game state updates, win/lose detection, scoring, restart.',
+        '  - Universal gameplay loop contract (genre-agnostic):',
+        '    * Main loop scheduler (requestAnimationFrame or equivalent timer).',
+        '    * Player input handlers (keyboard/mouse/touch as relevant).',
+        '    * Update step + render step each frame/tick.',
+        '    * Progress metric (score/points/level/objective/timer/currency).',
+        '    * Explicit success condition and explicit failure condition.',
+        '    * Restart path that returns to a playable state.',
         '  - Use getElementById/querySelector to interact with DOM elements from index.html.',
         '  - Do NOT include HIVEFORGE_SCAFFOLD_PLACEHOLDER anywhere.',
         'Write only game.js, then end with TASK_DONE.',
@@ -7228,13 +7234,50 @@ function isScaffoldOrThin(content, minLines = 30) {
   return lines.length < minLines;
 }
 
+function validateUniversalGameplayLoop(indexHtmlContent, gameJsContent) {
+  const html = String(indexHtmlContent || '');
+  const js = String(gameJsContent || '');
+  const combined = `${html}\n${js}`;
+  const failures = [];
+
+  if (!/(requestAnimationFrame|setInterval\s*\(|setTimeout\s*\()/i.test(js)) {
+    failures.push('missing_main_loop_scheduler');
+  }
+  if (!/(addEventListener\s*\(\s*['\"](?:keydown|keyup|mousedown|mouseup|pointerdown|pointerup|touchstart|touchend|click)['\"]|onkeydown|ontouchstart)/i.test(js)) {
+    failures.push('missing_player_input_handlers');
+  }
+  if (!/\b(updateFrame|update|tick|step)\s*\(/i.test(js)) {
+    failures.push('missing_update_step');
+  }
+  if (!/\b(renderFrame|render|draw)\s*\(/i.test(js)) {
+    failures.push('missing_render_step');
+  }
+  if (!/\b(score|points|xp|level|wave|objective|progress|currency|coins|timeLeft|timer)\b/i.test(combined)) {
+    failures.push('missing_progress_metric');
+  }
+  if (!/\b(win|victory|complete|cleared|success)\b/i.test(combined)) {
+    failures.push('missing_success_condition');
+  }
+  if (!/\b(game\s*over|lose|loss|defeat|failed|dead)\b/i.test(combined)) {
+    failures.push('missing_failure_condition');
+  }
+  if (!/\b(restart|retry|reset|newGame|startGame|playAgain)\b/i.test(combined)) {
+    failures.push('missing_restart_path');
+  }
+
+  return {
+    ok: failures.length === 0,
+    failures,
+  };
+}
+
 function validateGameStudioTaskArtifacts(projectState, task) {
   if (String(projectState?.template || '').toLowerCase() !== 'game_studio') {
     return { ok: true };
   }
   const title = String(task?.title || '').toLowerCase();
   const taskId = String(task?.id || '');
-  const needsFullValidation = title.includes('validate game files') || taskId === 'GOAL-DELIVERY-GAP';
+  const needsFullValidation = title.includes('validate game files') || title.includes('gameplay verification pass') || taskId === 'GOAL-DELIVERY-GAP';
 
   const indexHtml = readWorkspaceGameFile(projectState, 'index.html');
   const gameJs = readWorkspaceGameFile(projectState, 'game.js');
@@ -7249,6 +7292,10 @@ function validateGameStudioTaskArtifacts(projectState, task) {
     if (isScaffoldOrThin(gameJs, 60)) {
       return { ok: false, reason: 'game_js_missing_or_scaffold' };
     }
+    const loopCheck = validateUniversalGameplayLoop(indexHtml, gameJs);
+    if (!loopCheck.ok) {
+      return { ok: false, reason: `gameplay_loop_incomplete:${loopCheck.failures.slice(0, 3).join('|')}` };
+    }
   }
   if (title.includes('css styles')) {
     if (isScaffoldOrThin(styleCss, 40)) {
@@ -7258,6 +7305,10 @@ function validateGameStudioTaskArtifacts(projectState, task) {
   if (needsFullValidation) {
     if (isScaffoldOrThin(indexHtml, 30) || isScaffoldOrThin(gameJs, 50) || isScaffoldOrThin(styleCss, 30)) {
       return { ok: false, reason: 'delivery_gap_artifacts_incomplete' };
+    }
+    const loopCheck = validateUniversalGameplayLoop(indexHtml, gameJs);
+    if (!loopCheck.ok) {
+      return { ok: false, reason: `gameplay_loop_incomplete:${loopCheck.failures.slice(0, 4).join('|')}` };
     }
   }
 
