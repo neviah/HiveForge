@@ -3514,34 +3514,31 @@ function fallbackPalette(seedValue) {
   };
 }
 
-function wrapPromptLines(text, maxLen = 44, maxLines = 5) {
-  const words = String(text || '').trim().split(/\s+/).filter(Boolean);
-  if (!words.length) return ['Concept art placeholder'];
-  const lines = [];
-  let current = '';
-  for (const word of words) {
-    const candidate = current ? `${current} ${word}` : word;
-    if (candidate.length > maxLen) {
-      if (current) lines.push(current);
-      current = word;
-      if (lines.length >= maxLines - 1) break;
-    } else {
-      current = candidate;
-    }
-  }
-  if (current && lines.length < maxLines) lines.push(current);
-  return lines;
-}
-
-function writeFallbackImageFile(outputPath, prompt, seed, width, height) {
+function writeFallbackImageFile(outputPath, prompt, seed, width, height, assetKind = 'image') {
   const w = clampInt(width, 768, 256, 2048);
   const h = clampInt(height, 768, 256, 2048);
   const palette = fallbackPalette(seed);
-  const lines = wrapPromptLines(prompt, 48, 5);
-  const lineEls = lines
-    .map((line, idx) => `<text x="48" y="${120 + (idx * 42)}" fill="white" font-size="28" font-family="Segoe UI, Arial, sans-serif">${escapeXml(line)}</text>`)
-    .join('');
-  const svg = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">\n  <defs>\n    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">\n      <stop offset="0%" stop-color="${palette.c1}"/>\n      <stop offset="55%" stop-color="${palette.c2}"/>\n      <stop offset="100%" stop-color="${palette.c3}"/>\n    </linearGradient>\n  </defs>\n  <rect width="${w}" height="${h}" fill="url(#bg)"/>\n  <rect x="30" y="30" width="${Math.max(100, w - 60)}" height="${Math.max(100, h - 60)}" rx="20" fill="rgba(0,0,0,0.18)"/>\n  <text x="48" y="72" fill="white" font-size="24" font-family="Segoe UI, Arial, sans-serif">HiveForge Auto Fallback Render</text>\n  ${lineEls}\n</svg>\n`;
+  const kind = String(assetKind || 'image').toLowerCase();
+  const seedHash = crypto.createHash('sha256').update(`${seed}:${prompt}:${kind}`).digest('hex');
+  const circles = [0, 1, 2, 3].map((idx) => {
+    const x = Math.floor((parseInt(seedHash.slice(idx * 4, idx * 4 + 4), 16) / 0xffff) * (w - 160)) + 80;
+    const y = Math.floor((parseInt(seedHash.slice(16 + idx * 4, 20 + idx * 4), 16) / 0xffff) * (h - 160)) + 80;
+    const r = 22 + (parseInt(seedHash.slice(32 + idx * 2, 34 + idx * 2), 16) % 48);
+    const a = 0.12 + ((parseInt(seedHash.slice(40 + idx * 2, 42 + idx * 2), 16) % 45) / 100);
+    return `<circle cx="${x}" cy="${y}" r="${r}" fill="white" opacity="${a.toFixed(2)}"/>`;
+  }).join('');
+
+  const assetGlyph = kind.includes('player')
+    ? `<g transform="translate(${Math.floor(w * 0.5) - 36} ${Math.floor(h * 0.58) - 44})" fill="white" opacity="0.9"><rect x="22" y="8" width="28" height="20" rx="5"/><rect x="18" y="26" width="36" height="28" rx="6"/><rect x="8" y="28" width="10" height="20" rx="4"/><rect x="54" y="28" width="10" height="20" rx="4"/><rect x="22" y="54" width="12" height="20" rx="4"/><rect x="38" y="54" width="12" height="20" rx="4"/></g>`
+    : kind.includes('enemy')
+      ? `<g transform="translate(${Math.floor(w * 0.5) - 34} ${Math.floor(h * 0.58) - 34})" fill="white" opacity="0.88"><polygon points="34,0 66,18 66,58 34,76 2,58 2,18"/><circle cx="24" cy="34" r="5" fill="${palette.c1}"/><circle cx="44" cy="34" r="5" fill="${palette.c1}"/></g>`
+      : kind.includes('ui-icon')
+        ? `<g transform="translate(${Math.floor(w * 0.5) - 72} ${Math.floor(h * 0.58) - 32})" fill="white" opacity="0.92"><rect x="0" y="0" width="28" height="28" rx="6"/><rect x="36" y="0" width="28" height="28" rx="6"/><rect x="72" y="0" width="28" height="28" rx="6"/><rect x="108" y="0" width="28" height="28" rx="6"/></g>`
+        : kind.includes('tile')
+          ? `<g stroke="white" stroke-opacity="0.45" fill="none"><path d="M0 ${Math.floor(h * 0.64)} H${w}"/><path d="M0 ${Math.floor(h * 0.76)} H${w}"/><path d="M${Math.floor(w * 0.2)} ${Math.floor(h * 0.56)} V${h}"/><path d="M${Math.floor(w * 0.5)} ${Math.floor(h * 0.52)} V${h}"/><path d="M${Math.floor(w * 0.8)} ${Math.floor(h * 0.56)} V${h}"/></g>`
+          : `<g fill="white" opacity="0.88"><rect x="${Math.floor(w * 0.28)}" y="${Math.floor(h * 0.62)}" width="${Math.floor(w * 0.44)}" height="${Math.floor(h * 0.18)}" rx="14"/></g>`;
+
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">\n  <defs>\n    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">\n      <stop offset="0%" stop-color="${palette.c1}"/>\n      <stop offset="55%" stop-color="${palette.c2}"/>\n      <stop offset="100%" stop-color="${palette.c3}"/>\n    </linearGradient>\n  </defs>\n  <rect width="${w}" height="${h}" fill="url(#bg)"/>\n  <rect x="30" y="30" width="${Math.max(100, w - 60)}" height="${Math.max(100, h - 60)}" rx="20" fill="rgba(0,0,0,0.18)"/>\n  ${circles}\n  ${assetGlyph}\n</svg>\n`;
   fs.writeFileSync(outputPath, svg, 'utf-8');
 }
 
@@ -3561,7 +3558,7 @@ function renderFallbackImageResult(job, projectId, reason, modelId = null) {
   const { dir, base, assetKind } = buildImageOutputBase(job, projectId);
   const outputPath = path.join(dir, `${base}.svg`);
   const metadataPath = path.join(dir, `${base}.json`);
-  writeFallbackImageFile(outputPath, job.prompt, job.seed, job.width, job.height);
+  writeFallbackImageFile(outputPath, job.prompt, job.seed, job.width, job.height, assetKind);
   const metadata = {
     jobId: job.id,
     modelId: modelId || job.modelId || null,
