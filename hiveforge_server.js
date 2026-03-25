@@ -4593,7 +4593,29 @@ body { font-family: var(--font); background: var(--bg) url('./promo-keyart.svg')
   // \u2500 BUTTON WIRING \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   function wire(id, fn) { var el = document.getElementById(id); if (el) el.addEventListener('click', fn); }
 
-  function wireSplash()   { wire('splash-start', function () { state = S.TITLE; showOnly('title-menu'); }); }
+  function wireSplash()   {
+    function advanceToTitle() {
+      state = S.TITLE;
+      showOnly('title-menu');
+    }
+    wire('splash-start', advanceToTitle);
+    var splash = document.getElementById('splash');
+    if (splash) {
+      splash.addEventListener('click', function (e) {
+        if (state !== S.SPLASH) return;
+        var target = e.target;
+        if (target && target.closest && target.closest('button')) return;
+        advanceToTitle();
+      });
+    }
+    document.addEventListener('keydown', function (e) {
+      if (state !== S.SPLASH) return;
+      if (e.code === 'Enter' || e.code === 'Space') {
+        e.preventDefault();
+        advanceToTitle();
+      }
+    });
+  }
   function wireMenu()     { wire('menu-play', startGame); wire('menu-settings', function () { /* AGENTS: open settings panel */ }); }
   function wirePause()    {
     wire('pause-btn', togglePause);
