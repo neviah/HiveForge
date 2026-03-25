@@ -7360,6 +7360,21 @@ function validateTemplateTaskArtifacts(projectState, task) {
   return { ok: true };
 }
 
+function shouldEscalateGameplayRemediation(projectState, task, effectiveExitCode, failureReason, failureCount) {
+  if (failureCount < 2) return false;
+  if (String(projectState?.template || '').toLowerCase() !== 'game_studio') return false;
+
+  const taskTitle = String(task?.title || '').toLowerCase();
+  const isGameJsTask = taskTitle.includes('javascript logic') || taskTitle.includes('game.js');
+  if (!isGameJsTask) return false;
+
+  if (effectiveExitCode === 2 && String(failureReason || '').includes('gameplay_loop_incomplete')) {
+    return true;
+  }
+
+  return effectiveExitCode !== 0;
+}
+
 function summarizeProjectAutomation(projectState) {
   ensureRecurringState(projectState);
   ensureDeadLetterState(projectState);
@@ -9132,7 +9147,10 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
       failureReason = `exit_code_${effectiveExitCode}`;
     }
     requeueTaskToBacklog(task, failureReason, true);
-    runtime.state.heartbeat.autoFixCount = (runtime.state.heartbeat.autoFixCount || 0) + 1;
+
+    const failureCount = Number(task.failureStreak || 0) + 1;
+    task.failureStreak = failureCount;
+    let countAgainstAutoFixBudget = true;
 
     if (worker) {
       worker.status = 'idle';
@@ -9164,63 +9182,69 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
     });
     emitProjectEvent(projectId, 'task_update', task);
 
-    // Auto-remediation: detect repeated failures and escalate to explicit fix task
-    if (effectiveExitCode === 2 && failureReason.includes('gameplay_loop_incomplete')) {
-      const failureCount = (task.failureStreak || 0) + 1;
-      task.failureStreak = failureCount;
-      if (failureCount >= 2) {
-        const remediationTaskId = `${task.id}-REMEDIATE`;
-        const existingRemediation = runtime.state.tasks.find((t) => t.id === remediationTaskId);
-        if (!existingRemediation) {
-          const remediationTask = {
-            id: remediationTaskId,
-            title: `[REMEDIATE] Fix gameplay loop in game.js`,
-            phase: 'product_build',
-            status: 'backlog',
-            assignee: null,
-            blockedBy: task.id,
-            dependencies: [task.id],
-            requiredRole: 'Backend Architect',
-            executionState: 'queued',
-            retryCount: 0,
-            lastFailedAt: null,
-            lastError: null,
-            lastProgressAt: null,
-            executionTaskRunId: null,
-            inprogressCycles: 0,
-            pendingApproval: null,
-            autoActionNotBeforeAt: null,
-            deadLetteredAt: null,
-            createdAt: nowIso(),
-            completedAt: null,
-            startedAt: null,
-            failureStreak: 0,
-            description: [
-              `The game loop validation failed ${failureCount}x: ${failureReason}`,
-              '',
-              'EXPLICIT REQUIREMENTS (all five are mandatory):',
-              '  1. Main loop scheduler: requestAnimationFrame(...) or setInterval(...) that runs updateFrame/renderFrame every tick.',
-              '  2. updateFrame(dt) function that updates entity positions, collision checks, score/level/lives.',
-              '  3. renderFrame() function that draws canvas: tileset background → enemies → player → pickups.',
-              '  4. Win condition test and Game Over condition test; call triggerWin() or triggerGameOver() when met.',
-              '  5. Restart path: startGame() or equivalent that resets the world and returns to PLAYING state.',
-              '',
-              'Review current game.js structure first. Add only the missing stubs. End with TASK_DONE once all five are present.',
-            ].join('\n'),
-            assistanceRequestedAt: null,
-          };
-          runtime.state.tasks.push(remediationTask);
-          appendProjectLog(runtime.state, 'message', {
-            kind: 'remediation_task_created',
-            sourceTaskId: task.id,
-            failureReason,
-            failureCount,
-            remediationTaskId,
-          });
+    // Auto-remediation: escalate repeated game.js failures (validation or runtime) into an explicit fix task.
+    if (shouldEscalateGameplayRemediation(runtime.state, task, effectiveExitCode, failureReason, failureCount)) {
+      const remediationTaskId = `${task.id}-REMEDIATE`;
+      const existingRemediation = runtime.state.tasks.find((t) => t.id === remediationTaskId);
+      if (!existingRemediation) {
+        const remediationTask = {
+          id: remediationTaskId,
+          title: `[REMEDIATE] Fix gameplay loop in game.js`,
+          phase: 'product_build',
+          status: 'backlog',
+          assignee: null,
+          blockedBy: null,
+          dependencies: [],
+          requiredRole: 'Backend Architect',
+          executionState: 'queued',
+          retryCount: 0,
+          lastFailedAt: null,
+          lastError: null,
+          lastProgressAt: null,
+          executionTaskRunId: null,
+          inprogressCycles: 0,
+          pendingApproval: null,
+          autoActionNotBeforeAt: null,
+          deadLetteredAt: null,
+          createdAt: nowIso(),
+          completedAt: null,
+          startedAt: null,
+          failureStreak: 0,
+          description: [
+            `The game.js implementation failed ${failureCount}x: ${failureReason}`,
+            '',
+            'EXPLICIT REQUIREMENTS (all five are mandatory):',
+            '  1. Main loop scheduler: requestAnimationFrame(...) or setInterval(...) that runs updateFrame/renderFrame every tick.',
+            '  2. updateFrame(dt) function that updates entity positions, collision checks, score/level/lives.',
+            '  3. renderFrame() function that draws canvas: tileset background -> enemies -> player -> pickups.',
+            '  4. Win condition test and Game Over condition test; call triggerWin() or triggerGameOver() when met.',
+            '  5. Restart path: startGame() or equivalent that resets the world and returns to PLAYING state.',
+            '',
+            'Review current game.js structure first. Add only the missing stubs. End with TASK_DONE once all five are present.',
+          ].join('\n'),
+          assistanceRequestedAt: null,
+        };
+        runtime.state.tasks.push(remediationTask);
+
+        const taskDeps = Array.isArray(task.dependencies) ? task.dependencies.filter(Boolean) : [];
+        if (!taskDeps.includes(remediationTaskId)) {
+          task.dependencies = [...taskDeps, remediationTaskId];
         }
+        task.blockedBy = remediationTaskId;
+
+        countAgainstAutoFixBudget = false;
+        appendProjectLog(runtime.state, 'message', {
+          kind: 'remediation_task_created',
+          sourceTaskId: task.id,
+          failureReason,
+          failureCount,
+          remediationTaskId,
+        });
       }
-    } else {
-      task.failureStreak = 0;
+    }
+
+    if (countAgainstAutoFixBudget) {
+      runtime.state.heartbeat.autoFixCount = (runtime.state.heartbeat.autoFixCount || 0) + 1;
     }
 
     if (runtime.state.heartbeat.autoFixCount >= settings.maxAutoFixes) {
@@ -17520,6 +17544,7 @@ module.exports = {
   refreshWeeklyKpiPlan,
   ensureOperationalLoopState,
   makeAnalyticsSnapshot,
+  shouldEscalateGameplayRemediation,
   runProjectHeartbeat,
   evaluateProductionPreflight,
   ensureMessageBus,

@@ -30,6 +30,7 @@ const {
   readApprovalDecisionAudit,
   refreshWeeklyKpiPlan,
   makeAnalyticsSnapshot,
+  shouldEscalateGameplayRemediation,
   ensureCredentialStorage,
   upsertProjectCredentialPolicy,
   recordCredentialSpend,
@@ -160,6 +161,57 @@ test('goal prompt analysis asks auth clarification for web app goals without aut
     plan.clarificationQuestions.some((question) => /account-based authentication/i.test(String(question || ''))),
     true,
   );
+});
+
+test('gameplay remediation escalation triggers for repeated game.js execution failures', () => {
+  const projectState = { template: 'game_studio' };
+  const task = { title: 'Implement game JavaScript logic (game.js)' };
+
+  const shouldEscalate = shouldEscalateGameplayRemediation(
+    projectState,
+    task,
+    1,
+    'exit_code_1',
+    2,
+  );
+
+  assert.equal(shouldEscalate, true);
+});
+
+test('gameplay remediation escalation does not trigger before repeated failures', () => {
+  const projectState = { template: 'game_studio' };
+  const task = { title: 'Implement game JavaScript logic (game.js)' };
+
+  const shouldEscalate = shouldEscalateGameplayRemediation(
+    projectState,
+    task,
+    1,
+    'exit_code_1',
+    1,
+  );
+
+  assert.equal(shouldEscalate, false);
+});
+
+test('gameplay remediation escalation remains scoped to game_studio game.js tasks', () => {
+  const shouldEscalateWrongTemplate = shouldEscalateGameplayRemediation(
+    { template: 'business' },
+    { title: 'Implement game JavaScript logic (game.js)' },
+    2,
+    'gameplay_loop_incomplete:missing_main_loop_scheduler',
+    3,
+  );
+
+  const shouldEscalateWrongTask = shouldEscalateGameplayRemediation(
+    { template: 'game_studio' },
+    { title: 'Implement game CSS styles (style.css)' },
+    2,
+    'gameplay_loop_incomplete:missing_main_loop_scheduler',
+    3,
+  );
+
+  assert.equal(shouldEscalateWrongTemplate, false);
+  assert.equal(shouldEscalateWrongTask, false);
 });
 
 test('publication incident dashboard tracks mttr, runbook hotspots, and cooldown trends', () => {
