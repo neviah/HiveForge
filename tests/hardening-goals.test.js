@@ -32,6 +32,7 @@ const {
   shouldBlockMutatingConnectorInDraftMode,
   isOperationalLoopSuspended,
   ensureOperationalLoopState,
+  summarizeIdleBlockers,
   makeAnalyticsSnapshot,
   shouldEscalateGameplayRemediation,
   ensureCredentialStorage,
@@ -182,6 +183,34 @@ test('operational loop suspension clears after expiry', () => {
   assert.equal(status.suspended, false);
   assert.equal(state.operationalLoops.safety.suspendedUntil, null);
   assert.equal(state.operationalLoops.safety.lastSuspendReason, null);
+});
+
+test('idle blocker summary explains approvals, dependency blockers, and loop suspension', () => {
+  const state = {
+    operatingMode: 'continuous_business',
+    recurring: { enabled: true, schedule: [{ key: 'x', everyMs: 1000 }], lastRunAt: {} },
+    tasks: [
+      { id: 'A', status: 'done' },
+      { id: 'B', status: 'backlog', dependencies: ['A'] },
+      { id: 'C', status: 'backlog', dependencies: ['MISSING'] },
+      { id: 'D', status: 'review', executionState: 'awaiting_approval' },
+    ],
+  };
+
+  const idle = summarizeIdleBlockers(state, {
+    suspended: true,
+    suspendedUntil: '2099-01-01T00:00:00.000Z',
+    reason: 'test_pause',
+    failureCount: 4,
+  });
+
+  assert.equal(idle.backlogRunnable, 1);
+  assert.equal(idle.backlogBlockedByDependencies, 1);
+  assert.equal(idle.awaitingApprovalCount, 1);
+  assert.equal(Boolean(idle.recurringSuspended), true);
+  assert.match(idle.summary, /paused until/i);
+  assert.match(idle.summary, /awaiting approval/i);
+  assert.match(idle.summary, /blocked by dependencies/i);
 });
 
 test('gameplay remediation escalation triggers for repeated game.js execution failures', () => {

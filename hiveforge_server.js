@@ -7684,6 +7684,74 @@ function shouldKeepRunningForRecurring(projectState) {
     && projectState.recurring.schedule.length > 0;
 }
 
+function summarizeIdleBlockers(projectState, loopSafety = null) {
+  const inprogressCount = projectState.tasks.filter((task) => task.status === 'inprogress').length;
+  const backlogTasks = projectState.tasks.filter((task) => task.status === 'backlog');
+  const reviewAwaitingApproval = projectState.tasks.filter((task) => task.status === 'review' && task.executionState === 'awaiting_approval');
+  const done = projectDoneTaskIds(projectState);
+  let backlogBlockedByDependencies = 0;
+  let backlogRunnable = 0;
+  backlogTasks.forEach((task) => {
+    const deps = Array.isArray(task.dependencies) ? task.dependencies : [];
+    const depsSatisfied = deps.every((depId) => done.has(depId));
+    if (depsSatisfied) backlogRunnable += 1;
+    else backlogBlockedByDependencies += 1;
+  });
+  const recurringEnabled = shouldKeepRunningForRecurring(projectState);
+  const suspended = loopSafety && loopSafety.suspended
+    ? {
+        suspendedUntil: loopSafety.suspendedUntil,
+        reason: loopSafety.reason,
+        failureCount: Number(loopSafety.failureCount || 0),
+      }
+    : null;
+  const summaryParts = [];
+  if (suspended) {
+    summaryParts.push(`Recurring automation is paused until ${suspended.suspendedUntil} (${suspended.reason}).`);
+  }
+  if (reviewAwaitingApproval.length) {
+    summaryParts.push(`${reviewAwaitingApproval.length} task(s) are awaiting approval.`);
+  }
+  if (backlogBlockedByDependencies > 0) {
+    summaryParts.push(`${backlogBlockedByDependencies} backlog task(s) are blocked by dependencies.`);
+  }
+  if (backlogRunnable > 0) {
+    summaryParts.push(`${backlogRunnable} backlog task(s) are runnable.`);
+  }
+  if (!summaryParts.length) {
+    summaryParts.push('No runnable tasks at the moment; waiting for new work or prerequisites.');
+  }
+  return {
+    inprogressCount,
+    backlogTotal: backlogTasks.length,
+    backlogRunnable,
+    backlogBlockedByDependencies,
+    awaitingApprovalCount: reviewAwaitingApproval.length,
+    recurringEnabled,
+    recurringSuspended: suspended,
+    summary: summaryParts.join(' '),
+  };
+}
+
+function maybeEmitIdleNotice(projectState, source, loopSafety, ts = nowIso()) {
+  ensureRecurringState(projectState);
+  if (source !== 'interval') return;
+  const nowMs = Date.parse(ts);
+  const lastNoticeMs = Date.parse(projectState.recurring.lastIdleNoticeAt || '');
+  const cooldownMs = 5 * 60 * 1000;
+  if (Number.isFinite(lastNoticeMs) && (nowMs - lastNoticeMs) < cooldownMs) {
+    return;
+  }
+  const idle = summarizeIdleBlockers(projectState, loopSafety);
+  projectState.recurring.lastIdleNoticeAt = ts;
+  appendProjectLog(projectState, 'message', {
+    kind: 'project_idle_waiting',
+    source,
+    summary: idle.summary,
+    idle,
+  });
+}
+
 function hasPendingRecurringTask(projectState, recurringKey) {
   return projectState.tasks.some((task) =>
     task.recurringKey === recurringKey && (
@@ -9880,6 +9948,7 @@ function runProjectHeartbeat(projectState, source = 'interval') {
         }
         return;
       }
+      maybeEmitIdleNotice(projectState, source, loopSafety, beatTs);
     }
   }
 
@@ -17708,6 +17777,7 @@ module.exports = {
   readApprovalDecisionAudit,
   refreshWeeklyKpiPlan,
   ensureOperationalLoopState,
+  summarizeIdleBlockers,
   isOperationalLoopSuspended,
   makeAnalyticsSnapshot,
   shouldEscalateGameplayRemediation,
