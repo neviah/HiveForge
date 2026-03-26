@@ -9327,7 +9327,21 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
 
   const worker = runtime.state.agents.find((a) => a.id === task.assignee);
   let effectiveExitCode = exitCode;
-  let failureReason = `exit_code_${exitCode}`;
+
+  // Capture the actual stderr/stdout from the task run for diagnostic use
+  const taskRun = taskHistory.find((r) => r.id === taskRunId);
+  const stderrLines = taskRun
+    ? (taskRun.events || []).filter((e) => e.type === 'stderr').map((e) => String(e.message || '')).join('').trim()
+    : '';
+  const stdoutLines = taskRun
+    ? (taskRun.events || []).filter((e) => e.type === 'stdout').map((e) => String(e.message || '')).join('').trim()
+    : '';
+  // Use last 800 chars of stderr (trimmed) as the failure reason if available
+  const capturedError = stderrLines
+    ? stderrLines.slice(-800)
+    : (stdoutLines ? stdoutLines.slice(-400) : null);
+
+  let failureReason = capturedError || `exit_code_${exitCode}`;
   if (effectiveExitCode === 0) {
     const artifactCheck = validateTemplateTaskArtifacts(runtime.state, task);
     if (!artifactCheck.ok) {
@@ -9400,7 +9414,7 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
       return;
     }
   } else {
-    if (effectiveExitCode !== 2) {
+    if (effectiveExitCode !== 2 && !capturedError) {
       failureReason = `exit_code_${effectiveExitCode}`;
     }
     requeueTaskToBacklog(task, failureReason, true);
