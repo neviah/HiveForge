@@ -157,6 +157,28 @@ test('goal prompt analysis asks clarifying questions for ambiguous game studio p
     plan.clarificationQuestions.some((question) => /release lane should we prioritize first/i.test(String(question || ''))),
     true,
   );
+  assert.equal(
+    plan.clarificationQuestions.some((question) => /top-down|side-scroller|isometric/i.test(String(question || ''))),
+    true,
+  );
+});
+
+test('business goal plan includes structured market and UX research task', () => {
+  const plan = goalActionPlanFromPrompt('business', 'Build a B2B client portal for invoicing and approvals.', {});
+  const researchTask = (plan.tasks || []).find((task) => /structured market and ux research baseline/i.test(String(task.title || '')));
+
+  assert.ok(researchTask);
+  assert.match(String(researchTask.description || ''), /docs\/research_brief\.md/i);
+  assert.match(String(researchTask.description || '').toLowerCase(), /feature split|must-have|later|out-of-scope|pattern matrix/);
+});
+
+test('game goal plan includes structured genre and visual-direction research task', () => {
+  const plan = goalActionPlanFromPrompt('game_studio', 'Build a roguelite action game with replayability.', {});
+  const researchTask = (plan.tasks || []).find((task) => /structured genre and visual-direction research baseline/i.test(String(task.title || '')));
+
+  assert.ok(researchTask);
+  assert.match(String(researchTask.description || ''), /docs\/game_research_brief\.md/i);
+  assert.match(String(researchTask.description || '').toLowerCase(), /perspective|visual style|scope benchmark/);
 });
 
 test('goal prompt analysis asks auth clarification for web app goals without auth detail', () => {

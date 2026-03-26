@@ -4762,6 +4762,7 @@ function templateArtifactContract(templateId) {
       { path: 'website/index.html', minLines: 30 },
       { path: 'website/app.js', minLines: 30 },
       { path: 'website/style.css', minLines: 20 },
+      { path: 'docs/research_brief.md', minLines: 16 },
       { path: 'docs/business_plan.md', minLines: 10 },
     ],
     music_production: [
@@ -5932,6 +5933,7 @@ function goalClarificationQuestions(templateId, goalText, tags = {}) {
     const mentionsMulti = /(multiplayer|co[-\s]?op|coop|pvp|online\s+match)/.test(text);
     const mentionsTheme = /(theme|genre|setting|visual\s*style|art\s*direction|tone)/.test(text);
     const mentionsPlatform = /(itch|itch\.io|steam|desktop|browser|web|mobile)/.test(text);
+    const mentionsPerspective = /(top[\s-]?down|side[\s-]?scroller|isometric|first[\s-]?person|third[\s-]?person|orthographic)/.test(text);
 
     if (!mentionsSingle && !mentionsMulti) {
       questions.push('Should this game be single-player, multiplayer, or both? If multiplayer, should we start with P2P listen-server to reduce hosting cost?');
@@ -5941,6 +5943,9 @@ function goalClarificationQuestions(templateId, goalText, tags = {}) {
     }
     if (!mentionsPlatform) {
       questions.push('Which release lane should we prioritize first: browser/Netlify testing, itch.io launch, or Steam desktop packaging?');
+    }
+    if (!mentionsPerspective) {
+      questions.push('What gameplay perspective should we use (top-down, side-scroller, isometric, first-person, or third-person), and should we stay 2D or 3D for MVP?');
     }
   }
 
@@ -5960,6 +5965,9 @@ function goalClarificationQuestions(templateId, goalText, tags = {}) {
     }
     if ((tags.social || tags.marketplace || tags.property) && !/(profile|onboarding|verification|kyc)/.test(text)) {
       questions.push('How deep should onboarding/profile setup be for MVP (basic profile only vs richer verification and preferences)?');
+    }
+    if (!/(dashboard|admin|portal|backoffice|reporting|none|not needed)/.test(text)) {
+      questions.push('Should operators have a dashboard/admin portal in MVP, or should the initial release focus only on end-user workflows?');
     }
   }
 
@@ -6096,6 +6104,24 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
     requiredRole: strategyOwnerRole,
     description: 'Produce execution milestones from point A to point B with owner roles and verification gates.',
   });
+
+  if (normalizedTemplate === 'business') {
+    addTask({
+      title: 'Run structured market and UX research baseline before implementation',
+      phase: 'strategy',
+      requiredRole: strategyOwnerRole,
+      description: 'Research comparable products and best-practice UX patterns using web/browser tooling. Produce docs/research_brief.md with: product archetype, competitor pattern matrix, must-have vs later feature split, role/persona map, navigation model, trust/compliance risks, and explicit open questions to operator.',
+    });
+  }
+
+  if (normalizedTemplate === 'game_studio') {
+    addTask({
+      title: 'Run structured genre and visual-direction research baseline',
+      phase: 'strategy',
+      requiredRole: strategyOwnerRole,
+      description: 'Research similar games and genre conventions using web/browser tooling. Produce docs/game_research_brief.md with: genre references, perspective choice (top-down/side-scroller/isometric/etc), visual style board, control scheme options, scope benchmark for MVP, and explicit design risks/questions.',
+    });
+  }
 
   if (planConfig.preferFreeTierFirst) {
     const databaseTier = planConfig.preferredDatabaseService === 'supabase' && needsManagedDatabase
@@ -7595,6 +7621,18 @@ function validateGameStudioTaskArtifacts(projectState, task) {
   const taskId = String(task?.id || '');
   const needsFullValidation = title.includes('validate game files') || title.includes('gameplay verification pass') || taskId === 'GOAL-DELIVERY-GAP';
 
+  if (title.includes('research baseline') || title.includes('visual-direction research')) {
+    const researchPath = path.join(projectWorkspaceDir(projectState.id), 'docs', 'game_research_brief.md');
+    try {
+      const text = fs.readFileSync(researchPath, 'utf-8');
+      if (isScaffoldOrThin(text, 16)) {
+        return { ok: false, reason: 'game_research_brief_incomplete' };
+      }
+    } catch {
+      return { ok: false, reason: 'game_research_brief_missing' };
+    }
+  }
+
   const indexHtml = readWorkspaceGameFile(projectState, 'index.html');
   const gameJs = readWorkspaceGameFile(projectState, 'game.js');
   const styleCss = readWorkspaceGameFile(projectState, 'style.css');
@@ -7661,6 +7699,19 @@ function validateBusinessTemplateTaskArtifacts(projectState, task) {
 
   const title = String(task?.title || '').toLowerCase();
   const taskId = String(task?.id || '');
+
+  if (title.includes('research baseline') || title.includes('market and ux research')) {
+    const researchPath = path.join(projectWorkspaceDir(projectState.id), 'docs', 'research_brief.md');
+    try {
+      const text = fs.readFileSync(researchPath, 'utf-8');
+      if (isScaffoldOrThin(text, 16)) {
+        return { ok: false, reason: 'business_research_brief_incomplete' };
+      }
+    } catch {
+      return { ok: false, reason: 'business_research_brief_missing' };
+    }
+  }
+
   const needsWebsiteValidation = title.includes('core web experience')
     || title.includes('web experience')
     || title.includes('landing site')
@@ -9968,6 +10019,8 @@ function startProjectTaskExecution(projectState, task, assignee) {
           ]
           : templateId === 'business'
             ? [
+              '  Discovery requirement: before implementation, run focused web research with browser tool and capture findings in docs/research_brief.md.',
+              '  Research output MUST include: comparable products, feature matrix (must-have / later / out-of-scope), role/persona map, navigation model, and unresolved clarification questions.',
               '  Draft preview requirement: website/app.js must gracefully handle unavailable backend endpoints.',
               '  If API calls fail, render a demo fallback dataset instead of showing a blank page or fatal error.',
               '  Ensure index.html can render meaningful content with only website/index.html + website/app.js + website/style.css.',
@@ -9976,6 +10029,12 @@ function startProjectTaskExecution(projectState, task, assignee) {
               '  If role scope is ambiguous (for example seller/buyer/admin or whether dashboard is needed), ask clarifying questions before finalizing flows.',
               '  Use established patterns from similar products in the same domain as implementation references.',
               '  Include clear loading, empty, and error states for each critical screen.',
+            ]
+          : templateId === 'game_studio'
+            ? [
+              '  Discovery requirement: run focused genre/gameplay research with browser tool and write docs/game_research_brief.md before implementation.',
+              '  Research output MUST include: genre references, perspective selection (top-down/side-scroller/isometric/first-person/etc), control scheme, visual style direction, and MVP scope boundaries.',
+              '  Use researched references to justify gameplay loop and UI decisions; avoid barebones placeholder mechanics.',
             ]
         : []),
       '  Replace HIVEFORGE_SCAFFOLD_PLACEHOLDER content with real work output before marking tasks complete.',
