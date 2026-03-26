@@ -10062,6 +10062,17 @@ function startProjectTaskExecution(projectState, task, assignee) {
             '  - explicit win + game over conditions and a restart path',
           ]
           : []),
+        ...((String(task.lastError).includes('business_research_brief_incomplete') || String(task.lastError).includes('business_research_brief_missing'))
+          ? [
+            'For business research brief failures, you MUST write this exact file with the file tool (action=write):',
+            `  /sandbox/workspace/projects/${projectState.id}/docs/research_brief.md`,
+            'Requirements for docs/research_brief.md:',
+            '  - At least 16 non-empty lines',
+            '  - Must NOT contain HIVEFORGE_SCAFFOLD_PLACEHOLDER',
+            '  - Include: comparable products, must-have/later/out-of-scope feature matrix, role/persona map, navigation model, trust/compliance risks, unresolved operator questions',
+            'Do not only describe the research in chat output; persist it to the workspace file path above before TASK_DONE.',
+          ]
+          : []),
       ].join('\n')
       : '',
     'Execute the task and provide concrete output artifacts or decisions. End with TASK_DONE when complete.'
