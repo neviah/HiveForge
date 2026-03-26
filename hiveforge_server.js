@@ -7732,7 +7732,9 @@ function validateBusinessTemplateTaskArtifacts(projectState, task) {
   const appJs = fs.readFileSync(appPath, 'utf-8');
   const styleCss = fs.readFileSync(stylePath, 'utf-8');
 
-  if (isScaffoldOrThin(indexHtml, 20) || !indexHtml.includes('./app.js') || !indexHtml.includes('./style.css')) {
+  const hasScriptRef = /<script[^>]+src=["'](?:\.\/)?app\.js["']/i.test(indexHtml);
+  const hasStyleRef = /<link[^>]+href=["'](?:\.\/)?style\.css["']/i.test(indexHtml);
+  if (isScaffoldOrThin(indexHtml, 20) || !hasScriptRef || !hasStyleRef) {
     return { ok: false, reason: 'website_index_incomplete' };
   }
   if (isScaffoldOrThin(appJs, 60)) {
@@ -10071,6 +10073,21 @@ function startProjectTaskExecution(projectState, task, assignee) {
             '  - Must NOT contain HIVEFORGE_SCAFFOLD_PLACEHOLDER',
             '  - Include: comparable products, must-have/later/out-of-scope feature matrix, role/persona map, navigation model, trust/compliance risks, unresolved operator questions',
             'Do not only describe the research in chat output; persist it to the workspace file path above before TASK_DONE.',
+          ]
+          : []),
+        ...((String(task.lastError).startsWith('website_') || String(task.lastError).includes('website_'))
+          ? [
+            'For website artifact failures, you MUST update these files with the file tool before TASK_DONE:',
+            `  /sandbox/workspace/projects/${projectState.id}/website/index.html`,
+            `  /sandbox/workspace/projects/${projectState.id}/website/app.js`,
+            `  /sandbox/workspace/projects/${projectState.id}/website/style.css`,
+            'Minimum acceptance checks:',
+            '  - index.html includes a stylesheet link to style.css (either "style.css" or "./style.css")',
+            '  - index.html includes a script reference to app.js (either "app.js" or "./app.js")',
+            '  - app.js is substantial (non-scaffold) and parse-valid JavaScript',
+            '  - style.css is substantial (non-scaffold) and includes layout + responsive styles',
+            '  - Include loading, empty, and error states for critical UI paths',
+            'Do not end with TASK_DONE until files above are actually written and saved in the workspace.',
           ]
           : []),
       ].join('\n')

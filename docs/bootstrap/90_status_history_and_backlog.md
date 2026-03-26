@@ -24,6 +24,26 @@ The system has already completed major milestones across:
 1. Dashboard-native policy simulation and controls.
 2. Additional regulator-specific policy/runbook expansion.
 
+## OpenClaw Upstream Backport Queue (2026-03 Review)
+
+Priority order for revisit and selective cherry-pick into HiveForge:
+
+1. OpenAI-compatible tool-call hardening.
+2. Sandbox/media path boundary hardening.
+3. Control-plane WebSocket/auth fail-closed hardening.
+4. Error classification and fallback/retry behavior improvements.
+5. Session continuity and restart resilience fixes.
+6. Optional API compatibility expansion (`/v1/models`, `/v1/embeddings`).
+7. Plugin SDK and marketplace overhaul (defer unless ecosystem expansion is planned).
+8. Channel-specific UX/reliability improvements (selective only as needed).
+
+Adoption guidance:
+
+1. Adopt 1-4 first for reliability/safety baseline.
+2. Adopt 5 next for long-running run stability.
+3. Adopt 6 only if API compatibility/RAG adapters become a near-term requirement.
+4. Keep 7-8 on watchlist and cherry-pick narrowly.
+
 ## Planned Initiative: Internal Asset Generation Subsystem
 
 Stages:
