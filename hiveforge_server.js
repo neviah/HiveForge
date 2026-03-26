@@ -7481,6 +7481,9 @@ function validateTemplateTaskArtifacts(projectState, task) {
   const gameCheck = validateGameStudioTaskArtifacts(projectState, task);
   if (!gameCheck.ok) return gameCheck;
 
+  const businessCheck = validateBusinessTemplateTaskArtifacts(projectState, task);
+  if (!businessCheck.ok) return businessCheck;
+
   const title = String(task?.title || '').toLowerCase();
   const taskId = String(task?.id || '');
   const needsImageValidation = title.includes('asset pack') || title.includes('image') || taskId === 'GOAL-DELIVERY-GAP';
@@ -7494,6 +7497,59 @@ function validateTemplateTaskArtifacts(projectState, task) {
       reason: `template_image_assets_incomplete:${imageCheck.gaps.slice(0, 2).join(' | ')}`,
     };
   }
+  return { ok: true };
+}
+
+function validateBusinessTemplateTaskArtifacts(projectState, task) {
+  if (String(projectState?.template || '').toLowerCase() !== 'business') {
+    return { ok: true };
+  }
+
+  const title = String(task?.title || '').toLowerCase();
+  const taskId = String(task?.id || '');
+  const needsWebsiteValidation = title.includes('core web experience')
+    || title.includes('web experience')
+    || title.includes('landing site')
+    || taskId === 'GOAL-DELIVERY-GAP';
+  if (!needsWebsiteValidation) {
+    return { ok: true };
+  }
+
+  const websiteRoot = path.join(WORKSPACE_ROOT, 'projects', projectState.id, 'website');
+  const indexPath = path.join(websiteRoot, 'index.html');
+  const appPath = path.join(websiteRoot, 'app.js');
+  const stylePath = path.join(websiteRoot, 'style.css');
+  if (!fs.existsSync(indexPath) || !fs.existsSync(appPath) || !fs.existsSync(stylePath)) {
+    return { ok: false, reason: 'website_artifacts_missing' };
+  }
+
+  const indexHtml = fs.readFileSync(indexPath, 'utf-8');
+  const appJs = fs.readFileSync(appPath, 'utf-8');
+  const styleCss = fs.readFileSync(stylePath, 'utf-8');
+
+  if (isScaffoldOrThin(indexHtml, 20) || !indexHtml.includes('./app.js') || !indexHtml.includes('./style.css')) {
+    return { ok: false, reason: 'website_index_incomplete' };
+  }
+  if (isScaffoldOrThin(appJs, 60)) {
+    return { ok: false, reason: 'website_app_js_incomplete' };
+  }
+  if (isScaffoldOrThin(styleCss, 40)) {
+    return { ok: false, reason: 'website_style_css_incomplete' };
+  }
+
+  try {
+    // Parse-only syntax validation so broken JS cannot be marked as done.
+    // eslint-disable-next-line no-new-func
+    new Function(appJs);
+  } catch (err) {
+    const detail = String(err && err.message ? err.message : 'invalid_javascript').slice(0, 180);
+    return { ok: false, reason: `website_app_js_syntax_error:${detail}` };
+  }
+
+  if (/const\s+supabase\s*=\s*supabase\.createClient\s*\(/i.test(appJs)) {
+    return { ok: false, reason: 'website_supabase_client_init_invalid' };
+  }
+
   return { ok: true };
 }
 
