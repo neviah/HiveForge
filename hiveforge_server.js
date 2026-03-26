@@ -4904,6 +4904,113 @@ export default function HomeScreen(): React.JSX.Element {
 }
 `;
   }
+  if (lower === 'website/index.html') {
+    return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${title}</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <main class="container">
+    <header class="header">
+      <h1>${title}</h1>
+      <p>Draft preview renders with API fallback when backend services are unavailable.</p>
+    </header>
+    <section id="status" class="status"></section>
+    <section id="app" class="auctions-grid"></section>
+  </main>
+  <script src="./app.js"></script>
+</body>
+</html>
+`;
+  }
+  if (lower === 'website/app.js') {
+    return [
+      "const API_BASE = '/.netlify/functions/api';",
+      '',
+      'const DEMO_AUCTIONS = [',
+      '  {',
+      "    id: 'demo-1',",
+      "    title: 'Rooftop Dinner Date',",
+      "    description: 'Bid for an evening dinner date experience with skyline views.',",
+      '    current_price: 42,',
+      '    bid_count: 7,',
+      '    ends_at: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),',
+      '  },',
+      '  {',
+      "    id: 'demo-2',",
+      "    title: 'Gallery Walk + Coffee',",
+      "    description: 'Win a curated gallery date followed by coffee.',",
+      '    current_price: 28,',
+      '    bid_count: 4,',
+      '    ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),',
+      '  },',
+      '];',
+      '',
+      "const statusEl = document.getElementById('status');",
+      "const appEl = document.getElementById('app');",
+      '',
+      "function renderStatus(message, kind) {",
+      "  const level = kind || 'info';",
+      "  statusEl.className = 'status ' + level;",
+      '  statusEl.textContent = message;',
+      '}',
+      '',
+      'function renderAuctions(items) {',
+      "  appEl.innerHTML = (items || []).map(function (auction) {",
+      "    return '<article class=\"card\">' +",
+      "      '<h3>' + auction.title + '</h3>' +",
+      "      '<p>' + auction.description + '</p>' +",
+      "      '<p><strong>$' + Number(auction.current_price || 0).toFixed(2) + '</strong> · ' + Number(auction.bid_count || 0) + ' bids</p>' +",
+      "      '<p class=\"meta\">Ends ' + new Date(auction.ends_at).toLocaleString() + '</p>' +",
+      "      '</article>';",
+      "  }).join('');",
+      '}',
+      '',
+      'async function fetchAuctions() {',
+      '  try {',
+      "    const response = await fetch(API_BASE + '/auctions');",
+      "    if (!response.ok) throw new Error('HTTP_' + response.status);",
+      '    const payload = await response.json();',
+      '    const rows = Array.isArray(payload) ? payload : (Array.isArray(payload.data) ? payload.data : []);',
+      "    renderStatus('Live API data loaded.', 'ok');",
+      '    return rows;',
+      '  } catch (_err) {',
+      "    renderStatus('Draft preview fallback active: backend API unavailable, showing demo data.', 'warn');",
+      '    return DEMO_AUCTIONS;',
+      '  }',
+      '}',
+      '',
+      'async function boot() {',
+      "  renderStatus('Loading auctions...', 'info');",
+      '  const auctions = await fetchAuctions();',
+      '  renderAuctions(auctions);',
+      '}',
+      '',
+      'boot();',
+      '',
+    ].join('\\n');
+  }
+  if (lower === 'website/style.css') {
+    return `:root { color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: "Segoe UI", system-ui, sans-serif; background: #f4f6fb; color: #1f2a37; }
+.container { max-width: 1100px; margin: 0 auto; padding: 24px; }
+.header h1 { margin: 0 0 6px; }
+.header p { margin: 0 0 18px; color: #5b6675; }
+.status { margin-bottom: 16px; padding: 10px 12px; border-radius: 8px; border: 1px solid #d6dde8; background: #eef3fb; }
+.status.ok { border-color: #b6e3c6; background: #e7f7ee; }
+.status.warn { border-color: #f0d4a8; background: #fff4e2; }
+.auctions-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.card { background: #fff; border: 1px solid #e3e8f1; border-radius: 10px; padding: 14px; box-shadow: 0 6px 18px rgba(15, 23, 42, 0.05); }
+.card h3 { margin: 0 0 8px; }
+.card p { margin: 0 0 8px; color: #334155; }
+.card .meta { margin: 0; color: #64748b; font-size: 0.92rem; }
+`;
+  }
   if (lower.endsWith('.html')) {
     return `<!doctype html>\n<html lang="en">\n<head>\n  <meta charset="utf-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1" />\n  <title>${title}</title>\n  <link rel="stylesheet" href="./style.css" />\n</head>\n<body>\n  <main id="app">\n    <h1>${title}</h1>\n    <p>HIVEFORGE_SCAFFOLD_PLACEHOLDER</p>\n  </main>\n  <script src="./app.js"></script>\n</body>\n</html>\n`;
   }
@@ -9778,6 +9885,12 @@ function startProjectTaskExecution(projectState, task, assignee) {
             '  Include practical run commands in docs/qa_report.md (for example: npm install, npm run dev, npm run build).',
             '  For draft preview, include a short walkthrough of key UI flows and expected states.',
           ]
+          : templateId === 'business'
+            ? [
+              '  Draft preview requirement: website/app.js must gracefully handle unavailable backend endpoints.',
+              '  If API calls fail, render a demo fallback dataset instead of showing a blank page or fatal error.',
+              '  Ensure index.html can render meaningful content with only website/index.html + website/app.js + website/style.css.',
+            ]
         : []),
       '  Replace HIVEFORGE_SCAFFOLD_PLACEHOLDER content with real work output before marking tasks complete.',
     ].join('\n');
