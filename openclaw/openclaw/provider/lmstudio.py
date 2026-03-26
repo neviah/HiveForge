@@ -93,7 +93,10 @@ class LMStudioProvider(BaseProvider):
                     break
                 try:
                     data = json.loads(line)
-                    delta = data.get("choices", [{}])[0].get("delta", {})
+                    choices = data.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
                     if "content" in delta and delta["content"]:
                         yield delta["content"]
                     elif delta.get("tool_calls"):
