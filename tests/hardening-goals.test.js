@@ -178,10 +178,32 @@ test('business web implementation task requires complete marketplace UX flows', 
   assert.match(desc, /navigation|menu/);
   assert.match(desc, /login|signup|auth|account/);
   assert.match(desc, /profile/);
-  assert.match(desc, /create-auction|seller flow|create auction/);
+  assert.match(desc, /seller listing|seller.*flow|create.*flow|create-auction|create auction/);
   assert.match(desc, /my bids|my auctions|watchlist|dashboard/);
   assert.match(desc, /filter|search|sort|category/);
   assert.match(desc, /loading|empty|error/);
+});
+
+test('business web implementation task adapts for non-marketplace goals', () => {
+  const plan = goalActionPlanFromPrompt('business', 'Build a SaaS invoice automation portal for accountants and finance teams.', {});
+  const implementationTask = (plan.tasks || []).find((task) => /implement core web experience/i.test(String(task.title || '')));
+  assert.ok(implementationTask);
+  const desc = String(implementationTask.description || '').toLowerCase();
+
+  assert.doesNotMatch(desc, /create-auction|my bids|my auctions|watchlist|seller listing|auction/);
+  assert.match(desc, /navigation|menu/);
+  assert.match(desc, /auth|account|guest/);
+  assert.match(desc, /loading|empty|error/);
+});
+
+test('business goal clarification asks about dashboard when web scope is ambiguous', () => {
+  const plan = goalActionPlanFromPrompt('business', 'Build a web app for appointment reminders and customer follow-up.', {});
+
+  assert.equal(Array.isArray(plan.clarificationQuestions), true);
+  assert.equal(
+    plan.clarificationQuestions.some((question) => /dashboard|admin/i.test(String(question || ''))),
+    true,
+  );
 });
 
 test('draft mode blocks mutating connector actions only', () => {

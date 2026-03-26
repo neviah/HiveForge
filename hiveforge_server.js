@@ -5948,7 +5948,51 @@ function goalClarificationQuestions(templateId, goalText, tags = {}) {
     questions.push('Do you want account-based authentication in the MVP, or should we start with guest-only access?');
   }
 
+  if (templateKey === 'business') {
+    if (tags.webApp && !/(dashboard|admin|portal|backoffice|reporting)/.test(text)) {
+      questions.push('Should this MVP include an operator/admin dashboard in phase 1, or can we defer dashboard tooling to a later milestone?');
+    }
+    if (tags.marketplace && !/(seller|buyer|two[-\s]?sided|role|persona)/.test(text)) {
+      questions.push('For marketplace scope, which personas are required in MVP (for example seller, buyer, moderator), and which can ship later?');
+    }
+    if ((tags.marketplace || tags.ecommerce || tags.webApp) && !/(search|filter|sort|category|discover)/.test(text)) {
+      questions.push('Do you want discovery controls (search/filter/sort/categories) in MVP, or should discovery stay minimal for first release?');
+    }
+    if ((tags.social || tags.marketplace || tags.property) && !/(profile|onboarding|verification|kyc)/.test(text)) {
+      questions.push('How deep should onboarding/profile setup be for MVP (basic profile only vs richer verification and preferences)?');
+    }
+  }
+
   return questions.slice(0, 5);
+}
+
+function buildBusinessWebExperienceRequirements(tags = {}, goalText = '') {
+  const text = String(goalText || '').toLowerCase();
+  const requirements = [
+    'clear navigation/menu information architecture',
+    'robust loading, empty, and error states for critical views',
+  ];
+
+  if (tags.webApp || tags.social || tags.marketplace || tags.property) {
+    requirements.push('auth entry with explicit scope decision (account-based or guest-only)');
+  }
+  if (tags.social || tags.marketplace || tags.property) {
+    requirements.push('profile setup/edit flow appropriate to target personas');
+  }
+  if (tags.marketplace) {
+    requirements.push('seller listing/create flow and buyer participation flow');
+    requirements.push('user activity tracking views (for example my bids/listings/watchlist/order activity)');
+  } else if (tags.ecommerce) {
+    requirements.push('catalog browsing and purchase journey from discovery to checkout');
+  }
+  if (tags.marketplace || tags.ecommerce || tags.webApp) {
+    requirements.push('discovery controls where relevant (search/filter/sort/category)');
+  }
+  if (/(dashboard|admin|portal|backoffice|reporting)/.test(text)) {
+    requirements.push('dashboard/portal workflows specified in the goal');
+  }
+
+  return requirements;
 }
 
 function goalActionPlanFromPrompt(templateId, goal, template = {}) {
@@ -6069,6 +6113,9 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
   }
 
   if (tags.webApp || isSoftwareTemplate) {
+    const businessRequirements = !isMobileTemplate
+      ? buildBusinessWebExperienceRequirements(tags, goalText).join(', ')
+      : null;
     addTask({
       title: isMobileTemplate
         ? 'Design system architecture, mobile state model, and API contracts'
@@ -6087,7 +6134,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       requiredRole: 'UI Designer',
       description: isMobileTemplate
         ? 'Build production-ready mobile UX in React Native with Expo navigation/state patterns for required personas and success paths.'
-        : 'Build production-ready web UX in React + TypeScript for required personas and success paths, including: navigation/menu IA, auth entry + account setup, profile management, create-auction/seller flow, bidder activity tracking (my bids/my auctions/watchlist/dashboard), discovery filters + search + sort, and robust loading/empty/error states.',
+        : `Build production-ready web UX in React + TypeScript for required personas and success paths, including: ${businessRequirements}.`,
     });
   }
 
@@ -7657,15 +7704,33 @@ function validateBusinessTemplateTaskArtifacts(projectState, task) {
     return { ok: false, reason: 'website_supabase_client_init_invalid' };
   }
 
+  const goalText = String(projectState?.goal || '').toLowerCase();
+  const goalTags = (projectState && projectState.goalPlan && projectState.goalPlan.tags)
+    ? projectState.goalPlan.tags
+    : normalizeGoalKeywordTags(goalText);
   const combined = `${indexHtml}\n${appJs}`.toLowerCase();
   const requiredFlowChecks = [
     { key: 'navigation', regex: /\b(nav|navbar|menu|sidebar)\b/ },
-    { key: 'auth', regex: /\b(login|sign\s*up|signup|auth|account)\b/ },
-    { key: 'profile', regex: /\bprofile|settings\b/ },
-    { key: 'create_auction', regex: /create\s*auction|new\s*auction|sell|list\s*an?\s*auction/ },
-    { key: 'activity_tracking', regex: /my\s*bids|my\s*auctions|watchlist|dashboard/ },
-    { key: 'discovery_filters', regex: /\b(filter|category|sort|search)\b/ },
+    { key: 'resilience_states', regex: /\b(loading|empty|error|not found|try again)\b/ },
   ];
+
+  if (goalTags.webApp || goalTags.social || goalTags.marketplace || goalTags.property) {
+    requiredFlowChecks.push({ key: 'auth_scope', regex: /\b(login|sign\s*up|signup|auth|account|guest\s*only|guest\s*mode)\b/ });
+  }
+  if (goalTags.social || goalTags.marketplace || goalTags.property) {
+    requiredFlowChecks.push({ key: 'profile', regex: /\bprofile|onboarding|settings\b/ });
+  }
+  if (goalTags.marketplace) {
+    requiredFlowChecks.push({ key: 'seller_buyer_flows', regex: /\b(seller|buyer|bid|listing|auction|create\s*auction|list\s*an?\s*item)\b/ });
+    requiredFlowChecks.push({ key: 'activity_tracking', regex: /\b(my\s*bids|my\s*auctions|watchlist|order\s*history|activity)\b/ });
+    requiredFlowChecks.push({ key: 'discovery_filters', regex: /\b(filter|category|sort|search)\b/ });
+  } else if (goalTags.ecommerce || goalTags.webApp) {
+    requiredFlowChecks.push({ key: 'discovery_filters', regex: /\b(filter|category|sort|search)\b/ });
+  }
+  if (/(dashboard|admin|portal|backoffice|reporting)/.test(goalText)) {
+    requiredFlowChecks.push({ key: 'dashboard', regex: /\b(dashboard|admin|portal|backoffice|reporting)\b/ });
+  }
+
   const missingFlows = requiredFlowChecks
     .filter((check) => !check.regex.test(combined))
     .map((check) => check.key);
@@ -9906,9 +9971,10 @@ function startProjectTaskExecution(projectState, task, assignee) {
               '  Draft preview requirement: website/app.js must gracefully handle unavailable backend endpoints.',
               '  If API calls fail, render a demo fallback dataset instead of showing a blank page or fatal error.',
               '  Ensure index.html can render meaningful content with only website/index.html + website/app.js + website/style.css.',
-              '  Product quality requirement: deliver full marketplace UX, not a toy page.',
-              '  MUST include: top navigation/menu, login/signup/account entry, profile setup/edit, create-auction seller flow, my activity area (my bids + my auctions/watchlist), and discovery filters/search/sort.',
-              '  Use established auction/marketplace UX patterns as baseline references and adapt to this project goal.',
+              '  Product quality requirement: deliver domain-appropriate UX (not a toy page).',
+              '  Include only role/workflow modules implied by this goal; do not force auction-only or dashboard-only features when not required.',
+              '  If role scope is ambiguous (for example seller/buyer/admin or whether dashboard is needed), ask clarifying questions before finalizing flows.',
+              '  Use established patterns from similar products in the same domain as implementation references.',
               '  Include clear loading, empty, and error states for each critical screen.',
             ]
         : []),
