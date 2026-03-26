@@ -169,6 +169,21 @@ test('goal prompt analysis asks auth clarification for web app goals without aut
   );
 });
 
+test('business web implementation task requires complete marketplace UX flows', () => {
+  const plan = goalActionPlanFromPrompt('business', 'Build an auction dating website where users can bid for date experiences.', {});
+  const implementationTask = (plan.tasks || []).find((task) => /implement core web experience/i.test(String(task.title || '')));
+  assert.ok(implementationTask);
+  const desc = String(implementationTask.description || '').toLowerCase();
+
+  assert.match(desc, /navigation|menu/);
+  assert.match(desc, /login|signup|auth|account/);
+  assert.match(desc, /profile/);
+  assert.match(desc, /create-auction|seller flow|create auction/);
+  assert.match(desc, /my bids|my auctions|watchlist|dashboard/);
+  assert.match(desc, /filter|search|sort|category/);
+  assert.match(desc, /loading|empty|error/);
+});
+
 test('draft mode blocks mutating connector actions only', () => {
   assert.equal(shouldBlockMutatingConnectorInDraftMode('draft', 'netlify', 'trigger_deploy'), true);
   assert.equal(shouldBlockMutatingConnectorInDraftMode('draft', 'analytics', 'get_profile'), false);

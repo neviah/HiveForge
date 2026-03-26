@@ -6087,7 +6087,7 @@ function goalActionPlanFromPrompt(templateId, goal, template = {}) {
       requiredRole: 'UI Designer',
       description: isMobileTemplate
         ? 'Build production-ready mobile UX in React Native with Expo navigation/state patterns for required personas and success paths.'
-        : 'Build production-ready web UX in React + TypeScript for required personas and success paths.',
+        : 'Build production-ready web UX in React + TypeScript for required personas and success paths, including: navigation/menu IA, auth entry + account setup, profile management, create-auction/seller flow, bidder activity tracking (my bids/my auctions/watchlist/dashboard), discovery filters + search + sort, and robust loading/empty/error states.',
     });
   }
 
@@ -7655,6 +7655,22 @@ function validateBusinessTemplateTaskArtifacts(projectState, task) {
 
   if (/const\s+supabase\s*=\s*supabase\.createClient\s*\(/i.test(appJs)) {
     return { ok: false, reason: 'website_supabase_client_init_invalid' };
+  }
+
+  const combined = `${indexHtml}\n${appJs}`.toLowerCase();
+  const requiredFlowChecks = [
+    { key: 'navigation', regex: /\b(nav|navbar|menu|sidebar)\b/ },
+    { key: 'auth', regex: /\b(login|sign\s*up|signup|auth|account)\b/ },
+    { key: 'profile', regex: /\bprofile|settings\b/ },
+    { key: 'create_auction', regex: /create\s*auction|new\s*auction|sell|list\s*an?\s*auction/ },
+    { key: 'activity_tracking', regex: /my\s*bids|my\s*auctions|watchlist|dashboard/ },
+    { key: 'discovery_filters', regex: /\b(filter|category|sort|search)\b/ },
+  ];
+  const missingFlows = requiredFlowChecks
+    .filter((check) => !check.regex.test(combined))
+    .map((check) => check.key);
+  if (missingFlows.length) {
+    return { ok: false, reason: `website_core_flows_missing:${missingFlows.join('|')}` };
   }
 
   return { ok: true };
@@ -9890,6 +9906,10 @@ function startProjectTaskExecution(projectState, task, assignee) {
               '  Draft preview requirement: website/app.js must gracefully handle unavailable backend endpoints.',
               '  If API calls fail, render a demo fallback dataset instead of showing a blank page or fatal error.',
               '  Ensure index.html can render meaningful content with only website/index.html + website/app.js + website/style.css.',
+              '  Product quality requirement: deliver full marketplace UX, not a toy page.',
+              '  MUST include: top navigation/menu, login/signup/account entry, profile setup/edit, create-auction seller flow, my activity area (my bids + my auctions/watchlist), and discovery filters/search/sort.',
+              '  Use established auction/marketplace UX patterns as baseline references and adapt to this project goal.',
+              '  Include clear loading, empty, and error states for each critical screen.',
             ]
         : []),
       '  Replace HIVEFORGE_SCAFFOLD_PLACEHOLDER content with real work output before marking tasks complete.',
