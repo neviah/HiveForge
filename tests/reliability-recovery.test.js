@@ -7,6 +7,9 @@ const {
   connectorRetryPlan,
   recoverProjectStateAfterRestart,
   runProjectHeartbeat,
+  acquireTaskLease,
+  isTaskLeaseActive,
+  requeueTaskToBacklog,
 } = require('../hiveforge_server');
 
 function projectId(prefix) {
@@ -109,4 +112,57 @@ test('heartbeat soak simulation keeps runtime stable over many cycles', () => {
   assert.equal(state.heartbeat.cycleCount, 120);
   assert.equal(state.heartbeat.log.length <= 200, true);
   assert.equal(state.logs.length <= 1000, true);
+});
+
+test('task lease acquisition blocks duplicate execution ownership', () => {
+  const now = new Date().toISOString();
+  const task = {
+    id: 'TASK-LEASE-1',
+    status: 'inprogress',
+    executionState: 'leased',
+    assignee: 'worker_a',
+    startedAt: now,
+  };
+
+  const firstLease = acquireTaskLease(task, 'worker_a', now, 60 * 1000);
+  assert.ok(firstLease);
+  assert.equal(task.leaseOwner, 'worker_a');
+  assert.equal(isTaskLeaseActive(task, now), true);
+
+  const duplicateLease = acquireTaskLease(task, 'worker_b', now, 60 * 1000);
+  assert.equal(duplicateLease, null);
+  assert.equal(task.leaseOwner, 'worker_a');
+  assert.equal(task.leaseId, firstLease.leaseId);
+});
+
+test('stale lease writes are rejected before requeue mutation', () => {
+  const now = new Date().toISOString();
+  const task = {
+    id: 'TASK-LEASE-2',
+    status: 'inprogress',
+    executionState: 'running',
+    assignee: 'worker_a',
+    startedAt: now,
+    retryCount: 0,
+    lastFailedAt: null,
+    lastError: null,
+  };
+  const lease = acquireTaskLease(task, 'worker_a', now, 60 * 1000);
+  assert.ok(lease);
+
+  const staleWrite = requeueTaskToBacklog(task, 'stale_finalize', true, 'lease-from-old-run');
+  assert.equal(staleWrite, false);
+  assert.equal(task.status, 'inprogress');
+  assert.equal(task.executionState, 'running');
+  assert.equal(task.assignee, 'worker_a');
+  assert.equal(task.retryCount, 0);
+
+  const validWrite = requeueTaskToBacklog(task, 'current_finalize', true, lease.leaseId);
+  assert.equal(validWrite, true);
+  assert.equal(task.status, 'backlog');
+  assert.equal(task.executionState, 'queued');
+  assert.equal(task.assignee, null);
+  assert.equal(task.retryCount, 1);
+  assert.equal(task.lastError, 'current_finalize');
+  assert.equal(task.leaseId, null);
 });
