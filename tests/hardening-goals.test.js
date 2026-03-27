@@ -45,6 +45,7 @@ const {
   verifyGoalDelivery,
   summarizeProjectAutomation,
   buildProductionEvidenceBundle,
+  evaluateDoctorReadiness,
   SUPPORTED_CREDENTIAL_SERVICES,
 } = require('../hiveforge_server');
 
@@ -1486,6 +1487,19 @@ test('production evidence bundle fails checklist when certification fails', () =
 
   assert.equal(bundle.passed, false);
   assert.equal(bundle.checklist.some((entry) => entry.id === 'certification_script' && entry.ok === false), true);
+});
+
+test('doctor readiness fails when a critical check fails', () => {
+  const report = evaluateDoctorReadiness([
+    { id: 'llm_endpoint_reachable', ok: true, severity: 'critical', reason: 'ok' },
+    { id: 'sandbox_workspace_rw', ok: false, severity: 'critical', reason: 'failed' },
+    { id: 'integration_probe_whatsapp', ok: false, severity: 'warning', reason: 'warn' },
+  ], { projectId: 'proj-1' });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.criticalFailingCount, 1);
+  assert.equal(report.failingCount, 2);
+  assert.equal(Array.isArray(report.checks), true);
 });
 
 test('buildGoalMilestones creates phase-grouped verification milestones', () => {

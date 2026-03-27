@@ -12514,6 +12514,206 @@ function integrationStatus() {
   };
 }
 
+function resolveDoctorRequiredCredentialServices(projectId = null) {
+  const runtimes = [];
+  if (projectId) {
+    const runtime = projectRuntimes.get(String(projectId || '').trim());
+    if (runtime && runtime.state) runtimes.push(runtime.state);
+  } else {
+    projectRuntimes.forEach((runtime) => {
+      if (runtime && runtime.state) runtimes.push(runtime.state);
+    });
+  }
+
+  const required = new Set();
+  runtimes.forEach((state) => {
+    const goalConnectors = Array.isArray(state && state.goalPlan && state.goalPlan.requiredConnectors)
+      ? state.goalPlan.requiredConnectors
+      : [];
+    goalConnectors.forEach((connectorId) => {
+      const key = String(connectorId || '').trim().toLowerCase();
+      if (!key) return;
+      const meta = CONNECTOR_REGISTRY[key] || null;
+      const service = meta && meta.credentialService ? meta.credentialService : null;
+      if (service) required.add(service);
+    });
+
+    const taskConnectors = Array.isArray(state && state.tasks)
+      ? state.tasks
+          .map((task) => task && task.autoAction && task.autoAction.type === 'connector'
+            ? String(task.autoAction.connector || '').trim().toLowerCase()
+            : '')
+          .filter(Boolean)
+      : [];
+    taskConnectors.forEach((connectorId) => {
+      const meta = CONNECTOR_REGISTRY[connectorId] || null;
+      const service = meta && meta.credentialService ? meta.credentialService : null;
+      if (service) required.add(service);
+    });
+  });
+
+  return Array.from(required).sort();
+}
+
+function runSandboxWorkspaceDoctorProbe() {
+  const probeDir = path.join(WORKSPACE_ROOT, '.doctor');
+  const probeFile = path.join(probeDir, `probe-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}.txt`);
+  const content = `hiveforge-doctor-${nowIso()}`;
+  try {
+    ensureDir(probeDir);
+    fs.writeFileSync(probeFile, content, 'utf-8');
+    const readBack = fs.readFileSync(probeFile, 'utf-8');
+    fs.rmSync(probeFile, { force: true });
+    return {
+      ok: readBack === content,
+      reason: readBack === content
+        ? 'Sandbox workspace read/write probe succeeded.'
+        : 'Sandbox workspace probe read-back mismatch.',
+      detail: {
+        probeDir,
+      },
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `Sandbox workspace probe failed: ${redactSensitive(err.message)}`,
+      detail: {
+        probeDir,
+      },
+    };
+  }
+}
+
+function evaluateDoctorReadiness(checks = [], context = {}) {
+  const list = Array.isArray(checks) ? checks : [];
+  const failing = list.filter((entry) => !entry.ok);
+  const criticalFailing = list.filter((entry) => !entry.ok && String(entry.severity || 'critical') === 'critical');
+  const ok = criticalFailing.length === 0;
+  return {
+    ok,
+    checkedAt: nowIso(),
+    summary: ok
+      ? 'Doctor checks passed.'
+      : `Doctor checks failed (${criticalFailing.length} critical issue${criticalFailing.length === 1 ? '' : 's'}).`,
+    context,
+    checks: list,
+    failingCount: failing.length,
+    criticalFailingCount: criticalFailing.length,
+  };
+}
+
+async function runDoctorChecks(options = {}) {
+  const projectId = String(options.projectId || '').trim() || null;
+  const includeIntegrationTests = Boolean(options.includeIntegrationTests);
+  const provider = normalizeLlmProvider(appState.llm.provider || appConfig?.llm?.provider);
+  const endpoint = String(appState.llm.endpoint || appConfig?.llm?.endpoint || 'http://127.0.0.1:1234/v1').trim();
+  const apiKey = resolveLlmApiKey(appConfig?.llm || {});
+  const checks = [];
+
+  if (projectId && !projectRuntimes.has(projectId)) {
+    return evaluateDoctorReadiness([
+      {
+        id: 'project_context',
+        ok: false,
+        severity: 'critical',
+        reason: 'Project not found.',
+        detail: { projectId },
+      },
+    ], { projectId, includeIntegrationTests });
+  }
+
+  const llmProbe = await pingLLMEndpoint(provider, endpoint, apiKey);
+  checks.push({
+    id: 'llm_endpoint_reachable',
+    ok: Boolean(llmProbe.reachable),
+    severity: 'critical',
+    reason: llmProbe.reachable
+      ? `${llmProviderLabel(provider)} endpoint is reachable.`
+      : `${llmProviderLabel(provider)} endpoint is not reachable at ${endpoint}.`,
+    detail: {
+      provider,
+      endpoint,
+      model: llmProbe.model || null,
+      apiKeyConfigured: Boolean(apiKey),
+    },
+  });
+
+  const sandboxProbe = runSandboxWorkspaceDoctorProbe();
+  checks.push({
+    id: 'sandbox_workspace_rw',
+    ok: Boolean(sandboxProbe.ok),
+    severity: 'critical',
+    reason: sandboxProbe.reason,
+    detail: sandboxProbe.detail,
+  });
+
+  const notifications = notificationSettingsSummary();
+  const notifyReady = Boolean(
+    (notifications && notifications.whatsapp && notifications.whatsapp.enabled)
+    || (notifications && notifications.telegram && notifications.telegram.enabled)
+  );
+  checks.push({
+    id: 'notification_route_health',
+    ok: notifyReady,
+    severity: 'critical',
+    reason: notifyReady
+      ? 'At least one operator notification route is configured.'
+      : 'No operator notification route is configured (WhatsApp/Telegram).',
+    detail: notifications,
+  });
+
+  const requiredServices = resolveDoctorRequiredCredentialServices(projectId);
+  const metadata = readCredentialMetadata();
+  requiredServices.forEach((service) => {
+    const entry = metadata.find((row) => row.service === service) || null;
+    const hasToken = Boolean(readCredentialToken(service));
+    checks.push({
+      id: `credential_presence_${service}`,
+      ok: hasToken,
+      severity: 'critical',
+      reason: hasToken
+        ? `Credential token is present for ${service}.`
+        : `Credential token is missing for required service ${service}.`,
+      detail: {
+        service,
+        connected: Boolean(entry && entry.connected),
+      },
+    });
+  });
+
+  if (requiredServices.length === 0) {
+    checks.push({
+      id: 'credential_presence_required_set',
+      ok: true,
+      severity: 'info',
+      reason: 'No required connector credentials inferred from current project scope.',
+      detail: {
+        projectId,
+      },
+    });
+  }
+
+  if (includeIntegrationTests) {
+    const providers = ['telegram', 'whatsapp'];
+    for (const providerId of providers) {
+      const integration = await testIntegration(providerId);
+      checks.push({
+        id: `integration_probe_${providerId}`,
+        ok: Boolean(integration.ok),
+        severity: 'warning',
+        reason: integration.message || `${providerId} integration probe completed.`,
+        detail: integration,
+      });
+    }
+  }
+
+  return evaluateDoctorReadiness(checks, {
+    projectId,
+    includeIntegrationTests,
+    requiredCredentialServices: requiredServices,
+  });
+}
+
 function apiGatewaySettings() {
   const cfg = appConfig || {};
   const integrations = cfg.integrations || {};
@@ -12870,6 +13070,7 @@ function productionEvidenceRunDir(runId) {
 function buildProductionEvidenceBundle(result, context = {}) {
   const runtimes = Array.isArray(context.projectSummaries) ? context.projectSummaries : [];
   const preflights = Array.isArray(context.preflightChecks) ? context.preflightChecks : [];
+  const doctor = context.doctor && typeof context.doctor === 'object' ? context.doctor : null;
   const checklist = [
     {
       id: 'certification_script',
@@ -12889,6 +13090,14 @@ function buildProductionEvidenceBundle(result, context = {}) {
       ok: preflights.length === 0 || preflights.every((entry) => Boolean(entry && entry.passed)),
       evidence: `preflightProjects=${preflights.length}`,
     },
+    {
+      id: 'doctor_preflight',
+      title: 'Doctor readiness checks pass before autonomous production execution',
+      ok: doctor ? Boolean(doctor.ok) : true,
+      evidence: doctor
+        ? `criticalFailing=${Number(doctor.criticalFailingCount || 0)} failing=${Number(doctor.failingCount || 0)}`
+        : 'doctor report missing',
+    },
   ];
   const passed = checklist.every((entry) => entry.ok);
   return {
@@ -12900,16 +13109,18 @@ function buildProductionEvidenceBundle(result, context = {}) {
       durationMs: Number(result && result.durationMs || 0),
       projectCount: runtimes.length,
       preflightProjectCount: preflights.length,
+      doctorOk: Boolean(doctor && doctor.ok),
     },
     context: {
       runtimeSettings: runtimeSettings(),
       projectSummaries: runtimes,
       preflightChecks: preflights,
+      doctor,
     },
   };
 }
 
-function collectProductionEvidenceContext() {
+async function collectProductionEvidenceContext() {
   const projectSummaries = Array.from(projectRuntimes.values()).map((runtime) => summarizeProject(runtime.state));
   const preflightChecks = Array.from(projectRuntimes.values()).map((runtime) => {
     const preflight = evaluateProductionPreflight(runtime.state, {});
@@ -12923,16 +13134,17 @@ function collectProductionEvidenceContext() {
         : 0,
     };
   });
-  return { projectSummaries, preflightChecks };
+  const doctor = await runDoctorChecks({ includeIntegrationTests: false });
+  return { projectSummaries, preflightChecks, doctor };
 }
 
-function persistProductionCertificationEvidence(result, options = {}) {
+async function persistProductionCertificationEvidence(result, options = {}) {
   ensureDir(PRODUCTION_EVIDENCE_ROOT);
   const runId = certificationRunIdFromNow();
   const runDir = productionEvidenceRunDir(runId);
   ensureDir(runDir);
 
-  const context = collectProductionEvidenceContext();
+  const context = await collectProductionEvidenceContext();
   const bundle = buildProductionEvidenceBundle(result, context);
   const summary = {
     runId,
@@ -17102,7 +17314,39 @@ async function main() {
       return;
     }
 
+    if (pathname === '/api/doctor' && req.method === 'GET') {
+      const projectId = String(urlObj.searchParams.get('projectId') || '').trim();
+      const includeIntegrationTests = String(urlObj.searchParams.get('includeIntegrationTests') || '').trim().toLowerCase() === 'true';
+      runDoctorChecks({
+        projectId: projectId || null,
+        includeIntegrationTests,
+      }).then((report) => {
+        writeJson(res, report, report.ok ? 200 : 503);
+      }).catch((err) => {
+        writeJson(res, {
+          ok: false,
+          summary: `Doctor execution failed: ${err.message}`,
+          checks: [],
+        }, 500);
+      });
+      return;
+    }
+
     if (pathname === '/api/settings' && req.method === 'GET') {
+      const latestDoctor = evaluateDoctorReadiness([
+        {
+          id: 'cached_doctor_status',
+          ok: Boolean(appState.llm.reachable),
+          severity: 'critical',
+          reason: appState.llm.reachable
+            ? 'Cached LLM reachability check is healthy.'
+            : `${llmProviderLabel(appState.llm.provider)} endpoint is currently unreachable.`,
+          detail: {
+            endpoint: appState.llm.endpoint,
+            provider: appState.llm.provider,
+          },
+        },
+      ], { cached: true });
       const recentEvidence = listProductionEvidenceRuns(10);
       writeJson(res, {
         runtime: runtimeSettings(),
@@ -17123,6 +17367,7 @@ async function main() {
           latest: recentEvidence[0] || null,
           recentRuns: recentEvidence,
         },
+        doctor: latestDoctor,
         notifications: notificationSettingsSummary(),
       });
       return;
@@ -17264,8 +17509,8 @@ async function main() {
     if (pathname === '/api/production_certification' && req.method === 'POST') {
       const port = Number(process.env.PORT || 3000);
       const baseUrl = `http://127.0.0.1:${port}`;
-      runProductionCertification(baseUrl).then((result) => {
-        const evidence = persistProductionCertificationEvidence(result, { baseUrl });
+      runProductionCertification(baseUrl).then(async (result) => {
+        const evidence = await persistProductionCertificationEvidence(result, { baseUrl });
         appConfig.lastCertification = {
           at: new Date().toISOString(),
           passed: result.ok,
@@ -18773,6 +19018,7 @@ module.exports = {
   verifyGoalDelivery,
   summarizeProjectAutomation,
   buildProductionEvidenceBundle,
+  evaluateDoctorReadiness,
   connectorExecutionKey,
   connectorMutationExecutionKey,
   isMutatingConnectorOperation,
