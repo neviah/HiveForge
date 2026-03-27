@@ -66,4 +66,71 @@ Definition of success:
 2. Idempotent, policy-gated, auditable external actions.
 3. Actionable KPI alerts and scalable approval management.
 4. Restart/failure recovery without duplicate side effects.
-5. Pinokio compatibility, sandbox boundaries, LM Studio-only constraints preserved.
+5. Pinokio compatibility, sandbox boundaries, and configured LLM provider constraints preserved.
+
+## 30-Day Initiative: Paperclip-Parity Reliability Sprint (Cloud-First)
+
+Objective:
+
+- Harden HiveForge into a high-trust cloud-runtime control plane without sacrificing sandbox/coordinator architecture.
+
+Success metrics by day 30:
+
+1. Zero duplicate side effects across restarts for retryable connector actions in certification runs.
+2. >= 95% automatic recovery from transient connector/LLM outages within policy limits.
+3. Hard budget-stop behavior verified in automated regression scenarios.
+4. One-command operator preflight reports actionable pass/fail status for LLM + connector readiness.
+
+### Week 1 (Days 1-7): Execution Safety Foundation
+
+1. Add explicit task lease metadata (`leaseId`, `leaseOwner`, `leaseExpiresAt`) for in-progress tasks.
+2. Enforce idempotent lease acquisition before execution start.
+3. Reject stale lease completions and stale retry writes.
+4. Add deterministic execution state transitions (`queued -> leased -> running -> completed|failed|awaiting_approval`).
+
+Deliverable:
+
+- duplicate execution prevention under heartbeat/restart pressure.
+
+### Week 2 (Days 8-14): Resume + Retry Discipline
+
+1. Persist restart-resume checkpoints for active tasks and connector attempts.
+2. Classify failures into deterministic vs transient classes with connector-specific overrides.
+3. Enforce capped exponential backoff using persisted attempt lineage.
+4. Promote non-retryable failures directly to review/dead-letter with operator context.
+
+Deliverable:
+
+- reliable recovery behavior and reduced infinite remediation loops.
+
+### Week 3 (Days 15-21): Budget + Governance Hard Stops
+
+1. Convert budget threshold warnings into hard-stop execution gates for high-risk actions.
+2. Require explicit board/operator resume for hard-stopped projects.
+3. Add immutable governance event trail for policy changes and overrides.
+4. Add rollback operation for governance config revisions.
+
+Deliverable:
+
+- cloud spend blast radius constrained by policy, not best effort.
+
+### Week 4 (Days 22-30): Operator Reliability Tooling
+
+1. Ship `/api/doctor` preflight endpoint covering:
+	- LLM endpoint reachability + auth sanity
+	- configured connector credential presence
+	- notification route readiness (WhatsApp/Telegram)
+	- sandbox workspace write/read checks
+2. Add dashboard doctor panel with one-click rerun.
+3. Add certification assertions for doctor pass state before autonomous run start.
+4. Publish runbook for degraded-mode operation and incident response.
+
+Deliverable:
+
+- operator-visible runtime readiness and faster triage.
+
+### Sequencing rule
+
+1. Do not start week N+1 until week N acceptance checks pass.
+2. Prioritize runtime correctness over UI polish for this initiative.
+3. Prefer additive changes; avoid control-plane rewrites during the sprint.
