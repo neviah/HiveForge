@@ -31,6 +31,7 @@ const IMAGE_RUNTIME_STATE_PATH = path.join(IMAGE_RUNTIME_ROOT, 'runtime_state.js
 const IMAGE_SECONDARY_SDAPI_ENDPOINTS = ['http://127.0.0.1:7860', 'http://127.0.0.1:7861', 'http://127.0.0.1:7862'];
 const MAX_TASK_HISTORY = 100;
 const MAX_EVENTS_PER_TASK = 500;
+const TASK_LEASE_DURATION_MS = 5 * 60 * 1000;
 const DEFAULT_RUNTIME_SETTINGS = {
   heartbeatIntervalMs: 30000,
   stallTimeoutMs: 10 * 60 * 1000,
@@ -9537,10 +9538,73 @@ function safeJsonReadFromText(raw, fallback = {}) {
   }
 }
 
+function ensureTaskLeaseFields(task) {
+  if (!task || typeof task !== 'object') return;
+  if (typeof task.leaseId === 'undefined') task.leaseId = null;
+  if (typeof task.leaseOwner === 'undefined') task.leaseOwner = null;
+  if (typeof task.leaseAcquiredAt === 'undefined') task.leaseAcquiredAt = null;
+  if (typeof task.leaseExpiresAt === 'undefined') task.leaseExpiresAt = null;
+}
+
+function clearTaskLease(task) {
+  ensureTaskLeaseFields(task);
+  task.leaseId = null;
+  task.leaseOwner = null;
+  task.leaseAcquiredAt = null;
+  task.leaseExpiresAt = null;
+}
+
+function isTaskLeaseActive(task, at = nowIso()) {
+  ensureTaskLeaseFields(task);
+  if (!task.leaseId || !task.leaseOwner || !task.leaseExpiresAt) return false;
+  const nowMs = Date.parse(String(at || nowIso()));
+  const expiresMs = Date.parse(String(task.leaseExpiresAt || ''));
+  if (!Number.isFinite(nowMs) || !Number.isFinite(expiresMs)) return false;
+  return expiresMs >= nowMs;
+}
+
+function acquireTaskLease(task, leaseOwner, acquiredAt = nowIso(), ttlMs = TASK_LEASE_DURATION_MS) {
+  ensureTaskLeaseFields(task);
+  const owner = String(leaseOwner || '').trim();
+  if (!owner) return null;
+
+  if (isTaskLeaseActive(task, acquiredAt) && task.leaseOwner !== owner) {
+    return null;
+  }
+
+  const leaseId = crypto.randomUUID();
+  const acquiredMs = Date.parse(String(acquiredAt || nowIso()));
+  const safeAcquiredMs = Number.isFinite(acquiredMs) ? acquiredMs : Date.now();
+  const expiresAt = new Date(safeAcquiredMs + Math.max(1000, Number(ttlMs || TASK_LEASE_DURATION_MS))).toISOString();
+  task.leaseId = leaseId;
+  task.leaseOwner = owner;
+  task.leaseAcquiredAt = new Date(safeAcquiredMs).toISOString();
+  task.leaseExpiresAt = expiresAt;
+  return {
+    leaseId,
+    leaseOwner: owner,
+    leaseAcquiredAt: task.leaseAcquiredAt,
+    leaseExpiresAt: expiresAt,
+  };
+}
+
+function refreshTaskLease(task, at = nowIso(), ttlMs = TASK_LEASE_DURATION_MS) {
+  ensureTaskLeaseFields(task);
+  if (!task.leaseId || !task.leaseOwner) return null;
+  const atMs = Date.parse(String(at || nowIso()));
+  const safeAtMs = Number.isFinite(atMs) ? atMs : Date.now();
+  task.leaseExpiresAt = new Date(safeAtMs + Math.max(1000, Number(ttlMs || TASK_LEASE_DURATION_MS))).toISOString();
+  return task.leaseExpiresAt;
+}
+
 // -- Shared task-requeue helper --------------------------------------------
 // All code paths that return a task to backlog must use this so fields stay
 // consistent and debug metadata (lastError, lastFailedAt) is preserved.
-function requeueTaskToBacklog(task, reason = 'requeued', bumpRetry = true) {
+function requeueTaskToBacklog(task, reason = 'requeued', bumpRetry = true, expectedLeaseId = null) {
+  ensureTaskLeaseFields(task);
+  if (expectedLeaseId && task.leaseId && String(task.leaseId) !== String(expectedLeaseId)) {
+    return false;
+  }
   task.status = 'backlog';
   task.assignee = null;
   task.startedAt = null;
@@ -9548,11 +9612,13 @@ function requeueTaskToBacklog(task, reason = 'requeued', bumpRetry = true) {
   task.inprogressCycles = 0;
   task.executionTaskRunId = null;
   task.lastProgressAt = null;
+  clearTaskLease(task);
   if (bumpRetry) {
     task.retryCount = Number(task.retryCount || 0) + 1;
     task.lastFailedAt = nowIso();
     task.lastError = reason;
   }
+  return true;
 }
 
 function cancelProjectExecution(projectId, reason = 'cancelled', requeueTask = true) {
@@ -9572,7 +9638,16 @@ function cancelProjectExecution(projectId, reason = 'cancelled', requeueTask = t
   const task = runtime.state.tasks.find((t) => t.id === execution.taskId);
   if (task && task.status === 'inprogress') {
     if (requeueTask) {
-      requeueTaskToBacklog(task, reason, false);
+      const requeued = requeueTaskToBacklog(task, reason, false, execution.leaseId || null);
+      if (!requeued) {
+        appendProjectLog(runtime.state, 'warning', {
+          kind: 'task_requeue_stale_lease_rejected',
+          taskId: task.id,
+          expectedLeaseId: execution.leaseId || null,
+          actualLeaseId: task.leaseId || null,
+          reason,
+        });
+      }
     }
     emitProjectEvent(projectId, 'task_update', task);
   }
@@ -9610,10 +9685,14 @@ function cancelProjectExecution(projectId, reason = 'cancelled', requeueTask = t
   return true;
 }
 
-function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
+function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode, leaseId = null) {
   const runtime = projectRuntimes.get(projectId);
   if (!runtime || !runtime.execution) return;
-  if (runtime.execution.taskRunId !== taskRunId || runtime.execution.taskId !== taskId) return;
+  if (
+    runtime.execution.taskRunId !== taskRunId
+    || runtime.execution.taskId !== taskId
+    || (leaseId && runtime.execution.leaseId && runtime.execution.leaseId !== leaseId)
+  ) return;
 
   const settings = runtimeSettings();
   const execution = runtime.execution;
@@ -9621,6 +9700,17 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
 
   const task = runtime.state.tasks.find((t) => t.id === taskId);
   if (!task || task.status !== 'inprogress') return;
+  if (leaseId && task.leaseId && task.leaseId !== leaseId) {
+    appendProjectLog(runtime.state, 'warning', {
+      kind: 'task_finalize_stale_lease_rejected',
+      taskId,
+      taskRunId,
+      expectedLeaseId: leaseId,
+      actualLeaseId: task.leaseId,
+    });
+    persistProjectState(runtime.state);
+    return;
+  }
 
   const worker = runtime.state.agents.find((a) => a.id === task.assignee);
   let effectiveExitCode = exitCode;
@@ -9667,6 +9757,7 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
     task.inprogressCycles = 0;
     task.executionTaskRunId = null;
     task.lastError = null;
+    clearTaskLease(task);
 
     if (worker) {
       worker.status = 'idle';
@@ -9714,7 +9805,19 @@ function finalizeProjectTaskExecution(projectId, taskId, taskRunId, exitCode) {
     if (effectiveExitCode !== 2 && !capturedError) {
       failureReason = `exit_code_${effectiveExitCode}`;
     }
-    requeueTaskToBacklog(task, failureReason, true);
+    const requeued = requeueTaskToBacklog(task, failureReason, true, execution.leaseId || null);
+    if (!requeued) {
+      appendProjectLog(runtime.state, 'warning', {
+        kind: 'task_requeue_stale_lease_rejected',
+        taskId: task.id,
+        taskRunId,
+        expectedLeaseId: execution.leaseId || null,
+        actualLeaseId: task.leaseId || null,
+        reason: failureReason,
+      });
+      persistProjectState(runtime.state);
+      return;
+    }
 
     const failureCount = Number(task.failureStreak || 0) + 1;
     task.failureStreak = failureCount;
@@ -9907,6 +10010,8 @@ function loadAgentPersonalityPrompt(paths) {
 function startProjectTaskExecution(projectState, task, assignee) {
   const runtime = projectRuntimes.get(projectState.id);
   if (!runtime || runtime.execution) return false;
+  if (task.status !== 'inprogress' || task.executionState !== 'leased') return false;
+  if (!isTaskLeaseActive(task) || String(task.leaseOwner || '') !== String(assignee.id || '')) return false;
 
   appendMessageBusEntry({
     projectId: projectState.id,
@@ -10104,6 +10209,7 @@ function startProjectTaskExecution(projectState, task, assignee) {
     taskId: task.id,
     taskRunId: taskRun.id,
     agentId: assignee.id,
+    leaseId: task.leaseId,
     child,
     startedAt: nowIso(),
     lastProgressAt: nowIso(),
@@ -10132,6 +10238,7 @@ function startProjectTaskExecution(projectState, task, assignee) {
       const active = rt.state.tasks.find((t) => t.id === task.id);
       if (active) {
         active.lastProgressAt = rt.execution.lastProgressAt;
+        refreshTaskLease(active, rt.execution.lastProgressAt);
         emitProjectEvent(projectState.id, 'task_update', active);
       }
       if (rt.execution.progressChunks === 1 || rt.execution.progressChunks % 5 === 0) {
@@ -10159,6 +10266,7 @@ function startProjectTaskExecution(projectState, task, assignee) {
       const active = rt.state.tasks.find((t) => t.id === task.id);
       if (active) {
         active.lastProgressAt = rt.execution.lastProgressAt;
+        refreshTaskLease(active, rt.execution.lastProgressAt);
         emitProjectEvent(projectState.id, 'task_update', active);
       }
       if (rt.execution.progressChunks === 1 || rt.execution.progressChunks % 5 === 0) {
@@ -10178,8 +10286,9 @@ function startProjectTaskExecution(projectState, task, assignee) {
       }
     }
   });
+  const executionLeaseId = task.leaseId;
   child.on('close', (code) => {
-    finalizeProjectTaskExecution(projectState.id, task.id, taskRun.id, code);
+    finalizeProjectTaskExecution(projectState.id, task.id, taskRun.id, code, executionLeaseId);
   });
 
   return true;
@@ -10323,10 +10432,21 @@ function runProjectHeartbeat(projectState, source = 'interval') {
       } else {
       const assignee = pickWorkerAgent(projectState, nextTask);
       if (assignee) {
+        const lease = acquireTaskLease(nextTask, assignee.id, beatTs);
+        if (!lease) {
+          appendProjectLog(projectState, 'warning', {
+            kind: 'task_lease_acquire_failed',
+            taskId: nextTask.id,
+            assignee: assignee.id,
+            source,
+          });
+          persistProjectState(projectState);
+          return;
+        }
         nextTask.status = 'inprogress';
         nextTask.assignee = assignee.id;
         nextTask.startedAt = beatTs;
-        nextTask.executionState = 'running';
+        nextTask.executionState = 'leased';
         nextTask.lastProgressAt = beatTs;
         nextTask.blockedBy = null;
         nextTask.inprogressCycles = 0;
@@ -10345,6 +10465,7 @@ function runProjectHeartbeat(projectState, source = 'interval') {
           taskId: nextTask.id,
           title: nextTask.title,
           assignee: assignee.id,
+          leaseId: lease.leaseId,
           source
         });
         emitProjectEvent(projectState.id, 'task_update', nextTask);
@@ -10355,7 +10476,16 @@ function runProjectHeartbeat(projectState, source = 'interval') {
         });
         const started = startProjectTaskExecution(projectState, nextTask, assignee);
         if (!started) {
-          requeueTaskToBacklog(nextTask, 'spawn_failed', true);
+          const requeued = requeueTaskToBacklog(nextTask, 'spawn_failed', true, lease.leaseId);
+          if (!requeued) {
+            appendProjectLog(projectState, 'warning', {
+              kind: 'task_requeue_stale_lease_rejected',
+              taskId: nextTask.id,
+              expectedLeaseId: lease.leaseId,
+              actualLeaseId: nextTask.leaseId || null,
+              reason: 'spawn_failed',
+            });
+          }
           assignee.status = 'idle';
           assignee.currentTask = null;
           projectState.heartbeat.autoFixCount = (projectState.heartbeat.autoFixCount || 0) + 1;
@@ -10480,6 +10610,7 @@ function recoverProjectStateAfterRestart(state) {
 
   state.tasks.forEach((t) => { if (typeof t.inprogressCycles !== 'number') t.inprogressCycles = 0; });
   state.tasks.forEach((t) => {
+    ensureTaskLeaseFields(t);
     if (!t.executionState) t.executionState = t.status === 'done' ? 'done' : (t.status === 'inprogress' ? 'running' : 'queued');
     if (typeof t.retryCount !== 'number') t.retryCount = 0;
     if (typeof t.lastFailedAt === 'undefined') t.lastFailedAt = null;
@@ -18249,6 +18380,9 @@ module.exports = {
   appendMessageBusEntry,
   readMessageBusEntries,
   recoverProjectStateAfterRestart,
+  acquireTaskLease,
+  isTaskLeaseActive,
+  requeueTaskToBacklog,
   evaluateAutoStaffing,
   ensureStaffingState,
   shouldKeepRunningForRecurring,
