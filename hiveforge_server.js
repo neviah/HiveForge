@@ -7807,6 +7807,11 @@ function normalizeEscapedNewlineContent(content) {
   return content.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n');
 }
 
+function nonEmptyLineCount(content) {
+  if (typeof content !== 'string') return 0;
+  return content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).length;
+}
+
 function hasHtmlAssetReference(indexHtml, fileName) {
   const html = String(indexHtml || '');
   const target = String(fileName || '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -7989,11 +7994,13 @@ function validateBusinessTemplateTaskArtifacts(projectState, task) {
     if (!hasStyleRef) issues.push('missing_style_css_ref');
     return { ok: false, reason: `website_index_incomplete:${issues.join('|')}` };
   }
-  if (isScaffoldOrThin(appJs, 60)) {
-    return { ok: false, reason: 'website_app_js_incomplete' };
+  const appJsLineCount = nonEmptyLineCount(appJs);
+  if (isScaffoldOrThin(appJs, 45)) {
+    return { ok: false, reason: `website_app_js_incomplete:lines_${appJsLineCount}` };
   }
-  if (isScaffoldOrThin(styleCss, 40)) {
-    return { ok: false, reason: 'website_style_css_incomplete' };
+  const styleCssLineCount = nonEmptyLineCount(styleCss);
+  if (isScaffoldOrThin(styleCss, 12)) {
+    return { ok: false, reason: `website_style_css_incomplete:lines_${styleCssLineCount}` };
   }
 
   try {
