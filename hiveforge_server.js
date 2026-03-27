@@ -2046,6 +2046,78 @@ function ensureKpiGoalState(projectState) {
   if (!Array.isArray(goals.weeklyPlan.objectives)) goals.weeklyPlan.objectives = [];
 }
 
+function classifyFailureDeterminism(connectorId, reason, detail = {}) {
+  const connector = String(connectorId || 'default').trim().toLowerCase() || 'default';
+  const summary = [
+    String(reason || ''),
+    String(detail && detail.errorCode || ''),
+    String(detail && detail.message || ''),
+  ].join(' ').toLowerCase();
+
+  const deterministicSignals = [
+    'permission denied', 'forbidden', 'unauthorized', 'invalid api key', 'invalid key', 'invalid auth',
+    'invalid scope', 'insufficient scope', 'insufficient permissions', 'secret_missing', 'credential',
+    'not connected', 'unsupported', 'not implemented', 'unknown_connector', 'connector_not_implemented',
+    'http 400', 'http 401', 'http 403', 'http 404', 'http 422', 'bad request', 'validation', 'syntax', 'parse error',
+  ];
+  const transientSignals = [
+    'timeout', 'timed out', 'econnreset', 'enetdown', 'eai_again', 'connection reset', 'connect', 'temporar',
+    'rate limit', '429', '5xx', 'http 5', 'service unavailable', 'gateway timeout', 'webhook', 'delayed',
+    'execution_failed', 'llm_unavailable',
+  ];
+
+  const matchedDeterministic = deterministicSignals.filter((token) => summary.includes(token));
+  const matchedTransient = transientSignals.filter((token) => summary.includes(token));
+
+  if (matchedDeterministic.length > 0) {
+    return {
+      connector,
+      classification: 'deterministic',
+      retryable: false,
+      matchedSignals: matchedDeterministic,
+    };
+  }
+  if (matchedTransient.length > 0) {
+    return {
+      connector,
+      classification: 'transient',
+      retryable: true,
+      matchedSignals: matchedTransient,
+    };
+  }
+  return {
+    connector,
+    classification: 'deterministic',
+    retryable: false,
+    matchedSignals: [],
+  };
+}
+
+function ensureTaskRetryLineage(task) {
+  if (!task || typeof task !== 'object') return;
+  if (!Array.isArray(task.retryLineage)) task.retryLineage = [];
+}
+
+function appendTaskRetryLineage(task, entry = {}) {
+  ensureTaskRetryLineage(task);
+  const normalized = {
+    at: entry.at || nowIso(),
+    stage: String(entry.stage || 'retry_event'),
+    reason: String(entry.reason || ''),
+    classification: String(entry.classification || 'deterministic'),
+    retryable: Boolean(entry.retryable),
+    attempt: Number(entry.attempt || task.retryCount || 0),
+    connector: entry.connector || null,
+    operation: entry.operation || null,
+    detail: entry.detail && typeof entry.detail === 'object' ? entry.detail : {},
+  };
+  task.retryLineage.push(normalized);
+  if (task.retryLineage.length > 50) {
+    task.retryLineage = task.retryLineage.slice(-50);
+  }
+  return normalized;
+}
+
 function connectorRetryPlan(connectorId, attemptNumber, reason, detail = {}) {
   if (typeof connectorId === 'number') {
     detail = reason || {};
@@ -2053,26 +2125,14 @@ function connectorRetryPlan(connectorId, attemptNumber, reason, detail = {}) {
     attemptNumber = connectorId;
     connectorId = 'default';
   }
-  const reasonText = String(reason || detail?.errorCode || '').toLowerCase();
-  const retryable = (
-    reasonText.includes('timeout')
-    || reasonText.includes('timed out')
-    || reasonText.includes('econnreset')
-    || reasonText.includes('enetdown')
-    || reasonText.includes('connect')
-    || reasonText.includes('temporar')
-    || reasonText.includes('rate limit')
-    || reasonText.includes('429')
-    || reasonText.includes('5xx')
-    || reasonText.includes('http 5')
-    || (reasonText.includes('webhook') && reasonText.includes('delay'))
-    || reasonText.includes('execution_failed')
-  );
+  const classification = classifyFailureDeterminism(connectorId, reason, detail);
   const nextAttempt = Math.max(1, Number(attemptNumber || 1));
   const policy = retryPolicyForConnector(connectorId);
   const rawDelay = policy.baseDelayMs * Math.pow(2, Math.max(0, nextAttempt - 1));
   return {
-    retryable,
+    retryable: classification.retryable,
+    classification: classification.classification,
+    matchedSignals: classification.matchedSignals,
     delayMs: Math.min(policy.maxDelayMs, rawDelay),
   };
 }
@@ -6757,6 +6817,7 @@ function createInitialTasks(template, options = {}) {
     startedAt: null,
     description: '',
     assistanceRequestedAt: null,
+    retryLineage: [],
   }));
 
   const goalPlan = options.goalPlan && typeof options.goalPlan === 'object' ? options.goalPlan : null;
@@ -6805,6 +6866,7 @@ function createInitialTasks(template, options = {}) {
           startedAt: null,
           description: String(task.description || ''),
           assistanceRequestedAt: null,
+          retryLineage: [],
         };
       })
     : [];
@@ -8324,6 +8386,8 @@ function sendTaskToDeadLetter(projectState, task, reason, detail = {}) {
   ensureDeadLetterState(projectState);
   ensureConnectorExecutionState(projectState);
   const at = nowIso();
+  const connectorId = String(task.autoAction?.connector || '').trim().toLowerCase();
+  const classification = classifyFailureDeterminism(connectorId, reason, detail);
   task.status = 'done';
   task.executionState = 'failed';
   task.completedAt = at;
@@ -8332,6 +8396,18 @@ function sendTaskToDeadLetter(projectState, task, reason, detail = {}) {
   task.lastError = String(reason || 'dead_lettered');
   task.deadLetteredAt = at;
   task.autoActionNotBeforeAt = null;
+  ensureTaskRetryLineage(task);
+  appendTaskRetryLineage(task, {
+    at,
+    stage: 'auto_action_dead_lettered',
+    reason,
+    classification: classification.classification,
+    retryable: false,
+    attempt: Number(task.retryCount || 0),
+    connector: task.autoAction?.connector || null,
+    operation: task.autoAction?.operation || null,
+    detail,
+  });
 
   const record = {
     taskId: task.id,
@@ -8452,6 +8528,22 @@ function scheduleAutoActionRetry(projectState, task, reason, detail = {}) {
   task.lastProgressAt = at;
   task.lastError = String(reason || 'retry_scheduled');
   task.autoActionNotBeforeAt = notBeforeAt;
+  ensureTaskRetryLineage(task);
+  appendTaskRetryLineage(task, {
+    at,
+    stage: 'auto_action_retry_scheduled',
+    reason,
+    classification: retryPlan.classification,
+    retryable: true,
+    attempt: nextRetryCount,
+    connector: task.autoAction?.connector || null,
+    operation: task.autoAction?.operation || null,
+    detail: {
+      ...detail,
+      retryDelayMs: retryPlan.delayMs,
+      matchedSignals: retryPlan.matchedSignals,
+    },
+  });
   if (typeof task.assistanceRequestedAt === 'undefined') {
     task.assistanceRequestedAt = null;
   }
@@ -9614,9 +9706,19 @@ function requeueTaskToBacklog(task, reason = 'requeued', bumpRetry = true, expec
   task.lastProgressAt = null;
   clearTaskLease(task);
   if (bumpRetry) {
+    const classification = classifyFailureDeterminism('default', reason, {});
     task.retryCount = Number(task.retryCount || 0) + 1;
     task.lastFailedAt = nowIso();
     task.lastError = reason;
+    appendTaskRetryLineage(task, {
+      at: task.lastFailedAt,
+      stage: 'task_execution_requeue',
+      reason,
+      classification: classification.classification,
+      retryable: classification.retryable,
+      attempt: task.retryCount,
+      detail: {},
+    });
   }
   return true;
 }
@@ -10616,6 +10718,7 @@ function recoverProjectStateAfterRestart(state) {
     if (typeof t.lastFailedAt === 'undefined') t.lastFailedAt = null;
     if (typeof t.lastError === 'undefined') t.lastError = null;
     if (typeof t.lastProgressAt === 'undefined') t.lastProgressAt = null;
+    if (!Array.isArray(t.retryLineage)) t.retryLineage = [];
     if (typeof t.executionTaskRunId === 'undefined') t.executionTaskRunId = null;
     if (typeof t.recurringKey === 'undefined') t.recurringKey = null;
     if (typeof t.pendingApproval === 'undefined') t.pendingApproval = null;
@@ -16223,7 +16326,8 @@ async function main() {
           createdAt: nowIso(),
           completedAt: null,
           startedAt: null,
-          description: String(payload.description || '')
+          description: String(payload.description || ''),
+          retryLineage: [],
         };
         runtime.state.tasks.push(task);
         appendProjectLog(runtime.state, 'task', { kind: 'task_created', taskId: task.id, title: task.title });

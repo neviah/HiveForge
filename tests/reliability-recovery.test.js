@@ -44,9 +44,13 @@ test('connector outage and delayed webhook reasons are treated as retryable tran
   const hardFailure = connectorRetryPlan('netlify', 1, 'permission denied invalid scope');
 
   assert.equal(outage.retryable, true);
+  assert.equal(outage.classification, 'transient');
   assert.equal(rateLimit.retryable, true);
+  assert.equal(rateLimit.classification, 'transient');
   assert.equal(delayedWebhook.retryable, true);
+  assert.equal(delayedWebhook.classification, 'transient');
   assert.equal(hardFailure.retryable, false);
+  assert.equal(hardFailure.classification, 'deterministic');
 });
 
 test('recovery normalizes corrupted project state fields without crashing', () => {
@@ -165,4 +169,9 @@ test('stale lease writes are rejected before requeue mutation', () => {
   assert.equal(task.retryCount, 1);
   assert.equal(task.lastError, 'current_finalize');
   assert.equal(task.leaseId, null);
+  assert.equal(Array.isArray(task.retryLineage), true);
+  assert.equal(task.retryLineage.length, 1);
+  assert.equal(task.retryLineage[0].stage, 'task_execution_requeue');
+  assert.equal(task.retryLineage[0].classification, 'deterministic');
+  assert.equal(task.retryLineage[0].retryable, false);
 });
