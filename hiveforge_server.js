@@ -8003,13 +8003,17 @@ function validateBusinessTemplateTaskArtifacts(projectState, task) {
     return { ok: false, reason: `website_style_css_incomplete:lines_${styleCssLineCount}` };
   }
 
-  try {
-    // Parse-only syntax validation so broken JS cannot be marked as done.
-    // eslint-disable-next-line no-new-func
-    new Function(appJs);
-  } catch (err) {
-    const detail = String(err && err.message ? err.message : 'invalid_javascript').slice(0, 180);
-    return { ok: false, reason: `website_app_js_syntax_error:${detail}` };
+  // Skip plain-JS syntax check when the page uses Babel (agent may use JSX/React).
+  const usesBabel = /babel|@babel\/standalone|react-dom/i.test(indexHtml);
+  if (!usesBabel) {
+    try {
+      // Parse-only syntax validation so broken JS cannot be marked as done.
+      // eslint-disable-next-line no-new-func
+      new Function(appJs);
+    } catch (err) {
+      const detail = String(err && err.message ? err.message : 'invalid_javascript').slice(0, 180);
+      return { ok: false, reason: `website_app_js_syntax_error:${detail}` };
+    }
   }
 
   if (/const\s+supabase\s*=\s*supabase\.createClient\s*\(/i.test(appJs)) {
@@ -10507,6 +10511,18 @@ function startProjectTaskExecution(projectState, task, assignee) {
             '  - style.css is substantial (non-scaffold) and includes layout + responsive styles',
             '  - Include loading, empty, and error states for critical UI paths',
             'Do not end with TASK_DONE until files above are actually written and saved in the workspace.',
+          ]
+          : []),
+        ...(String(task.lastError).includes('website_core_flows_missing')
+          ? [
+            'For website_core_flows_missing errors, your index.html + app.js source code MUST literally contain these patterns (as identifiers, class names, text, or comments — any occurrence counts):',
+            '  - nav/navbar/menu/sidebar  → for the navigation check (e.g. class="navbar", id="nav", <nav>)',
+            '  - login/signup/auth/account  → for the auth scope check (e.g. function login(), <button>Login</button>)',
+            '  - profile/settings  → for the profile check (e.g. renderProfile(), href="#settings")',
+            '  - filter/search/sort  → for the discovery check (e.g. <input type="search">, filterLeads())',
+            '  - dashboard/reporting  → for the dashboard check (e.g. renderDashboard(), <h1>Dashboard</h1>)',
+            '  IMPORTANT: Write VANILLA JavaScript in app.js (no JSX). If you prefer React, use React.createElement() calls, NOT angle-bracket JSX syntax.',
+            '  All five keyword groups above must appear somewhere in the combined HTML + JS source.',
           ]
           : []),
       ].join('\n')
