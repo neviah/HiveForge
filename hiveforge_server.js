@@ -7799,6 +7799,15 @@ function isScaffoldOrThin(content, minLines = 30) {
   return lines.length < minLines;
 }
 
+function hasHtmlAssetReference(indexHtml, fileName) {
+  const html = String(indexHtml || '');
+  const target = String(fileName || '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (!target) return false;
+  // Accept relative, absolute, and cache-busted asset refs (e.g. ./app.js, /app.js, app.js?v=1).
+  const pattern = new RegExp(`["'][^"']*${target}(?:[?#][^"']*)?["']`, 'i');
+  return pattern.test(html);
+}
+
 function validateUniversalGameplayLoop(indexHtmlContent, gameJsContent) {
   const html = String(indexHtmlContent || '');
   const js = String(gameJsContent || '');
@@ -7955,10 +7964,16 @@ function validateBusinessTemplateTaskArtifacts(projectState, task) {
   const appJs = fs.readFileSync(appPath, 'utf-8');
   const styleCss = fs.readFileSync(stylePath, 'utf-8');
 
-  const hasScriptRef = /<script[^>]+src=["'](?:\.\/)?app\.js["']/i.test(indexHtml);
-  const hasStyleRef = /<link[^>]+href=["'](?:\.\/)?style\.css["']/i.test(indexHtml);
-  if (isScaffoldOrThin(indexHtml, 20) || !hasScriptRef || !hasStyleRef) {
-    return { ok: false, reason: 'website_index_incomplete' };
+  const hasScriptRef = hasHtmlAssetReference(indexHtml, 'app.js');
+  const hasStyleRef = hasHtmlAssetReference(indexHtml, 'style.css');
+  const isThinIndex = isScaffoldOrThin(indexHtml, 20)
+    && String(indexHtml || '').replace(/\s+/g, '').length < 700;
+  if (isThinIndex || !hasScriptRef || !hasStyleRef) {
+    const issues = [];
+    if (isThinIndex) issues.push('thin_markup');
+    if (!hasScriptRef) issues.push('missing_app_js_ref');
+    if (!hasStyleRef) issues.push('missing_style_css_ref');
+    return { ok: false, reason: `website_index_incomplete:${issues.join('|')}` };
   }
   if (isScaffoldOrThin(appJs, 60)) {
     return { ok: false, reason: 'website_app_js_incomplete' };
