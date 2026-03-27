@@ -14,7 +14,7 @@ Implement:
 Exit criteria:
 
 - no auto-complete after one heartbeat
-- long local LLM runs tolerated when progress is observed
+- long model runs tolerated when progress is observed
 
 ### A2. Message Bus Hardening (`/sandbox/agents/messages.db`)
 

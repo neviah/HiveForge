@@ -18,3 +18,7 @@ For normal implementation tasks, include only:
 - specific file paths being edited
 
 Avoid loading `archive_bootstrap_full.md` unless doing roadmap reconciliation, audits, or historical recovery.
+
+## Provider Assumption
+
+Provider mode should follow `00_core_brief.md` and `README.md`. Current default is OpenAI-compatible cloud models (OpenRouter), not local-only LM Studio.

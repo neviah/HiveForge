@@ -2,7 +2,7 @@
 
 ## Identity
 
-HiveForge is a sandboxed, local-LLM-only automation platform built on HiveForge architecture.
+HiveForge is a sandboxed automation platform built on HiveForge architecture.
 
 It is:
 
@@ -16,7 +16,7 @@ It is:
 
 1. Preserve Pinokio compatibility.
 2. Keep sandbox boundaries intact.
-3. LM Studio is the only LLM provider.
+3. Use OpenAI-compatible provider wiring; OpenRouter is the current default deployment path.
 4. Maintain mandatory Coordinator Agent architecture.
 5. No direct subordinate-to-subordinate communication.
 6. No direct credential access by subordinate agents.

@@ -1,4 +1,4 @@
-# HiveForge Bootstrap (Compact Router)
+﻿# HiveForge Bootstrap (Compact Router)
 
 This file is intentionally concise.
 
@@ -28,3 +28,9 @@ Load historical/status docs only when doing roadmap reconciliation, audit checks
 ## Why This Exists
 
 This split keeps execution focused and reduces context overflow while preserving all original project guidance.
+
+## Runtime Provider Reality (Current)
+
+- HiveForge now runs with OpenAI-compatible cloud model connections by default.
+- OpenRouter-backed models are the current operating path.
+- Do not assume LM Studio/local-only execution unless explicitly configured for a given run.

@@ -1,11 +1,11 @@
 ﻿# HiveForge
 
-HiveForge is a Business-only Openclaw-fork on Steroids, fully sandboxed, LM Studio-only packaged as a Pinokio app. It bundles the modified OpenClaw source under `openclaw/`, enforces LM Studio as the only LLM provider, and restricts filesystem access to the sandbox workspace.
+HiveForge is a business-focused OpenClaw fork packaged as a Pinokio app with sandboxed execution and coordinated multi-agent automation. It bundles modified OpenClaw source under `openclaw/`, supports OpenAI-compatible model endpoints (with OpenRouter as the current default in production usage), and restricts filesystem access to the sandbox workspace.
 
 ## Install (Pinokio)
 1. Add this repo to Pinokio.
 2. Run the action **Install HiveForge** (executes `node install.js`).
-3. Start LM Studio locally at `http://127.0.0.1:1234/v1` with your chosen model.
+3. Configure your model provider credentials in `sandbox/config.json` (OpenRouter/OpenAI-compatible endpoint).
 4. Run **Start HiveForge** to launch the web UI and agent.
 
 ## Start
@@ -36,4 +36,6 @@ HiveForge is a Business-only Openclaw-fork on Steroids, fully sandboxed, LM Stud
 - Config: `/sandbox/config.json`
 
 ## Provider
-- Only LM Studio is allowed. Cloud LLMs and remote providers are disabled.
+- OpenAI-compatible providers are supported.
+- Current runtime default is cloud-hosted models via OpenRouter.
+- Local providers can still be used when configured, but are no longer the required default.
