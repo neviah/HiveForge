@@ -5054,7 +5054,7 @@ export default function HomeScreen(): React.JSX.Element {
       '',
       'boot();',
       '',
-    ].join('\\n');
+    ].join('\n');
   }
   if (lower === 'website/style.css') {
     return `:root { color-scheme: light; }
@@ -7799,6 +7799,14 @@ function isScaffoldOrThin(content, minLines = 30) {
   return lines.length < minLines;
 }
 
+function normalizeEscapedNewlineContent(content) {
+  if (typeof content !== 'string') return content;
+  const physicalLineCount = content.split(/\r?\n/).filter((line) => line.trim()).length;
+  const hasEscapedNewlines = /\\n/.test(content);
+  if (!hasEscapedNewlines || physicalLineCount > 3) return content;
+  return content.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n');
+}
+
 function hasHtmlAssetReference(indexHtml, fileName) {
   const html = String(indexHtml || '');
   const target = String(fileName || '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -7961,8 +7969,14 @@ function validateBusinessTemplateTaskArtifacts(projectState, task) {
   }
 
   const indexHtml = fs.readFileSync(indexPath, 'utf-8');
-  const appJs = fs.readFileSync(appPath, 'utf-8');
+  let appJs = fs.readFileSync(appPath, 'utf-8');
   const styleCss = fs.readFileSync(stylePath, 'utf-8');
+
+  const normalizedAppJs = normalizeEscapedNewlineContent(appJs);
+  if (normalizedAppJs !== appJs) {
+    appJs = normalizedAppJs;
+    fs.writeFileSync(appPath, appJs, 'utf-8');
+  }
 
   const hasScriptRef = hasHtmlAssetReference(indexHtml, 'app.js');
   const hasStyleRef = hasHtmlAssetReference(indexHtml, 'style.css');
