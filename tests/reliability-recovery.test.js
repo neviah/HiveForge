@@ -10,6 +10,11 @@ const {
   acquireTaskLease,
   isTaskLeaseActive,
   requeueTaskToBacklog,
+  ensureApprovalGovernanceState,
+  activateBudgetHardStop,
+  clearBudgetHardStop,
+  recordApprovalGovernanceRevision,
+  rollbackApprovalGovernanceRevision,
 } = require('../hiveforge_server');
 
 function projectId(prefix) {
@@ -174,4 +179,49 @@ test('stale lease writes are rejected before requeue mutation', () => {
   assert.equal(task.retryLineage[0].stage, 'task_execution_requeue');
   assert.equal(task.retryLineage[0].classification, 'deterministic');
   assert.equal(task.retryLineage[0].retryable, false);
+});
+
+test('budget hard-stop activates and requires explicit resume', () => {
+  const id = projectId('budget-stop');
+  const state = baseState(id);
+
+  activateBudgetHardStop(state, 'budget_cap_exceeded', {
+    connector: 'stripe',
+    operation: 'create_refund',
+  }, 'policy_engine');
+
+  assert.equal(state.budgetHardStop.active, true);
+  assert.equal(state.budgetHardStop.reason, 'budget_cap_exceeded');
+  assert.equal(state.budgetHardStop.activatedBy, 'policy_engine');
+  assert.ok(state.budgetHardStop.activatedAt);
+
+  clearBudgetHardStop(state, 'operator', { reason: 'manual_resume' });
+  assert.equal(state.budgetHardStop.active, false);
+  assert.equal(state.budgetHardStop.resumedBy, 'operator');
+  assert.ok(state.budgetHardStop.resumedAt);
+});
+
+test('approval governance rollback restores prior revision snapshot', () => {
+  const id = projectId('governance-rollback');
+  const state = baseState(id);
+  state.approvalGovernance = null;
+  ensureApprovalGovernanceState(state);
+
+  state.approvalGovernance.enabled = true;
+  const baseline = recordApprovalGovernanceRevision(state, 'operator', 'baseline');
+  assert.ok(baseline && baseline.id);
+
+  state.approvalGovernance.enabled = false;
+  state.approvalGovernance.autoDenyRules.push({ id: 'deny-all-temporary' });
+  const updated = recordApprovalGovernanceRevision(state, 'operator', 'tighten');
+  assert.ok(updated && updated.id);
+  assert.equal(state.approvalGovernance.enabled, false);
+
+  const rollback = rollbackApprovalGovernanceRevision(state, baseline.id, 'operator', 'restore_baseline');
+  assert.equal(rollback.ok, true);
+  assert.equal(state.approvalGovernance.enabled, true);
+  assert.equal(
+    state.approvalGovernance.autoDenyRules.some((rule) => String(rule && rule.id || '') === 'deny-all-temporary'),
+    false,
+  );
 });

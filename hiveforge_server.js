@@ -5283,6 +5283,154 @@ function cloneApprovalRules(rules = []) {
   return Array.isArray(rules) ? rules.map((rule) => ({ ...(rule && typeof rule === 'object' ? rule : {}) })) : [];
 }
 
+function ensureBudgetHardStopState(projectState) {
+  if (!projectState.budgetHardStop || typeof projectState.budgetHardStop !== 'object') {
+    projectState.budgetHardStop = {
+      active: false,
+      reason: null,
+      activatedAt: null,
+      activatedBy: null,
+      context: {},
+      blockedActionsCount: 0,
+      lastBlockedAt: null,
+      resumedAt: null,
+      resumedBy: null,
+      lastNotifiedAt: null,
+    };
+  }
+}
+
+function activateBudgetHardStop(projectState, reason, context = {}, activatedBy = 'policy_engine') {
+  ensureBudgetHardStopState(projectState);
+  const stop = projectState.budgetHardStop;
+  const at = nowIso();
+  stop.active = true;
+  stop.reason = String(reason || 'budget_cap_exceeded');
+  stop.activatedAt = stop.activatedAt || at;
+  stop.activatedBy = activatedBy;
+  stop.context = context && typeof context === 'object' ? { ...context } : {};
+  stop.blockedActionsCount = Number(stop.blockedActionsCount || 0) + 1;
+  stop.lastBlockedAt = at;
+  stop.resumedAt = null;
+  stop.resumedBy = null;
+
+  const shouldLog = Number(stop.blockedActionsCount || 0) <= 1;
+  if (shouldLog) {
+    appendProjectLog(projectState, 'warning', {
+      kind: 'budget_hard_stop_activated',
+      reason: stop.reason,
+      context: stop.context,
+      activatedBy,
+      blockedActionsCount: stop.blockedActionsCount,
+    });
+    appendMessageBusEntry({
+      projectId: projectState.id,
+      from: activatedBy,
+      to: 'operator',
+      kind: 'budget_hard_stop_activated',
+      payload: {
+        reason: stop.reason,
+        context: stop.context,
+      },
+    });
+    notifyOperator(projectState, 'Budget hard-stop activated', {
+      reason: stop.reason,
+      context: stop.context,
+    }).catch(() => {});
+  }
+}
+
+function clearBudgetHardStop(projectState, resumedBy = 'operator', detail = {}) {
+  ensureBudgetHardStopState(projectState);
+  const stop = projectState.budgetHardStop;
+  const wasActive = stop.active === true;
+  stop.active = false;
+  stop.resumedAt = nowIso();
+  stop.resumedBy = resumedBy;
+  stop.lastNotifiedAt = null;
+  stop.reason = null;
+  stop.context = {};
+  stop.blockedActionsCount = 0;
+  if (wasActive) {
+    appendProjectLog(projectState, 'message', {
+      kind: 'budget_hard_stop_cleared',
+      resumedBy,
+      detail,
+    });
+    appendMessageBusEntry({
+      projectId: projectState.id,
+      from: resumedBy,
+      to: 'policy_engine',
+      kind: 'budget_hard_stop_cleared',
+      payload: {
+        resumedBy,
+        detail,
+      },
+    });
+  }
+}
+
+function approvalGovernanceSnapshot(projectState) {
+  ensureApprovalGovernanceState(projectState);
+  return {
+    enabled: Boolean(projectState.approvalGovernance.enabled),
+    autoApproveRules: cloneApprovalRules(projectState.approvalGovernance.autoApproveRules),
+    autoDenyRules: cloneApprovalRules(projectState.approvalGovernance.autoDenyRules),
+    escalationRules: cloneApprovalRules(projectState.approvalGovernance.escalationRules),
+    industryPolicyPack: projectState.approvalGovernance.industryPolicyPack
+      ? { ...projectState.approvalGovernance.industryPolicyPack }
+      : null,
+    updatedAt: projectState.approvalGovernance.updatedAt || null,
+  };
+}
+
+function recordApprovalGovernanceRevision(projectState, actor = 'system', reason = 'governance_update') {
+  ensureApprovalGovernanceState(projectState);
+  const revisionState = projectState.approvalGovernance.revisions;
+  const snapshot = approvalGovernanceSnapshot(projectState);
+  const previous = revisionState.history.length > 0 ? revisionState.history[revisionState.history.length - 1] : null;
+  const payload = JSON.stringify(snapshot);
+  const hashInput = `${previous ? previous.hash : 'root'}:${payload}`;
+  const hash = crypto.createHash('sha256').update(hashInput).digest('hex');
+  if (previous && previous.hash === hash) {
+    return previous;
+  }
+  const revision = {
+    id: `govrev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+    at: nowIso(),
+    actor: String(actor || 'system'),
+    reason: String(reason || 'governance_update'),
+    previousHash: previous ? previous.hash : null,
+    hash,
+    snapshot,
+  };
+  revisionState.history.push(revision);
+  if (revisionState.history.length > 50) {
+    revisionState.history = revisionState.history.slice(-50);
+  }
+  revisionState.currentRevisionId = revision.id;
+  return revision;
+}
+
+function rollbackApprovalGovernanceRevision(projectState, revisionId, actor = 'operator', reason = 'manual_rollback') {
+  ensureApprovalGovernanceState(projectState);
+  const revisionState = projectState.approvalGovernance.revisions;
+  const target = revisionState.history.find((entry) => String(entry.id) === String(revisionId));
+  if (!target || !target.snapshot) {
+    return { ok: false, error: 'Revision not found.' };
+  }
+  const snap = target.snapshot;
+  projectState.approvalGovernance.enabled = snap.enabled !== false;
+  projectState.approvalGovernance.autoApproveRules = cloneApprovalRules(snap.autoApproveRules || []);
+  projectState.approvalGovernance.autoDenyRules = cloneApprovalRules(snap.autoDenyRules || []);
+  projectState.approvalGovernance.escalationRules = cloneApprovalRules(snap.escalationRules || []);
+  projectState.approvalGovernance.industryPolicyPack = snap.industryPolicyPack ? { ...snap.industryPolicyPack } : null;
+  projectState.approvalGovernance.updatedAt = nowIso();
+
+  const newRevision = recordApprovalGovernanceRevision(projectState, actor, `rollback:${reason}:${revisionId}`);
+  return { ok: true, targetRevisionId: revisionId, appliedRevision: newRevision };
+}
+
 function ensureApprovalGovernanceState(projectState) {
   if (!projectState.approvalGovernance || typeof projectState.approvalGovernance !== 'object') {
     projectState.approvalGovernance = {
@@ -5306,6 +5454,18 @@ function ensureApprovalGovernanceState(projectState) {
   }
   if (typeof projectState.approvalGovernance.industryPolicyPack === 'undefined') {
     projectState.approvalGovernance.industryPolicyPack = null;
+  }
+  if (!projectState.approvalGovernance.revisions || typeof projectState.approvalGovernance.revisions !== 'object') {
+    projectState.approvalGovernance.revisions = {
+      currentRevisionId: null,
+      history: [],
+    };
+  }
+  if (!Array.isArray(projectState.approvalGovernance.revisions.history)) {
+    projectState.approvalGovernance.revisions.history = [];
+  }
+  if (typeof projectState.approvalGovernance.revisions.currentRevisionId === 'undefined') {
+    projectState.approvalGovernance.revisions.currentRevisionId = null;
   }
 }
 
@@ -7888,6 +8048,7 @@ function summarizeProjectAutomation(projectState) {
   ensureApprovalGovernanceState(projectState);
   ensureOperationalLoopState(projectState);
   ensureProjectConnectorBindings(projectState);
+  ensureBudgetHardStopState(projectState);
   const publicationDashboard = buildPublicationIncidentDashboard(projectState, {
     windowHours: 24,
     extendedWindowHours: 24 * 7,
@@ -7929,6 +8090,21 @@ function summarizeProjectAutomation(projectState) {
         ? projectState.approvalGovernance.escalationRules.length
         : 0,
       industryPolicyPack: projectState.approvalGovernance.industryPolicyPack || null,
+      revisions: {
+        currentRevisionId: projectState.approvalGovernance.revisions.currentRevisionId || null,
+        count: Array.isArray(projectState.approvalGovernance.revisions.history)
+          ? projectState.approvalGovernance.revisions.history.length
+          : 0,
+      },
+    },
+    budgetHardStop: {
+      active: Boolean(projectState.budgetHardStop.active),
+      reason: projectState.budgetHardStop.reason || null,
+      activatedAt: projectState.budgetHardStop.activatedAt || null,
+      activatedBy: projectState.budgetHardStop.activatedBy || null,
+      blockedActionsCount: Number(projectState.budgetHardStop.blockedActionsCount || 0),
+      resumedAt: projectState.budgetHardStop.resumedAt || null,
+      resumedBy: projectState.budgetHardStop.resumedBy || null,
     },
     weeklyObjectives: {
       weekStart: projectState.operationalLoops.weekStart,
@@ -10444,6 +10620,7 @@ function runProjectHeartbeat(projectState, source = 'interval') {
   ensureApprovalGovernanceState(projectState);
   ensureOperationalLoopState(projectState);
   ensureDeadLetterState(projectState);
+  ensureBudgetHardStopState(projectState);
   projectState.heartbeat.lastBeat = beatTs;
   projectState.heartbeat.status = 'alive';
   projectState.heartbeat.cycleCount = (projectState.heartbeat.cycleCount || 0) + 1;
@@ -10492,7 +10669,7 @@ function runProjectHeartbeat(projectState, source = 'interval') {
       }
     }
   } else {
-    if (!loopSafety.suspended) {
+    if (!loopSafety.suspended && !projectState.budgetHardStop.active) {
       const autoActionTask = pickRunnableAutoActionTask(projectState);
       if (autoActionTask) {
         const startedAutoAction = executeRecurringAutoAction(projectState, autoActionTask, source);
@@ -10508,7 +10685,7 @@ function runProjectHeartbeat(projectState, source = 'interval') {
     }
 
     // -- Start next available task ----------------------------------------
-    const nextTask = nextRunnableTask(projectState);
+    const nextTask = projectState.budgetHardStop.active ? null : nextRunnableTask(projectState);
     if (nextTask) {
       if (!appState.llm.reachable) {
         const reason = `${llmProviderLabel(appState.llm.provider)} is not reachable at ${appState.llm.endpoint}. Configure and verify the endpoint before task execution.`;
@@ -10629,6 +10806,19 @@ function runProjectHeartbeat(projectState, source = 'interval') {
       }
       }
     } else {
+      if (projectState.budgetHardStop.active) {
+        const lastNotifyMs = Date.parse(projectState.budgetHardStop.lastNotifiedAt || '');
+        const shouldNotify = Number.isNaN(lastNotifyMs) || (Date.now() - lastNotifyMs) >= (15 * 60 * 1000);
+        if (shouldNotify) {
+          projectState.budgetHardStop.lastNotifiedAt = beatTs;
+          appendProjectLog(projectState, 'warning', {
+            kind: 'budget_hard_stop_blocking_execution',
+            reason: projectState.budgetHardStop.reason || 'budget_cap_exceeded',
+            activatedAt: projectState.budgetHardStop.activatedAt,
+            blockedActionsCount: Number(projectState.budgetHardStop.blockedActionsCount || 0),
+          });
+        }
+      }
       // No runnable backlog tasks and no inprogress � check if everything is done
       const allDone = projectState.tasks.length > 0 && projectState.tasks.every((t) => t.status === 'done');
       if (allDone && !shouldKeepRunningForRecurring(projectState)) {
@@ -10740,6 +10930,7 @@ function recoverProjectStateAfterRestart(state) {
   ensureFinanceExceptionState(state);
   ensurePublicationHealthState(state);
   ensureConnectorExecutionState(state);
+  ensureBudgetHardStopState(state);
   ensureProjectConnectorBindings(state);
   if (!state.goalPlan || typeof state.goalPlan !== 'object') {
     state.goalPlan = goalActionPlanFromPrompt(state.template, state.goal || '', {});
@@ -10749,6 +10940,9 @@ function recoverProjectStateAfterRestart(state) {
       templateId: state.template,
       goalPlan: state.goalPlan,
     });
+  }
+  if (!Array.isArray(state.approvalGovernance.revisions.history) || state.approvalGovernance.revisions.history.length === 0) {
+    recordApprovalGovernanceRevision(state, 'system', 'recovery_baseline');
   }
   if (!state.kpiAlerting || typeof state.kpiAlerting !== 'object') {
     state.kpiAlerting = { lastSentAt: null, lastSignature: null };
@@ -10897,6 +11091,22 @@ function createProjectFromTemplate({ name, template, goal, mode = 'production' }
       escalationRules: cloneApprovalRules(DEFAULT_APPROVAL_GOVERNANCE.escalationRules),
       industryPolicyPack: DEFAULT_APPROVAL_GOVERNANCE.industryPolicyPack,
       updatedAt: null,
+      revisions: {
+        currentRevisionId: null,
+        history: [],
+      },
+    },
+    budgetHardStop: {
+      active: false,
+      reason: null,
+      activatedAt: null,
+      activatedBy: null,
+      context: {},
+      blockedActionsCount: 0,
+      lastBlockedAt: null,
+      resumedAt: null,
+      resumedBy: null,
+      lastNotifiedAt: null,
     },
     operationalLoops: {
       weekStart: startOfUtcWeekIso(createdAt),
@@ -10968,6 +11178,8 @@ function createProjectFromTemplate({ name, template, goal, mode = 'production' }
       },
     });
   }
+
+  recordApprovalGovernanceRevision(state, 'system', 'initial_project_governance_state');
 
   if (Array.isArray(goalPlan && goalPlan.tasks) && goalPlan.tasks.length > 0) {
     appendProjectLog(state, 'message', {
@@ -13222,6 +13434,24 @@ async function executeConnectorPolicy(connectorId, options = {}) {
 
   const ok = checks.length > 0 && checks.every((entry) => Boolean(entry.ok));
   const failedChecks = checks.filter((entry) => !entry.ok).map((entry) => entry.message).filter(Boolean);
+
+  if (options.projectId) {
+    const runtime = projectRuntimes.get(options.projectId);
+    const budgetFailure = checks.find((entry) => entry.type === 'budget_cap' && !entry.ok);
+    if (runtime && runtime.state && budgetFailure) {
+      activateBudgetHardStop(
+        runtime.state,
+        'budget_cap_exceeded',
+        {
+          connector: connector.id,
+          operation: String(options.operation || '').trim().toLowerCase() || null,
+          message: budgetFailure.message,
+        },
+        'policy_engine',
+      );
+      persistProjectState(runtime.state);
+    }
+  }
 
   return {
     connector: connector.id,
@@ -17279,9 +17509,13 @@ async function main() {
 
         ensureRecurringState(runtime.state);
         ensureApprovalGovernanceState(runtime.state);
+        ensureBudgetHardStopState(runtime.state);
         const recurring = payload.recurring && typeof payload.recurring === 'object' ? payload.recurring : {};
         const approvalGovernance = payload.approvalGovernance && typeof payload.approvalGovernance === 'object'
           ? payload.approvalGovernance
+          : {};
+        const budgetHardStop = payload.budgetHardStop && typeof payload.budgetHardStop === 'object'
+          ? payload.budgetHardStop
           : {};
         let enqueuedNow = 0;
         if (typeof recurring.enabled === 'boolean') {
@@ -17317,6 +17551,7 @@ async function main() {
         if (typeof approvalGovernance.enabled === 'boolean') {
           runtime.state.approvalGovernance.enabled = approvalGovernance.enabled;
           runtime.state.approvalGovernance.updatedAt = nowIso();
+          recordApprovalGovernanceRevision(runtime.state, 'operator', 'project_settings_update');
           appendProjectLog(runtime.state, 'message', {
             kind: 'approval_governance_updated',
             enabled: approvalGovernance.enabled,
@@ -17330,10 +17565,98 @@ async function main() {
           });
         }
 
+        if (budgetHardStop && budgetHardStop.resume === true) {
+          clearBudgetHardStop(runtime.state, 'operator', {
+            reason: String(budgetHardStop.reason || '').trim() || 'manual_resume',
+          });
+        }
+
         persistProjectState(runtime.state);
         writeJson(res, {
           ...summarizeProjectAutomation(runtime.state),
           enqueuedNow,
+        });
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
+    if (pathname === '/api/approval_governance/revisions' && req.method === 'GET') {
+      const projectId = String(urlObj.searchParams.get('projectId') || '').trim();
+      const limit = clampInt(urlObj.searchParams.get('limit'), 30, 1, 200);
+      const runtime = projectId ? projectRuntimes.get(projectId) : null;
+      if (!runtime) {
+        writeJson(res, { error: 'Project not found' }, 404);
+        return;
+      }
+      ensureApprovalGovernanceState(runtime.state);
+      const history = Array.isArray(runtime.state.approvalGovernance.revisions.history)
+        ? runtime.state.approvalGovernance.revisions.history
+        : [];
+      const items = history.slice(-limit).reverse();
+      writeJson(res, {
+        projectId,
+        currentRevisionId: runtime.state.approvalGovernance.revisions.currentRevisionId || null,
+        count: history.length,
+        items,
+      });
+      return;
+    }
+
+    if (pathname === '/api/approval_governance/rollback' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = parseJsonBodySafe(body);
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+
+        const projectId = String(payload.projectId || '').trim();
+        const revisionId = String(payload.revisionId || '').trim();
+        const reason = String(payload.reason || '').trim() || 'manual_rollback';
+        const runtime = projectId ? projectRuntimes.get(projectId) : null;
+        if (!runtime) {
+          writeJson(res, { error: 'Project not found' }, 404);
+          return;
+        }
+        if (!revisionId) {
+          writeJson(res, { error: 'revisionId is required' }, 400);
+          return;
+        }
+
+        const rollback = rollbackApprovalGovernanceRevision(runtime.state, revisionId, 'operator', reason);
+        if (!rollback.ok) {
+          writeJson(res, { error: rollback.error || 'Rollback failed.' }, 400);
+          return;
+        }
+
+        appendProjectLog(runtime.state, 'message', {
+          kind: 'approval_governance_rollback_applied',
+          targetRevisionId: revisionId,
+          reason,
+          appliedRevisionId: rollback.appliedRevision && rollback.appliedRevision.id,
+        });
+        appendMessageBusEntry({
+          projectId,
+          from: 'operator',
+          to: 'approval_policy_pack',
+          kind: 'approval_governance_rollback_applied',
+          payload: {
+            targetRevisionId: revisionId,
+            reason,
+            appliedRevisionId: rollback.appliedRevision && rollback.appliedRevision.id,
+          },
+        });
+        persistProjectState(runtime.state);
+        writeJson(res, {
+          ok: true,
+          projectId,
+          targetRevisionId: revisionId,
+          appliedRevision: rollback.appliedRevision,
+          summary: summarizeProjectAutomation(runtime.state),
         });
       }).catch((err) => {
         writeJson(res, { error: err.message }, 400);
@@ -18471,6 +18794,10 @@ module.exports = {
   markConnectorExecutionRecord,
   appendApprovalDecisionAudit,
   readApprovalDecisionAudit,
+  activateBudgetHardStop,
+  clearBudgetHardStop,
+  recordApprovalGovernanceRevision,
+  rollbackApprovalGovernanceRevision,
   refreshWeeklyKpiPlan,
   ensureOperationalLoopState,
   summarizeIdleBlockers,
