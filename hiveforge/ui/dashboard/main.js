@@ -14,6 +14,7 @@ const reloadSessionsButton = document.getElementById("reload-sessions");
 const timelineBody = document.getElementById("timeline-body");
 const agentKanban = document.getElementById("agent-kanban");
 const inboxList = document.getElementById("inbox-list");
+const marketplaceList = document.getElementById("marketplace-list");
 const approvalsList = document.getElementById("approvals-list");
 
 const metricSessions = document.getElementById("metric-sessions");
@@ -196,8 +197,40 @@ function setActiveView(viewName) {
     panel.classList.toggle("active", panel.dataset.viewPanel === viewName);
   });
 
-  const label = viewName.charAt(0).toUpperCase() + viewName.slice(1);
-  viewTitle.textContent = label === "Chat" ? "CEO Chat" : label;
+  const viewLabels = {
+    chat: "CEO Chat",
+    inbox: "Inbox",
+    office: "Office Floor",
+    marketplace: "Agent Marketplace",
+    approvals: "Approvals",
+    documents: "Documents",
+    finance: "Finance",
+    settings: "Settings",
+  };
+  viewTitle.textContent = viewLabels[viewName] || "Workspace";
+}
+
+function renderMarketplace() {
+  if (!marketplaceList) {
+    return;
+  }
+
+  const roles = [
+    { role: "Project Manager", purpose: "Turns goals into scoped, trackable execution plans.", tools: "Planning, delegation, risk tracking" },
+    { role: "Developer", purpose: "Builds product, automation, and systems quickly.", tools: "Implementation, integrations, testing" },
+    { role: "Researcher", purpose: "Finds market signals, user insights, and competitive intel.", tools: "Web research, synthesis, validation" },
+    { role: "Writer", purpose: "Creates sales copy, docs, onboarding, and publishing assets.", tools: "Content generation, editing, messaging" },
+    { role: "Analyst", purpose: "Measures business health and finds leverage points.", tools: "KPI analysis, forecast, diagnostics" },
+    { role: "Critic", purpose: "Stress tests quality and finds failures before customers do.", tools: "QA review, risk review, policy checks" },
+    { role: "Designer", purpose: "Designs interfaces, brand systems, and user experiences.", tools: "UI/UX concepts, iteration, visual systems" },
+  ];
+
+  marketplaceList.innerHTML = "";
+  roles.forEach((item) => {
+    const li = document.createElement("li");
+    li.innerHTML = `<strong>${item.role}</strong><span>${item.purpose}</span><span>Core tools: ${item.tools}</span>`;
+    marketplaceList.appendChild(li);
+  });
 }
 
 function renderTimeline(events) {
@@ -555,6 +588,7 @@ addProjectButton.addEventListener("click", async () => {
 
 async function bootstrap() {
   setActiveView("chat");
+  renderMarketplace();
   await Promise.all([loadProjects(), loadSessions(), loadProviderSettings()]);
 }
 

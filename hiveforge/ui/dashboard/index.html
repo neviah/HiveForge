@@ -18,13 +18,14 @@
     <aside class="menu-pane">
       <header class="menu-header">
         <p class="eyebrow">Company Workspace</p>
-        <h2>HiveForge Command</h2>
+        <h2>HiveForge Office</h2>
       </header>
 
       <nav class="menu-nav" id="workspace-nav">
         <button class="menu-item active" data-view="chat" type="button">Chat</button>
         <button class="menu-item" data-view="inbox" type="button">Inbox</button>
-        <button class="menu-item" data-view="kanban" type="button">Kanban</button>
+        <button class="menu-item" data-view="office" type="button">Office</button>
+        <button class="menu-item" data-view="marketplace" type="button">Agent Marketplace</button>
         <button class="menu-item" data-view="approvals" type="button">Approvals</button>
         <button class="menu-item" data-view="documents" type="button">Documents</button>
         <button class="menu-item" data-view="finance" type="button">Finance</button>
@@ -82,7 +83,7 @@
         </article>
       </section>
 
-      <section class="view" data-view-panel="kanban">
+      <section class="view" data-view-panel="office">
         <div class="layout-stack">
           <article class="panel kanban-panel">
             <h3>Agent Mission Board</h3>
@@ -99,6 +100,13 @@
             </table>
           </article>
         </div>
+      </section>
+
+      <section class="view" data-view-panel="marketplace">
+        <article class="panel">
+          <h3>Agent Marketplace</h3>
+          <ul id="marketplace-list" class="card-list"></ul>
+        </article>
       </section>
 
       <section class="view" data-view-panel="approvals">
