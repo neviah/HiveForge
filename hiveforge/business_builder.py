@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +99,557 @@ def _slug(text: str) -> str:
         cleaned = cleaned.replace("--", "-")
     return cleaned.strip("-") or "venture"
 
+
+# ---------------------------------------------------------------------------
+# LLM-powered discovery, research, generation, and critic pipeline
+# ---------------------------------------------------------------------------
+
+_DISCOVERY_FALLBACK: dict[str, Any] = {
+    "product_category": "web_app",
+    "target_user": "general users",
+    "core_features": ["core functionality", "user interface"],
+    "secondary_features": [],
+    "visual_direction": "clean modern minimal",
+    "tone": "professional",
+    "color_palette_hint": "neutral palette with a bold accent color",
+    "font_style": "geometric-sans",
+    "competitor_references": [],
+    "domain_constraints": [],
+    "known_unknowns": [],
+    "build_priority": "quality and aesthetics",
+}
+
+
+def _make_llm() -> Any:
+    """Lazily create a ModelClient. Returns None if the provider is not configured."""
+    try:
+        from hiveforge.models.inference import ModelClient
+        client = ModelClient()
+        return client if client.provider is not None else None
+    except Exception:
+        return None
+
+
+def _run_discovery(objective: str, project_name: str, llm: Any) -> dict[str, Any]:
+    """CEO-level discovery: extract rich structured product context BEFORE building anything."""
+    if llm is None:
+        return dict(_DISCOVERY_FALLBACK)
+
+    try:
+        raw = llm.infer(
+            prompt=f"""Analyze this project brief deeply. You are the first agent in the pipeline —
+your job is to extract every useful detail BEFORE anyone writes a single line of code or copy.
+
+PROJECT NAME: {project_name}
+OBJECTIVE: {objective}
+
+Return ONLY a valid JSON object with exactly these fields:
+{{
+  "product_category": "one of: real_estate_search | saas_tool | e_commerce | marketplace | booking_platform | portfolio | analytics_dashboard | community | content_platform | fintech | healthtech | edtech | gaming | social_network | productivity | dev_tool | other",
+  "target_user": "specific description of the primary user persona, 1 precise sentence",
+  "core_features": ["list", "of", "essential", "features", "that", "MUST", "exist", "in", "v1"],
+  "secondary_features": ["nice-to-have", "features", "for", "later"],
+  "visual_direction": "precise design direction — e.g. 'clean minimal with strong whitespace and micro-interactions', 'bold editorial with data-density and dark mode', 'warm consumer-grade with playful illustrations'",
+  "tone": "brand tone — one of: professional | approachable | luxurious | playful | trustworthy | technical-expert | urgent | calm",
+  "color_palette_hint": "specific palette — e.g. 'forest green + warm cream + dark ink' or 'deep navy + electric teal + white' or 'coral + slate + off-white'",
+  "font_style": "one of: geometric-sans | humanist-sans | editorial-serif | mono-accent | display-serif",
+  "competitor_references": ["actual product names in this category that set the quality benchmark"],
+  "domain_constraints": ["legal, technical, or business constraints specific to this category"],
+  "known_unknowns": ["gaps in the brief that if clarified would significantly improve output quality"],
+  "build_priority": "the single most important quality: aesthetics | conversion | data_depth | simplicity | trust | speed"
+}}""",
+            system_prompt="You are a senior product strategist. Return ONLY valid JSON — no markdown wrapper, no explanation.",
+        )
+        match = re.search(r'\{[\s\S]+\}', raw)
+        parsed = json.loads(match.group() if match else raw)
+        return {**_DISCOVERY_FALLBACK, **parsed}
+    except Exception:
+        return dict(_DISCOVERY_FALLBACK)
+
+
+def _run_domain_research(
+    objective: str,
+    project_name: str,
+    discovery: dict[str, Any],
+    llm: Any,
+) -> str:
+    """Deep domain research: understand the landscape before any artifact is generated."""
+    if llm is None:
+        return ""
+
+    category = discovery.get("product_category", "web_app")
+    competitors = discovery.get("competitor_references", [])
+    constraints = discovery.get("domain_constraints", [])
+    core_features = discovery.get("core_features", [])
+    target_user = discovery.get("target_user", "users")
+
+    try:
+        return llm.infer(
+            prompt=f"""Deep domain research for: {project_name}
+
+CATEGORY: {category}
+OBJECTIVE: {objective}
+TARGET USER: {target_user}
+CORE FEATURES TO BUILD: {core_features}
+QUALITY BENCHMARKS: {competitors}
+KNOWN CONSTRAINTS: {constraints}
+
+Research and document the following — be specific, not generic:
+
+1. UX PATTERNS: What are the standard UX patterns users EXPECT in {category}? What do the best products get right that mediocre ones miss?
+
+2. QUALITY BAR: What separates a great {category} product from a forgettable one? Cite specific examples.
+
+3. TECHNICAL PATTERNS: What frontend architecture, frameworks, and patterns are standard for {category}?
+
+4. DATA REQUIREMENTS: What live data is needed for each core feature? What APIs and providers exist? What are their constraints?
+
+5. TRUST SIGNALS: What makes users trust and return to a {category} product?
+
+6. VISUAL LANGUAGE: What design aesthetic works for this category? What typography, color, and layout choices signal quality?
+
+7. FAILURE MODES: What are the most common ways {category} products disappoint users or fail at launch?
+
+8. DIFFERENTIATION: Where is there room to be meaningfully different and better?
+
+Be specific. Reference actual products, APIs, design systems, and patterns by name.""",
+            system_prompt="You are a domain research expert. Be specific, practical, and direct. Reference real products and patterns.",
+        )
+    except Exception:
+        return ""
+
+
+def _generate_artifact_content(
+    *,
+    task_id: str,
+    artifact_label: str,
+    artifact_path: str,
+    project_name: str,
+    objective: str,
+    discovery: dict[str, Any],
+    research: str,
+    completed_excerpts: dict[str, str],
+    fallback_content: str,
+    llm: Any,
+) -> str:
+    """For each task, ask the LLM to generate the ACTUAL artifact content — not a template."""
+    if llm is None:
+        return fallback_content
+
+    category = discovery.get("product_category", "web_app")
+    target_user = discovery.get("target_user", "end users")
+    core_features = discovery.get("core_features", [])
+    secondary_features = discovery.get("secondary_features", [])
+    visual_direction = discovery.get("visual_direction", "modern minimal")
+    tone = discovery.get("tone", "professional")
+    palette = discovery.get("color_palette_hint", "neutral with accent")
+    font_style = discovery.get("font_style", "geometric-sans")
+    competitors = discovery.get("competitor_references", [])
+    build_priority = discovery.get("build_priority", "quality")
+    is_html = Path(artifact_path).suffix.lower() in (".html", ".htm")
+
+    prior_context = "\n\n".join(
+        f"### {tid.replace('-', ' ').title()}\n{excerpt[:600]}"
+        for tid, excerpt in completed_excerpts.items()
+    ) if completed_excerpts else ""
+
+    competitors_str = ", ".join(competitors) if competitors else f"leading {category} products"
+
+    if is_html:
+        prompt = f"""You are an elite frontend developer and UI/UX designer.
+Your job is to build a real, production-quality web application — not a template or scaffold.
+
+PROJECT: {project_name}
+OBJECTIVE: {objective}
+
+DISCOVERY CONTEXT:
+- Category: {category}
+- Target User: {target_user}
+- Core Features Required: {core_features}
+- Secondary Features: {secondary_features}
+- Visual Direction: {visual_direction}
+- Tone: {tone}
+- Color Palette: {palette}
+- Typography Style: {font_style}
+- Build Priority: {build_priority}
+- Quality Benchmarks: {competitors_str}
+
+DOMAIN RESEARCH:
+{research[:2500] if research else "Focus on best practices for " + category}
+
+PRODUCT SPECIFICATION:
+{completed_excerpts.get("product-spec", "Build all core features listed above.")[:1500]}
+
+REQUIREMENTS FOR THE OUTPUT:
+1. A complete <!doctype html> page with ALL CSS in <style> and ALL JS in <script>
+2. Design quality at the level of {competitors_str} — this is the standard to meet or exceed
+3. Implement ALL core features: {core_features}
+4. Typography: Use Google Fonts matching the "{font_style}" direction (pick the right fonts)
+5. Color system built on "{palette}" — define all colours as CSS custom properties in :root
+6. Fully responsive — mobile-first, with breakpoints for tablet and desktop
+7. Working interactive JS (search, filters, modals, toggles — whatever the product requires)
+8. Real, specific copy throughout — no "Lorem ipsum", no "Your text here"
+9. Rich visual design: gradients, subtle shadows, hover transitions, micro-interactions
+10. Semantic HTML5 with proper accessibility attributes
+11. Multiple clearly distinct sections (hero, core product UI, features, social proof, footer)
+12. The product should feel ALIVE — populated with realistic sample data where applicable
+13. NO external image dependencies — use CSS gradients, SVG shapes, and icon fonts
+
+OUTPUT: The ENTIRE index.html file starting with <!doctype html>.
+Nothing else — no explanation, no markdown fence, no preamble. Just the HTML."""
+
+    elif task_id == "strategy-roadmap":
+        prompt = f"""You are a strategic product advisor. Write the strategy roadmap for this project.
+
+PROJECT: {project_name}
+OBJECTIVE: {objective}
+CATEGORY: {category}
+TARGET USER: {target_user}
+CORE FEATURES: {core_features}
+BUILD PRIORITY: {build_priority}
+
+DOMAIN RESEARCH:
+{research[:1500] if research else ""}
+
+Write a comprehensive, specific strategy roadmap in Markdown. Reference actual features,
+user needs, and domain constraints. Do NOT write generic startup advice — write for THIS project.
+
+Include:
+- Strategic Thesis (one paragraph on why this product wins)
+- Phase 1 — Foundation (Month 1-2): specific milestones and deliverables
+- Phase 2 — Growth (Month 3-6): specific milestones and deliverables
+- Phase 3 — Scale (Month 6-12): expansion and optimisation
+- Key Risks & Mitigations (specific to {category} — name them precisely)
+- Resource Requirements
+- Critical Success Metrics (measurable, specific, not "grow revenue")
+
+Output ONLY the Markdown document, beginning with # Strategy Roadmap."""
+
+    elif task_id == "market-research":
+        prompt = f"""You are a market research analyst. Write a detailed market research report.
+
+PROJECT: {project_name}
+CATEGORY: {category}
+OBJECTIVE: {objective}
+COMPETITOR REFERENCES: {competitors}
+DOMAIN CONSTRAINTS: {discovery.get("domain_constraints", [])}
+
+DOMAIN RESEARCH BACKGROUND:
+{research[:2000] if research else ""}
+
+STRATEGY CONTEXT:
+{completed_excerpts.get("strategy-roadmap", "")[:600]}
+
+Write a comprehensive market research report in Markdown. Be specific — reference actual
+companies, market dynamics, and domain-specific constraints. Do NOT write generic analysis.
+
+Include:
+- Market Overview (what's happening in {category} right now — trends, shifts, tensions)
+- Competitive Landscape (analyse {competitors_str} — what they do well, where they fall short)
+- Target Customer Profile (deep ICP for "{target_user}" — jobs-to-be-done, pains, gains)
+- Market Opportunity & Positioning (where this product can win)
+- Go-to-Market Approach
+- Data & Integration Landscape (APIs, providers, technical ecosystem for {category})
+- Regulatory & Compliance Notes
+
+Output ONLY the Markdown document, beginning with # Market Research."""
+
+    elif task_id == "offer-lab":
+        prompt = f"""You are a product positioning and growth expert. Write the offer strategy document.
+
+PROJECT: {project_name}
+TARGET USER: {target_user}
+CORE FEATURES: {core_features}
+TONE: {tone}
+CATEGORY: {category}
+BUILD PRIORITY: {build_priority}
+
+MARKET RESEARCH CONTEXT:
+{completed_excerpts.get("market-research", "")[:1000]}
+
+Write a detailed offer lab document in Markdown. Think from the customer's perspective.
+Be specific, persuasive, and opinionated — not generic.
+
+Include:
+- Core Promise (1 compelling sentence that defines the entire offer)
+- Ideal Customer Profile with Jobs-to-be-Done, specific pains, specific gains
+- Offer Packaging: Entry / Core / Expansion tiers with specific value at each
+- Pricing Hypothesis with rationale and validation approach
+- Key Objections customers WILL have and how to answer them memorably
+- Proof Points needed before launch (what evidence to gather first)
+- Messaging Framework: 3 headline variants and supporting copy angles
+
+Output ONLY the Markdown document, beginning with # Offer Lab."""
+
+    elif task_id == "product-spec":
+        prompt = f"""You are a senior product manager. Write the product specification.
+
+PROJECT: {project_name}
+CATEGORY: {category}
+TARGET USER: {target_user}
+CORE FEATURES: {core_features}
+SECONDARY FEATURES: {secondary_features}
+
+OFFER CONTEXT:
+{completed_excerpts.get("offer-lab", "")[:800]}
+
+Write a complete product specification in Markdown. Be specific and opinionated.
+
+Include:
+- Product Vision Statement (one sentence)
+- MVP Scope: Decide exactly what ships in v1 (cut ruthlessly — pick the 20% that delivers 80% of value)
+- Non-Goals: What is explicitly deferred to v2+
+- User Stories (8-12 stories: "As a [specific persona], I want to [action] so that [outcome]")
+- Functional Requirements (specific, testable, numbered — no vague requirements)
+- UI/UX Direction: Layout approach, key interaction patterns, key empty states
+- Technical Architecture Notes: Stack decisions, data schema hints, critical integrations
+- Open Questions that must be answered before launch
+
+Reference the specific patterns expected for {category} products.
+Output ONLY the Markdown document, beginning with # Product Spec."""
+
+    elif task_id == "metrics-plan":
+        prompt = f"""You are a growth analyst. Write the metrics and measurement plan.
+
+PROJECT: {project_name}
+OBJECTIVE: {objective}
+CATEGORY: {category}
+BUILD PRIORITY: {build_priority}
+
+PRODUCT CONTEXT:
+{completed_excerpts.get("product-spec", "")[:600]}
+
+Write a rigorous metrics plan in Markdown. Use domain-appropriate metric names for {category}.
+
+Include:
+- North Star Metric (one metric that captures core value — explain the choice)
+- Acquisition Metrics (inputs, channels, target CPAs)
+- Activation Metrics (what a successful first session looks like — define the event)
+- Engagement & Retention Metrics (DAU/MAU, retention curves, churn triggers)
+- Revenue Metrics (leading and lagging indicators)
+- Quality & NPS Metrics
+- Analytics Implementation Checklist (every event to instrument at launch)
+- Weekly Operating Dashboard (exactly 5 numbers that matter every Monday)
+
+Output ONLY the Markdown document, beginning with # Metrics Plan."""
+
+    elif task_id == "launch-checklist":
+        prompt = f"""You are a launch manager. Write the pre-launch checklist.
+
+PROJECT: {project_name}
+CATEGORY: {category}
+
+PRIOR WORK SUMMARY:
+{chr(10).join(f"- {tid}: {excerpt[:250]}" for tid, excerpt in completed_excerpts.items())}
+
+Write a comprehensive, checkbox-driven launch checklist in Markdown.
+
+Sections:
+- Technical Readiness (deployment, performance, security, HTTPS, browser testing, mobile testing)
+- Content Readiness (copy, legal pages, 404/error states, empty states, favicon, OG meta)
+- Analytics & Tracking (all events from metrics plan configured and tested)
+- Distribution Prep (channels identified, visual assets ready, outreach list built)
+- Support & Ops (feedback capture, issue tracking, team communication plan)
+- Launch Day Playbook (timeline, go/no-go criteria, rollback plan)
+- Post-Launch Days 1-7 (daily actions and check-ins)
+
+Every item must be a checkbox (- [ ]). Be specific to {category} needs — not generic.
+Output ONLY the Markdown document, beginning with # Launch Checklist."""
+
+    elif task_id == "risk-review":
+        prompt = f"""You are a quality and risk reviewer performing the final pre-launch gate.
+
+PROJECT: {project_name}
+CATEGORY: {category}
+OBJECTIVE: {objective}
+
+ALL ARTIFACTS SUMMARY:
+{chr(10).join(f"### {tid.replace('-',' ').title()}\\n{excerpt[:350]}" for tid, excerpt in completed_excerpts.items())}
+
+Perform a comprehensive risk review in Markdown. Be rigorous — this is the quality gate.
+
+For each risk provide: Severity (High/Med/Low) | Likelihood | Specific Mitigation Strategy
+
+Sections:
+- Technical Risks (feasibility gaps, missing integrations, performance concerns)
+- Product Risks (scope gaps, UX issues, missing features for target user)
+- Business Risks (market timing, competition, revenue model)
+- Data & Legal Risks ({category}-specific compliance, privacy, API terms of service)
+- Launch Execution Risks (what specific things could cause a failed launch)
+
+End with:
+- Overall Launch Readiness Score: X/10 (with explanation)
+- Top 3 Issues to Fix Before Launch (prioritised)
+- Recommendation: ✅ Green Light | ⚠️ Yellow Light (conditions) | 🚫 Red Light (blockers)
+
+Output ONLY the Markdown document, beginning with # Risk Review."""
+
+    elif task_id == "data-connector-notes":
+        prompt = f"""You are a technical architect. Write the data integration guide.
+
+PROJECT: {project_name}
+CATEGORY: {category}
+CORE FEATURES: {core_features}
+
+DOMAIN RESEARCH:
+{research[:1500] if research else ""}
+
+Write a technical data connector document in Markdown. Be specific — name actual APIs and SDKs.
+
+Include:
+- Current Build State (what the scaffold includes: sample data, placeholder UI)
+- Live Data Requirements per core feature (exactly what data each feature needs)
+- Recommended Provider Options (real APIs for {category} — name specific providers, pricing tier, license requirements)
+- Integration Architecture (how providers connect to the frontend — REST, GraphQL, SDK)
+- Authentication & Security Requirements (API key handling, OAuth flows, CORS)
+- Rate Limits & Cost Considerations (practical limits and cost projections)
+- Legal & Terms of Service Notes (what you CAN and CANNOT do per provider ToS)
+- Step-by-step Integration Roadmap (numbered, actionable)
+
+Output ONLY the Markdown document, beginning with # Data Connector Notes."""
+
+    else:
+        prompt = f"""Generate the {artifact_label} document for this project.
+
+PROJECT: {project_name}
+OBJECTIVE: {objective}
+CATEGORY: {category}
+
+PRIOR CONTEXT:
+{prior_context[:1200] if prior_context else "No prior context."}
+
+Write a professional, specific, non-generic {artifact_label}.
+Output ONLY the document content, starting with a # heading."""
+
+    try:
+        result = llm.infer(prompt=prompt, max_tokens=8000)
+        if result.startswith("ERROR:") or len(result.strip()) < 200:
+            return fallback_content
+        if is_html:
+            clean = result.strip()
+            if clean.startswith("```"):
+                clean = re.sub(r'^```[^\n]*\n', '', clean)
+                clean = re.sub(r'\n```\s*$', '', clean).strip()
+            doctype_match = re.search(r'<!doctype', clean, re.IGNORECASE)
+            if doctype_match:
+                clean = clean[doctype_match.start():]
+            if not re.search(r'<!doctype', clean, re.IGNORECASE):
+                return fallback_content
+            return clean
+        return result
+    except Exception:
+        return fallback_content
+
+
+def _run_critic_gate(
+    *,
+    artifact_label: str,
+    content: str,
+    objective: str,
+    discovery: dict[str, Any],
+    llm: Any,
+) -> dict[str, Any]:
+    """CriticAgent quality gate: score the artifact and return structured feedback."""
+    _PASS: dict[str, Any] = {"score": 8, "approved": True, "critical_issues": [], "suggestions": []}
+    if llm is None:
+        return _PASS
+
+    target_user = discovery.get("target_user", "end users")
+    core_features = discovery.get("core_features", [])
+
+    try:
+        raw = llm.infer(
+            prompt=f"""You are a rigorous quality reviewer. Score this artifact.
+
+ARTIFACT TYPE: {artifact_label}
+PROJECT OBJECTIVE: {objective}
+TARGET USER: {target_user}
+REQUIRED FEATURES / CONTENT: {core_features}
+
+ARTIFACT CONTENT (first 4000 chars):
+{content[:4000]}
+
+Score this artifact 1–10:
+- Objective alignment: Does it address THIS specific objective, not just generic boilerplate?
+- Completeness: Does it include everything a {artifact_label} should contain?
+- Quality: Would this stand up to expert scrutiny? Is it professional-grade?
+- Specificity: Is it specific to this project or could it apply to any project?
+
+Score < 7 = needs revision. Score >= 7 = approved.
+
+Return ONLY valid JSON:
+{{"score": <int 1-10>, "approved": <bool>, "critical_issues": ["list of critical flaws that MUST be fixed"], "suggestions": ["specific, actionable improvement suggestions"]}}""",
+            system_prompt="Return only valid JSON. No markdown, no explanation.",
+        )
+        match = re.search(r'\{[\s\S]+\}', raw)
+        return json.loads(match.group() if match else raw)
+    except Exception:
+        return _PASS
+
+
+def _revise_artifact(
+    *,
+    original: str,
+    feedback: list[str],
+    suggestions: list[str],
+    artifact_label: str,
+    artifact_path: str,
+    objective: str,
+    project_name: str,
+    discovery: dict[str, Any],
+    llm: Any,
+) -> str:
+    """Revise an artifact once based on critic feedback before finalising."""
+    if llm is None or not feedback:
+        return original
+
+    is_html = Path(artifact_path).suffix.lower() in (".html", ".htm")
+    format_instruction = (
+        "Output ONLY the HTML starting with <!doctype html>. No explanation, no markdown."
+        if is_html
+        else "Output ONLY the improved document content with a # heading. No explanation."
+    )
+
+    try:
+        result = llm.infer(
+            prompt=f"""You are revising a {artifact_label} based on critic feedback. Make it excellent.
+
+PROJECT: {project_name}
+OBJECTIVE: {objective}
+
+CRITIC ISSUES TO FIX:
+{chr(10).join(f"- {issue}" for issue in feedback)}
+
+SUGGESTIONS TO APPLY:
+{chr(10).join(f"- {s}" for s in suggestions)}
+
+ORIGINAL CONTENT:
+{original[:6000]}
+
+Revise the content to address every critical issue. Apply all suggestions that improve quality.
+Keep everything that was already good. Elevate what was flagged.
+{format_instruction}""",
+            max_tokens=8000,
+        )
+        if result.startswith("ERROR:") or len(result.strip()) < 200:
+            return original
+        if is_html:
+            clean = result.strip()
+            if clean.startswith("```"):
+                clean = re.sub(r'^```[^\n]*\n', '', clean)
+                clean = re.sub(r'\n```\s*$', '', clean).strip()
+            doctype_match = re.search(r'<!doctype', clean, re.IGNORECASE)
+            if doctype_match:
+                clean = clean[doctype_match.start():]
+            return clean if re.search(r'<!doctype', clean, re.IGNORECASE) else original
+        return result
+    except Exception:
+        return original
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _headline(project_name: str, objective: str) -> str:
     return f"{project_name} is building around: {objective.strip()}"
@@ -622,6 +1174,50 @@ def run_build_workflow(
     total_specialist_budget = round(budget * 0.68, 2)
     per_task_budget = round(total_specialist_budget / max(len(task_definitions), 1), 2)
 
+    # ------------------------------------------------------------------
+    # Phase 1: Discovery — extract rich structured product context
+    # ------------------------------------------------------------------
+    llm = _make_llm()
+    discovery = _run_discovery(objective, project_name, llm)
+    discovery_summary = (
+        f"Discovery complete. Category: {discovery.get('product_category')} | "
+        f"User: {discovery.get('target_user')} | "
+        f"Core features: {', '.join(str(f) for f in discovery.get('core_features', [])[:5])} | "
+        f"Direction: {discovery.get('visual_direction')} | "
+        f"Tone: {discovery.get('tone')} | "
+        f"Benchmarks: {', '.join(discovery.get('competitor_references', [])) or 'none specified'}"
+    )
+    context["conversation"].append({"sender": "DiscoveryAgent", "message": discovery_summary, "ts": _now_iso()})
+    _append_inbox(context, sender="DiscoveryAgent", subject="Discovery complete — product context extracted", body=discovery_summary)
+    context["discovery"] = discovery
+    unknowns = [str(item).strip() for item in discovery.get("known_unknowns", []) if str(item).strip()]
+    if unknowns:
+        context.setdefault("clarifications", [])
+        context["clarifications"] = unknowns
+        _append_inbox(
+            context,
+            sender="DiscoveryAgent",
+            subject="Clarifications needed before overdelivery",
+            body="\n".join(f"- {item}" for item in unknowns[:8]),
+            kind="warning",
+        )
+
+    # ------------------------------------------------------------------
+    # Phase 2: Domain Research — understand the landscape
+    # ------------------------------------------------------------------
+    research = _run_domain_research(objective, project_name, discovery, llm)
+    if research and not research.startswith("ERROR:"):
+        research_preview = research[:500] + ("..." if len(research) > 500 else "")
+        context["conversation"].append({"sender": "ResearchAgent", "message": research_preview, "ts": _now_iso()})
+        _append_inbox(context, sender="ResearchAgent", subject="Domain research complete", body=research_preview)
+        context["domain_research"] = research
+    else:
+        research = ""
+
+    # Track LLM-generated content per task so later tasks can reference earlier outputs
+    completed_excerpts: dict[str, str] = {}
+    generated_content: dict[str, str] = {}
+
     queued = {task["id"]: task for task in task_definitions}
     completed: set[str] = set()
     wave = 0
@@ -664,6 +1260,44 @@ def run_build_workflow(
                 continue
 
             artifact = task["artifact"]
+            # Phase 3: Generate actual content via LLM (not a hardcoded template)
+            artifact_content = _generate_artifact_content(
+                task_id=task["id"],
+                artifact_label=artifact["label"],
+                artifact_path=artifact["path"],
+                project_name=project_name,
+                objective=objective,
+                discovery=discovery,
+                research=research,
+                completed_excerpts=completed_excerpts,
+                fallback_content=artifact["content"],
+                llm=llm,
+            )
+
+            # Phase 4: Critic gate — score quality and revise if needed
+            critic = _run_critic_gate(
+                artifact_label=artifact["label"],
+                content=artifact_content,
+                objective=objective,
+                discovery=discovery,
+                llm=llm,
+            )
+            if not critic.get("approved", True) and critic.get("critical_issues"):
+                artifact_content = _revise_artifact(
+                    original=artifact_content,
+                    feedback=critic.get("critical_issues", []),
+                    suggestions=critic.get("suggestions", []),
+                    artifact_label=artifact["label"],
+                    artifact_path=artifact["path"],
+                    objective=objective,
+                    project_name=project_name,
+                    discovery=discovery,
+                    llm=llm,
+                )
+
+            generated_content[task["id"]] = artifact_content
+            completed_excerpts[task["id"]] = artifact_content[:1000]
+
             state = {
                 "project_id": project_id,
                 "project_name": project_name,
@@ -674,7 +1308,7 @@ def run_build_workflow(
                         "operation": "write_file",
                         "payload": {
                             "path": artifact["path"],
-                            "content": artifact["content"],
+                            "content": artifact_content,
                             "overwrite": True,
                         },
                     }
@@ -682,6 +1316,7 @@ def run_build_workflow(
                 "artifact_path": artifact["path"],
                 "nudge_history": nudges or [],
                 "dependencies_completed": sorted(completed),
+                "critic_score": critic.get("score", 8),
             }
             result = specialist.run_task(task["objective"], state=state, budget=min(task["budget"], per_task_budget))
             tool_succeeded = _tool_succeeded(result)
@@ -724,28 +1359,34 @@ def run_build_workflow(
                 completed.add(task["id"])
             queued.pop(task["id"], None)
 
-    task_map = {task["id"]: task for task in task_definitions}
+    # Use LLM-generated content in context (fall back to template if generation failed)
+    _gc = generated_content
+    _tm = {task["id"]: task for task in task_definitions}
+    _strategy_content = _gc.get("strategy-roadmap") or _tm["strategy-roadmap"]["artifact"]["content"]
+    _offer_content = _gc.get("offer-lab") or _tm["offer-lab"]["artifact"]["content"]
+    _spec_content = _gc.get("product-spec") or _tm["product-spec"]["artifact"]["content"]
+
     context["strategy"] = {
         **context["strategy"],
-        "content": task_map["strategy-roadmap"]["artifact"]["content"],
+        "content": _strategy_content,
         "artifact_path": f"sandbox/projects/{project_id}/strategy-roadmap.md",
     }
     context["offer_lab"] = {
         "summary": "Offer, ICP, packaging, and pricing hypotheses are ready for review.",
         "artifact_path": f"sandbox/projects/{project_id}/offer-lab.md",
-        "content": task_map["offer-lab"]["artifact"]["content"],
+        "content": _offer_content,
     }
     context["product_spec"] = {
         "summary": "Product scope, user flow, and MVP boundaries have been drafted.",
         "artifact_path": f"sandbox/projects/{project_id}/product-spec.md",
-        "content": task_map["product-spec"]["artifact"]["content"],
+        "content": _spec_content,
     }
     context["mission_brief"] = {
         "summary": "Mission statement, offer, and product scope combined for quick operator review.",
         "content": "\n\n".join([
             f"# Mission Statement\n\n{objective}",
-            "## Offer\n\n" + task_map["offer-lab"]["artifact"]["content"],
-            "## Product\n\n" + task_map["product-spec"]["artifact"]["content"],
+            "## Offer\n\n" + _offer_content,
+            "## Product\n\n" + _spec_content,
         ]),
     }
     context["pipeline"] = {"steps": pipeline_steps}
@@ -756,8 +1397,8 @@ def run_build_workflow(
             f"sandbox/projects/{project_id}/metrics-plan.md",
         ],
         "content": "\n\n".join([
-            task_map["launch-checklist"]["artifact"]["content"],
-            task_map["metrics-plan"]["artifact"]["content"],
+            _gc.get("launch-checklist") or _tm["launch-checklist"]["artifact"]["content"],
+            _gc.get("metrics-plan") or _tm["metrics-plan"]["artifact"]["content"],
         ]),
     }
     context["approvals"] = [
@@ -774,6 +1415,15 @@ def run_build_workflow(
             "notes": "Suggested target: Vercel. Suggested DB: Supabase Postgres unless custom constraints require plain Postgres.",
         }
     ]
+    for idx, question in enumerate(context.get("clarifications", [])[:5], start=1):
+        context["approvals"].append(
+            {
+                "id": f"clarification-{idx}",
+                "title": f"Clarify requirement {idx}",
+                "status": "pending",
+                "notes": question,
+            }
+        )
     context["deployment"] = {
         "target": "vercel",
         "database": "supabase-postgres",
