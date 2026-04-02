@@ -7,7 +7,53 @@ from typing import Any
 from hiveforge.tools.openclaw_wrappers.tool_router import OpenClawToolRouter
 
 
-def execute_tool_calls(router: OpenClawToolRouter, state: dict[str, Any]) -> list[dict[str, Any]]:
+# Role-based allowlist for tool execution. Any (tool, operation) pair not listed
+# for a role is denied by default.
+ROLE_TOOL_POLICY: dict[str, dict[str, set[str]]] = {
+    "project_manager": {
+        "filesystem": {"read_file", "write_file", "edit_file", "list_directory"},
+        "messaging": {"send_email", "send_slack"},
+        "api": {"http_request"},
+    },
+    "developer": {
+        "filesystem": {"read_file", "write_file", "edit_file", "list_directory", "create_directory"},
+        "command": {"execute"},
+        "api": {"http_request"},
+        "browser": {"fetch_url", "search"},
+    },
+    "researcher": {
+        "browser": {"fetch_url", "search"},
+        "api": {"http_request", "parse_json"},
+        "filesystem": {"read_file", "write_file", "list_directory"},
+    },
+    "writer": {
+        "filesystem": {"read_file", "write_file", "edit_file", "list_directory"},
+        "browser": {"fetch_url", "search"},
+    },
+    "analyst": {
+        "filesystem": {"read_file", "write_file", "edit_file", "list_directory"},
+        "api": {"http_request", "parse_json"},
+        "browser": {"fetch_url", "search"},
+    },
+    "critic": {
+        "filesystem": {"read_file", "list_directory"},
+        "browser": {"fetch_url", "search"},
+        "api": {"http_request"},
+    },
+    "designer": {
+        "filesystem": {"read_file", "write_file", "edit_file", "list_directory"},
+        "browser": {"fetch_url", "search", "screenshot"},
+    },
+}
+
+
+def _is_allowed(role: str, tool: str, operation: str) -> bool:
+    role_policy = ROLE_TOOL_POLICY.get(role, {})
+    allowed_ops = role_policy.get(tool, set())
+    return operation in allowed_ops
+
+
+def execute_tool_calls(router: OpenClawToolRouter, state: dict[str, Any], role: str) -> list[dict[str, Any]]:
     """Execute structured tool calls from state and return execution records.
 
     Expected input shape in state:
@@ -57,6 +103,18 @@ def execute_tool_calls(router: OpenClawToolRouter, state: dict[str, Any]) -> lis
                     "operation": operation,
                     "ok": False,
                     "error": "tool and operation are required",
+                }
+            )
+            continue
+
+        if not _is_allowed(role=role, tool=str(tool), operation=str(operation)):
+            records.append(
+                {
+                    "index": index,
+                    "tool": str(tool),
+                    "operation": str(operation),
+                    "ok": False,
+                    "error": f"blocked by policy for role '{role}'",
                 }
             )
             continue

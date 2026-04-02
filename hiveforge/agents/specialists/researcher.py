@@ -41,7 +41,7 @@ class ResearcherAgent(HiveForgeAgent):
     def run_task(self, objective: str, state: dict, budget: float) -> dict:
         """Run Researcher task with LLM-assisted investigation."""
         loop_result = super().run_task(objective, state, budget)
-        tool_results = execute_tool_calls(self.router, state)
+        tool_results = execute_tool_calls(self.router, state, self.profile.role)
 
         try:
             llm_response = self.llm_client.infer(
