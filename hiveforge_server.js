@@ -9,16 +9,25 @@ const DASHBOARD_DIR = path.join(ROOT, "hiveforge", "ui", "dashboard");
 const SESSION_DIR = path.join(ROOT, "hiveforge", "state", "sessions");
 const STATE_DIR = path.join(ROOT, "hiveforge", "state");
 const PROJECT_DATA_DIR = path.join(STATE_DIR, "project_data");
+const PROJECTS_ROOT_DIR = path.join(ROOT, "sandbox", "projects");
 const MODELS_PATH = path.join(ROOT, "hiveforge", "config", "models.json");
 const PROJECTS_PATH = path.join(STATE_DIR, "projects.json");
 const PUBLIC_KEY_PATH = path.join(ROOT, "sandbox", ".ssh", "id_rsa.pub");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
+  ".htm": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".txt": "text/plain; charset=utf-8",
+  ".md": "text/markdown; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
 };
 
 function sendJson(res, statusCode, data) {
@@ -127,13 +136,16 @@ function defaultProjectContext(projectId) {
     strategy: {},
     offer_lab: {},
     product_spec: {},
+    mission_brief: {},
     pipeline: { steps: [] },
     launch: {},
+    deployment: {},
     inbox: [],
     approvals: [],
     office: { agents: [] },
     conversation: [],
     artifacts: [],
+    llm: {},
     last_run: null,
   };
 }
@@ -142,9 +154,67 @@ function projectContextPath(projectId) {
   return path.join(PROJECT_DATA_DIR, `${projectId}.json`);
 }
 
+function projectRootPath(projectId) {
+  return path.join(PROJECTS_ROOT_DIR, projectId);
+}
+
 function readProjectContext(projectId) {
   ensureDir(PROJECT_DATA_DIR);
   return readJsonFile(projectContextPath(projectId), defaultProjectContext(projectId));
+}
+
+function ensureProjectWorkspace(projectId) {
+  ensureDir(PROJECTS_ROOT_DIR);
+  ensureDir(projectRootPath(projectId));
+}
+
+function resolveProjectFilePath(projectId, relativeFilePath) {
+  const root = projectRootPath(projectId);
+  const safeRelative = path.normalize(String(relativeFilePath || "")).replace(/^([.][.][\\/])+/, "");
+  const resolved = path.resolve(path.join(root, safeRelative));
+  const resolvedRoot = path.resolve(root);
+  if (resolved !== resolvedRoot && !resolved.startsWith(`${resolvedRoot}${path.sep}`)) {
+    return null;
+  }
+  return resolved;
+}
+
+function listProjectFiles(projectId) {
+  const root = projectRootPath(projectId);
+  if (!fs.existsSync(root)) {
+    return [];
+  }
+
+  const out = [];
+  const walk = (dirPath, prefix = "") => {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    entries.sort((a, b) => {
+      if (a.isDirectory() && !b.isDirectory()) return -1;
+      if (!a.isDirectory() && b.isDirectory()) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    for (const entry of entries) {
+      const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        out.push({ path: relPath, type: "directory" });
+        walk(path.join(dirPath, entry.name), relPath);
+      } else {
+        const absolutePath = path.join(dirPath, entry.name);
+        const ext = path.extname(entry.name).toLowerCase();
+        out.push({
+          path: relPath,
+          type: "file",
+          ext,
+          size: fs.statSync(absolutePath).size,
+          previewable: [".html", ".htm", ".md", ".txt", ".json", ".css", ".js", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp"].includes(ext),
+        });
+      }
+    }
+  };
+
+  walk(root);
+  return out;
 }
 
 function writeProjectContext(projectId, context) {
@@ -385,6 +455,24 @@ function serveStatic(res, pathname) {
   res.end(data);
 }
 
+function serveProjectFile(res, projectId, relativeFilePath) {
+  const resolved = resolveProjectFilePath(projectId, relativeFilePath);
+  if (!resolved) {
+    sendText(res, 403, "Forbidden");
+    return;
+  }
+  if (!fs.existsSync(resolved) || fs.statSync(resolved).isDirectory()) {
+    sendText(res, 404, "Not found");
+    return;
+  }
+
+  const ext = path.extname(resolved).toLowerCase();
+  const contentType = MIME[ext] || "application/octet-stream";
+  const data = fs.readFileSync(resolved);
+  res.writeHead(200, { "Content-Type": contentType, "Content-Length": data.length });
+  res.end(data);
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const requestUrl = new URL(req.url || "/", `http://${req.headers.host || `127.0.0.1:${PORT}`}`);
@@ -393,6 +481,8 @@ const server = http.createServer(async (req, res) => {
     const projectDeleteMatch = pathname.match(/^\/api\/projects\/([^/]+)$/);
     const projectChildMatch = pathname.match(/^\/api\/projects\/([^/]+)\/(context|inbox|office|build|ceo-nudge|llm)$/);
     const approvalMatch = pathname.match(/^\/api\/projects\/([^/]+)\/approvals\/([^/]+)$/);
+    const projectFilesMatch = pathname.match(/^\/api\/projects\/([^/]+)\/files$/);
+    const previewProjectMatch = pathname.match(/^\/preview\/projects\/([^/]+)\/(.+)$/);
 
     if (req.method === "GET" && pathname === "/api/health") {
       sendJson(res, 200, { ok: true, service: "hiveforge_server" });
@@ -420,6 +510,48 @@ const server = http.createServer(async (req, res) => {
         active_project_id: record.active_project_id,
         projects: record.projects,
       });
+      return;
+    }
+
+    if (req.method === "GET" && projectFilesMatch) {
+      const projectId = sanitizeProjectId(decodeURIComponent(projectFilesMatch[1] || ""));
+      const record = readProjectsRecord();
+      const project = record.projects.find((item) => item.id === projectId);
+      if (!project) {
+        sendJson(res, 404, { ok: false, error: "Project not found" });
+        return;
+      }
+
+      const filePath = requestUrl.searchParams.get("path");
+      if (filePath) {
+        const resolved = resolveProjectFilePath(projectId, filePath);
+        if (!resolved || !fs.existsSync(resolved) || fs.statSync(resolved).isDirectory()) {
+          sendJson(res, 404, { ok: false, error: "File not found" });
+          return;
+        }
+        const ext = path.extname(resolved).toLowerCase();
+        const textLike = [".md", ".txt", ".json", ".js", ".css", ".html", ".htm", ".svg", ".yml", ".yaml", ".toml", ".py"];
+        if (!textLike.includes(ext)) {
+          sendJson(res, 400, { ok: false, error: "File is not text-previewable" });
+          return;
+        }
+        sendJson(res, 200, { ok: true, path: filePath, content: fs.readFileSync(resolved, "utf-8") });
+        return;
+      }
+
+      sendJson(res, 200, {
+        ok: true,
+        project,
+        root: `sandbox/projects/${projectId}`,
+        files: listProjectFiles(projectId),
+      });
+      return;
+    }
+
+    if (req.method === "GET" && previewProjectMatch) {
+      const projectId = sanitizeProjectId(decodeURIComponent(previewProjectMatch[1] || ""));
+      const relativePath = decodeURIComponent(previewProjectMatch[2] || "");
+      serveProjectFile(res, projectId, relativePath);
       return;
     }
 
@@ -494,6 +626,8 @@ const server = http.createServer(async (req, res) => {
       record.projects.push(newProject);
       record.active_project_id = newProject.id;
       writeProjectsRecord(record);
+      ensureProjectWorkspace(newProject.id);
+      writeProjectContext(newProject.id, defaultProjectContext(newProject.id));
 
       sendJson(res, 200, {
         ok: true,

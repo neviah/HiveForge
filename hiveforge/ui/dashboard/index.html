@@ -26,6 +26,7 @@
         <button class="menu-item" data-view="mission-brief" type="button">Mission Brief</button>
         <button class="menu-item" data-view="office" type="button">Office</button>
         <button class="menu-item" data-view="launch" type="button">Launch</button>
+        <button class="menu-item" data-view="files" type="button">Files</button>
         <button class="menu-item" data-view="approvals" type="button">Approvals</button>
         <button class="menu-item" data-view="marketplace" type="button">Agent Marketplace</button>
         <button class="menu-item" data-view="settings" type="button">Settings</button>
@@ -108,6 +109,7 @@
 
           <article class="panel kanban-panel">
             <h3>Agent Mission Board</h3>
+            <p id="mission-board-note" class="meta-note"></p>
             <div id="agent-kanban" class="kanban-columns"></div>
           </article>
 
@@ -126,6 +128,28 @@
         <article class="panel">
           <h3>Launch</h3>
           <pre id="launch-content" class="pre"></pre>
+        </article>
+      </section>
+
+      <section class="view" data-view-panel="files">
+        <article class="panel">
+          <div class="row office-header-row">
+            <h3>Project Files</h3>
+            <div class="row compact">
+              <button id="reload-files" type="button">Reload Files</button>
+              <button id="open-preview-tab" type="button">Open Preview Tab</button>
+            </div>
+          </div>
+          <div class="files-grid">
+            <aside class="files-tree-wrap">
+              <ul id="file-tree" class="file-tree"></ul>
+            </aside>
+            <section class="files-preview-wrap">
+              <p id="preview-path" class="meta-note">Select a file to preview.</p>
+              <iframe id="file-preview-frame" class="file-preview-frame" title="Project preview"></iframe>
+              <pre id="file-preview-text" class="pre file-preview-text"></pre>
+            </section>
+          </div>
         </article>
       </section>
 

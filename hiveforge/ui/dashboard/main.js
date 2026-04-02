@@ -23,6 +23,13 @@ const ceoThread = document.getElementById("ceo-thread");
 const officeCanvas = document.getElementById("office-canvas");
 const refreshOfficeButton = document.getElementById("refresh-office");
 const officeStyleSelect = document.getElementById("office-style");
+const missionBoardNote = document.getElementById("mission-board-note");
+const reloadFilesButton = document.getElementById("reload-files");
+const openPreviewTabButton = document.getElementById("open-preview-tab");
+const fileTree = document.getElementById("file-tree");
+const previewPath = document.getElementById("preview-path");
+const filePreviewFrame = document.getElementById("file-preview-frame");
+const filePreviewText = document.getElementById("file-preview-text");
 
 const metricSessions = document.getElementById("metric-sessions");
 const metricEvents = document.getElementById("metric-events");
@@ -55,6 +62,11 @@ let projects = [];
 let activeProjectId = "agency";
 let officeSprites = [];
 let officeAnimationStarted = false;
+let spriteSheetsLoaded = false;
+let agentSpriteSheet = null;
+let tileSpriteSheet = null;
+let projectFiles = [];
+let selectedFilePath = "";
 
 function defaultProjectContext(projectId) {
   return {
@@ -267,6 +279,7 @@ function setActiveView(viewName) {
     "mission-brief": "Mission Brief",
     office: "Office",
     launch: "Launch",
+    files: "Files",
     approvals: "Approvals",
     marketplace: "Agent Marketplace",
     settings: "Settings",
@@ -392,6 +405,16 @@ function renderKanbanFromPipeline() {
   const steps = Array.isArray(currentContext.pipeline?.steps) ? currentContext.pipeline.steps : [];
   agentKanban.innerHTML = "";
 
+  if (missionBoardNote) {
+    if (steps.length === 0) {
+      missionBoardNote.textContent = `No build run yet for ${currentContext.project_id || activeProjectId}. Click Build Business to generate artifacts.`;
+    } else if (steps.every((step) => step.status === "done")) {
+      missionBoardNote.textContent = `Latest scaffold run completed. Outputs are in sandbox/projects/${currentContext.project_id || activeProjectId}. Open Files to inspect or preview.`;
+    } else {
+      missionBoardNote.textContent = `Build in progress for ${currentContext.project_id || activeProjectId}.`;
+    }
+  }
+
   const lanes = {
     queued: [],
     active: [],
@@ -458,73 +481,117 @@ function prepareOfficeSprites() {
       targetX: baseX + 12,
       targetY: baseY + 8,
       speed: 0.7 + (index % 3) * 0.2,
+      frame: 0,
     };
   });
 }
 
-function drawPixelAgent(ctx, sprite) {
-  const color = roleColor(sprite.role);
+function spriteRoleFrame(role) {
+  if (role === "project_manager") return 0;
+  if (role === "researcher") return 1;
+  if (role === "writer") return 2;
+  if (role === "designer") return 3;
+  if (role === "developer") return 1;
+  if (role === "analyst") return 0;
+  if (role === "critic") return 2;
+  return 3;
+}
+
+async function loadSpriteSheets() {
+  if (spriteSheetsLoaded) {
+    return;
+  }
+
+  const loadImage = (src) => new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = src;
+  });
+
+  try {
+    [agentSpriteSheet, tileSpriteSheet] = await Promise.all([
+      loadImage("./assets/sprites/agents.svg"),
+      loadImage("./assets/sprites/office_tiles.svg"),
+    ]);
+    spriteSheetsLoaded = true;
+  } catch (_err) {
+    spriteSheetsLoaded = false;
+  }
+}
+
+function drawTile(ctx, index, x, y, size = 16) {
+  if (!tileSpriteSheet) {
+    return;
+  }
+  const sx = index * 16;
+  ctx.drawImage(tileSpriteSheet, sx, 0, 16, 16, x, y, size, size);
+}
+
+function drawSpriteAgent(ctx, sprite, frameToggle) {
   const px = Math.round(sprite.x);
   const py = Math.round(sprite.y);
-  ctx.fillStyle = "#0f172a";
-  ctx.fillRect(px + 5, py + 1, 8, 8);
-  ctx.fillStyle = "#f5d0a9";
-  ctx.fillRect(px + 6, py + 4, 6, 5);
-  ctx.fillStyle = color;
-  ctx.fillRect(px + 3, py + 10, 12, 11);
-  ctx.fillStyle = "#111827";
-  ctx.fillRect(px + 4, py + 21, 4, 6);
-  ctx.fillRect(px + 10, py + 21, 4, 6);
+  if (!agentSpriteSheet) {
+    ctx.fillStyle = roleColor(sprite.role);
+    ctx.fillRect(px + 4, py + 8, 12, 12);
+    return;
+  }
+
+  const roleFrame = spriteRoleFrame(sprite.role);
+  const sx = frameToggle ? roleFrame * 32 : roleFrame * 32 + 32;
+  const sy = roleFrame < 2 ? 0 : 32;
+  ctx.drawImage(agentSpriteSheet, sx, sy, 32, 32, px, py, 28, 28);
 }
 
 function drawStudioOffice(ctx) {
-  ctx.fillStyle = "#18253a";
-  ctx.fillRect(0, 0, officeCanvas.width, officeCanvas.height);
-
-  ctx.fillStyle = "#8c6135";
-  ctx.fillRect(0, 0, 420, officeCanvas.height);
-  ctx.fillStyle = "#b48353";
-  for (let y = 0; y < officeCanvas.height; y += 24) {
-    for (let x = 0; x < 420; x += 24) {
-      ctx.fillRect(x + 1, y + 1, 1, 1);
+  for (let y = 0; y < officeCanvas.height; y += 16) {
+    for (let x = 0; x < officeCanvas.width; x += 16) {
+      const floorTile = x < 420 ? 0 : 1;
+      drawTile(ctx, floorTile, x, y);
     }
   }
 
-  ctx.fillStyle = "#ded4ca";
-  ctx.fillRect(420, 0, officeCanvas.width - 420, 126);
-  ctx.fillRect(420, 134, officeCanvas.width - 420, officeCanvas.height - 134);
-
-  ctx.fillStyle = "#40688a";
-  ctx.fillRect(540, 162, 292, 162);
-
-  ctx.fillStyle = "#9a6b3f";
-  for (let desk = 0; desk < 2; desk += 1) {
-    ctx.fillRect(92 + desk * 178, 88, 94, 32);
-    ctx.fillRect(92 + desk * 178, 234, 94, 32);
-  }
-  for (let desk = 0; desk < 2; desk += 1) {
-    ctx.fillRect(456 + desk * 176, 92, 92, 30);
-    ctx.fillRect(456 + desk * 176, 232, 92, 30);
+  for (let x = 420; x < officeCanvas.width; x += 16) {
+    drawTile(ctx, 4, x, 126);
   }
 
-  ctx.fillStyle = "#2f3f59";
-  ctx.fillRect(602, 200, 132, 68);
+  for (let desk = 0; desk < 2; desk += 1) {
+    for (let dx = 0; dx < 6; dx += 1) {
+      drawTile(ctx, 2, 92 + desk * 178 + dx * 16, 88);
+      drawTile(ctx, 2, 92 + desk * 178 + dx * 16, 234);
+      drawTile(ctx, 2, 456 + desk * 176 + dx * 16, 92);
+      drawTile(ctx, 2, 456 + desk * 176 + dx * 16, 232);
+    }
+  }
+
+  for (let y = 162; y < 162 + 160; y += 16) {
+    for (let x = 540; x < 540 + 288; x += 16) {
+      drawTile(ctx, 3, x, y);
+    }
+  }
+
+  for (let y = 200; y < 200 + 64; y += 16) {
+    for (let x = 602; x < 602 + 128; x += 16) {
+      drawTile(ctx, 4, x, y);
+    }
+  }
+
+  drawTile(ctx, 5, 34, 286, 32);
+  drawTile(ctx, 5, 844, 286, 32);
 }
 
 function drawMinimalOffice(ctx) {
-  ctx.fillStyle = "#f1ede4";
-  ctx.fillRect(0, 0, officeCanvas.width, officeCanvas.height);
-  ctx.fillStyle = "#d9cbb7";
-  for (let x = 0; x < officeCanvas.width; x += 32) {
-    ctx.fillRect(x, 0, 1, officeCanvas.height);
+  for (let y = 0; y < officeCanvas.height; y += 16) {
+    for (let x = 0; x < officeCanvas.width; x += 16) {
+      drawTile(ctx, 1, x, y);
+    }
   }
-  for (let y = 0; y < officeCanvas.height; y += 32) {
-    ctx.fillRect(0, y, officeCanvas.width, 1);
-  }
-  ctx.fillStyle = "#9a6b3f";
+
   for (let desk = 0; desk < 5; desk += 1) {
-    ctx.fillRect(78 + desk * 148, 68, 76, 26);
-    ctx.fillRect(78 + desk * 148, 214, 76, 26);
+    for (let dx = 0; dx < 5; dx += 1) {
+      drawTile(ctx, 2, 78 + desk * 148 + dx * 16, 68);
+      drawTile(ctx, 2, 78 + desk * 148 + dx * 16, 214);
+    }
   }
 }
 
@@ -546,6 +613,7 @@ function drawOffice() {
     drawStudioOffice(ctx);
   }
 
+  const frameToggle = Math.floor(performance.now() / 320) % 2 === 0;
   officeSprites.forEach((sprite, index) => {
     const dx = sprite.targetX - sprite.x;
     const dy = sprite.targetY - sprite.y;
@@ -558,7 +626,7 @@ function drawOffice() {
       sprite.x += Math.sign(dx) * Math.min(Math.abs(dx), sprite.speed);
       sprite.y += Math.sign(dy) * Math.min(Math.abs(dy), sprite.speed);
     }
-    drawPixelAgent(ctx, sprite);
+    drawSpriteAgent(ctx, sprite, frameToggle);
   });
 }
 
@@ -583,6 +651,97 @@ function renderProjectViews() {
   prepareOfficeSprites();
   setLlmStatus(currentContext.llm_status || {});
   ensureOfficeAnimation();
+}
+
+function previewUrlFor(pathname) {
+  return `/preview/projects/${encodeURIComponent(activeProjectId)}/${pathname.split("/").map((part) => encodeURIComponent(part)).join("/")}`;
+}
+
+function renderFileTree() {
+  if (!fileTree) {
+    return;
+  }
+
+  fileTree.innerHTML = "";
+  if (!projectFiles.length) {
+    fileTree.innerHTML = "<li>No generated files yet. Run Build Business first.</li>";
+    return;
+  }
+
+  projectFiles.forEach((entry) => {
+    const li = document.createElement("li");
+    const depth = String(entry.path || "").split("/").length - 1;
+    li.style.paddingLeft = `${depth * 14 + 10}px`;
+    li.textContent = entry.type === "directory" ? `${entry.path}/` : entry.path;
+    li.classList.toggle("directory", entry.type === "directory");
+    li.classList.toggle("active", entry.path === selectedFilePath);
+    li.dataset.path = entry.path;
+    li.dataset.type = entry.type;
+    fileTree.appendChild(li);
+  });
+}
+
+async function previewFile(entry) {
+  if (!entry || entry.type !== "file") {
+    return;
+  }
+
+  selectedFilePath = entry.path;
+  renderFileTree();
+  previewPath.textContent = `sandbox/projects/${activeProjectId}/${entry.path}`;
+  const ext = String(entry.ext || "").toLowerCase();
+  const visualExt = [".html", ".htm", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp"];
+
+  if (visualExt.includes(ext)) {
+    filePreviewText.style.display = "none";
+    filePreviewFrame.style.display = "block";
+    filePreviewFrame.src = previewUrlFor(entry.path);
+    return;
+  }
+
+  filePreviewFrame.style.display = "none";
+  filePreviewText.style.display = "block";
+  const response = await fetch(`/api/projects/${encodeURIComponent(activeProjectId)}/files?path=${encodeURIComponent(entry.path)}`);
+  const data = await response.json();
+  if (!data.ok) {
+    filePreviewText.textContent = data.error || "Unable to preview this file.";
+    return;
+  }
+  filePreviewText.textContent = data.content || "";
+}
+
+async function loadProjectFiles() {
+  if (!activeProjectId || !fileTree) {
+    return;
+  }
+
+  const response = await fetch(`/api/projects/${encodeURIComponent(activeProjectId)}/files`);
+  const data = await response.json();
+  if (!data.ok) {
+    previewPath.textContent = data.error || "Unable to load project files.";
+    return;
+  }
+
+  projectFiles = Array.isArray(data.files) ? data.files : [];
+  renderFileTree();
+
+  if (selectedFilePath) {
+    const selected = projectFiles.find((item) => item.path === selectedFilePath);
+    if (selected) {
+      await previewFile(selected);
+      return;
+    }
+  }
+
+  const firstPreviewable = projectFiles.find((item) => item.type === "file" && item.previewable);
+  if (firstPreviewable) {
+    await previewFile(firstPreviewable);
+  } else {
+    filePreviewFrame.removeAttribute("src");
+    filePreviewFrame.style.display = "none";
+    filePreviewText.style.display = "block";
+    filePreviewText.textContent = "No previewable files yet.";
+  }
 }
 
 function fillProviderForm(providerName) {
@@ -635,6 +794,7 @@ async function loadProjectContext(projectId) {
 
   fillProjectLlmForm();
   renderProjectViews();
+  await loadProjectFiles();
 }
 
 async function loadReplay(sessionId) {
@@ -786,6 +946,7 @@ async function runBuild() {
   currentContext = data.context || currentContext;
   ceoResponse.textContent = currentContext.strategy?.ceo_summary || "Build completed.";
   renderProjectViews();
+  await loadProjectFiles();
   await loadSessions();
 }
 
@@ -854,7 +1015,37 @@ workspaceNav.addEventListener("click", (event) => {
   if (!target) {
     return;
   }
-  setActiveView(target.dataset.view || "strategy");
+  const viewName = target.dataset.view || "strategy";
+  setActiveView(viewName);
+  if (viewName === "files") {
+    void loadProjectFiles();
+  }
+});
+
+fileTree?.addEventListener("click", async (event) => {
+  const target = event.target.closest("li[data-path]");
+  if (!target) {
+    return;
+  }
+  if (target.dataset.type === "directory") {
+    return;
+  }
+  const entry = projectFiles.find((item) => item.path === target.dataset.path);
+  if (!entry) {
+    return;
+  }
+  await previewFile(entry);
+});
+
+reloadFilesButton?.addEventListener("click", async () => {
+  await loadProjectFiles();
+});
+
+openPreviewTabButton?.addEventListener("click", () => {
+  if (!selectedFilePath) {
+    return;
+  }
+  window.open(previewUrlFor(selectedFilePath), "_blank", "noopener,noreferrer");
 });
 
 approvalsList.addEventListener("click", async (event) => {
@@ -948,6 +1139,7 @@ refreshOfficeButton.addEventListener("click", async () => {
 async function bootstrap() {
   setActiveView("strategy");
   renderMarketplace();
+  await loadSpriteSheets();
   await loadProjects();
   await Promise.all([loadSessions(), loadProviderSettings()]);
   if (activeProjectId) {

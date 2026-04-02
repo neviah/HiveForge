@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64" viewBox="0 0 128 64" shape-rendering="crispEdges">
+  <defs>
+    <g id="a1">
+      <rect x="6" y="2" width="8" height="8" fill="#111827"/>
+      <rect x="7" y="5" width="6" height="4" fill="#f5d0a9"/>
+      <rect x="4" y="10" width="12" height="11" fill="var(--shirt)"/>
+      <rect x="5" y="21" width="4" height="7" fill="#0f172a"/>
+      <rect x="11" y="21" width="4" height="7" fill="#0f172a"/>
+    </g>
+    <g id="a2">
+      <rect x="6" y="2" width="8" height="8" fill="#111827"/>
+      <rect x="7" y="5" width="6" height="4" fill="#f5d0a9"/>
+      <rect x="4" y="10" width="12" height="11" fill="var(--shirt)"/>
+      <rect x="4" y="21" width="4" height="7" fill="#0f172a"/>
+      <rect x="12" y="21" width="4" height="7" fill="#0f172a"/>
+    </g>
+  </defs>
+
+  <g style="--shirt:#7251b5" transform="translate(0 0)"><use href="#a1"/></g>
+  <g style="--shirt:#7251b5" transform="translate(32 0)"><use href="#a2"/></g>
+
+  <g style="--shirt:#0f8b8d" transform="translate(64 0)"><use href="#a1"/></g>
+  <g style="--shirt:#0f8b8d" transform="translate(96 0)"><use href="#a2"/></g>
+
+  <g style="--shirt:#ff7f51" transform="translate(0 32)"><use href="#a1"/></g>
+  <g style="--shirt:#ff7f51" transform="translate(32 32)"><use href="#a2"/></g>
+
+  <g style="--shirt:#2d6a4f" transform="translate(64 32)"><use href="#a1"/></g>
+  <g style="--shirt:#2d6a4f" transform="translate(96 32)"><use href="#a2"/></g>
+</svg>
