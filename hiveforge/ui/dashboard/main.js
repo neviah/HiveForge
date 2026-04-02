@@ -2,6 +2,7 @@ const workspaceNav = document.getElementById("workspace-nav");
 const viewTitle = document.getElementById("view-title");
 const views = [...document.querySelectorAll("[data-view-panel]")];
 const projectIcons = document.getElementById("project-icons");
+const addProjectButton = document.getElementById("add-project");
 const activeProjectName = document.getElementById("active-project-name");
 const activeProjectStatus = document.getElementById("active-project-status");
 const pauseProjectButton = document.getElementById("pause-project");
@@ -40,14 +41,6 @@ const ceoResponse = document.getElementById("ceo-response");
 let currentReplay = { event_count: 0, agents: [], events: [] };
 let providerSettings = { active_provider: "openrouter", providers: [], configs: {} };
 
-const PROJECT_STORAGE_KEY = "hiveforge.projects.v1";
-const DEFAULT_PROJECTS = [
-  { id: "agency", name: "Software Agency", status: "running" },
-  { id: "publishing", name: "Publishing", status: "running" },
-  { id: "research", name: "Research Lab", status: "paused" },
-  { id: "game", name: "Game Studio", status: "running" },
-];
-
 let projects = [];
 let activeProjectId = "agency";
 
@@ -66,38 +59,31 @@ function normalizeProjectStatus(status) {
   return "running";
 }
 
-function loadProjects() {
-  try {
-    const raw = localStorage.getItem(PROJECT_STORAGE_KEY);
-    if (!raw) {
-      projects = [...DEFAULT_PROJECTS];
-      return;
-    }
-
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      projects = [...DEFAULT_PROJECTS];
-      return;
-    }
-
-    projects = parsed
-      .filter((project) => project && typeof project === "object" && project.id && project.name)
-      .map((project) => ({
-        id: String(project.id),
-        name: String(project.name),
-        status: normalizeProjectStatus(String(project.status || "running")),
-      }));
-
-    if (projects.length === 0) {
-      projects = [...DEFAULT_PROJECTS];
-    }
-  } catch (_err) {
-    projects = [...DEFAULT_PROJECTS];
+async function loadProjects() {
+  const response = await fetch("/api/projects");
+  const data = await response.json();
+  if (!data.ok) {
+    throw new Error(data.error || "Unable to load projects");
   }
-}
 
-function saveProjects() {
-  localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(projects));
+  projects = (data.projects || []).map((project) => ({
+    id: String(project.id),
+    name: String(project.name),
+    icon: String(project.icon || project.name?.charAt(0) || "P").slice(0, 1).toUpperCase(),
+    status: normalizeProjectStatus(String(project.status || "running")),
+  }));
+
+  if (data.active_project_id) {
+    activeProjectId = String(data.active_project_id);
+  }
+
+  if (!projects.some((project) => project.id === activeProjectId && project.status !== "deleted")) {
+    const fallback = projects.find((project) => project.status !== "deleted");
+    activeProjectId = fallback ? fallback.id : "";
+  }
+
+  renderProjectRail();
+  syncProjectHeader();
 }
 
 function getActiveProject() {
@@ -105,17 +91,19 @@ function getActiveProject() {
 }
 
 function renderProjectRail() {
-  const icons = [...projectIcons.querySelectorAll(".project-icon[data-project-id]")];
-  icons.forEach((button) => {
-    const project = projects.find((item) => item.id === button.dataset.projectId);
-    if (!project) {
-      button.classList.add("is-hidden");
-      return;
-    }
-    button.classList.remove("is-hidden");
-    button.classList.toggle("active", project.id === activeProjectId);
-    button.title = `${project.name} (${project.status})`;
-    button.dataset.projectStatus = project.status;
+  projectIcons.innerHTML = "";
+  projects
+    .filter((project) => project.status !== "deleted")
+    .forEach((project) => {
+      const button = document.createElement("button");
+      button.className = "project-icon";
+      button.type = "button";
+      button.textContent = project.icon;
+      button.title = `${project.name} (${project.status})`;
+      button.dataset.projectId = project.id;
+      button.dataset.projectStatus = project.status;
+      button.classList.toggle("active", project.id === activeProjectId);
+      projectIcons.appendChild(button);
   });
 }
 
@@ -139,39 +127,64 @@ function syncProjectHeader() {
   deleteProjectButton.disabled = project.status === "deleted";
 }
 
-function setProjectStatus(nextStatus) {
+async function setProjectStatus(nextStatus) {
   const project = getActiveProject();
   if (!project) {
     return;
   }
 
-  project.status = normalizeProjectStatus(nextStatus);
-  saveProjects();
-  renderProjectRail();
-  syncProjectHeader();
+  const action = nextStatus === "paused" ? "pause" : "resume";
+  const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  const data = await response.json();
+  if (!data.ok) {
+    ceoResponse.textContent = `Error: ${data.error || "Unable to update project"}`;
+    return;
+  }
+  await loadProjects();
 }
 
-function handleDeleteProject() {
+async function handleDeleteProject() {
   const project = getActiveProject();
   if (!project) {
     return;
   }
 
-  const confirmed = window.confirm(`Delete ${project.name}? This will only remove it from this dashboard view.`);
+  const confirmed = window.confirm(`Delete ${project.name}? This updates the persisted project registry.`);
   if (!confirmed) {
     return;
   }
 
-  project.status = "deleted";
-  saveProjects();
+  const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}`, {
+    method: "DELETE",
+  });
+  const data = await response.json();
+  if (!data.ok) {
+    ceoResponse.textContent = `Error: ${data.error || "Unable to delete project"}`;
+    return;
+  }
+  await loadProjects();
+}
 
-  const next = projects.find((item) => item.status !== "deleted");
-  if (next) {
-    activeProjectId = next.id;
+async function handleCreateProject() {
+  const name = window.prompt("New project name", "New Venture");
+  if (!name) {
+    return;
   }
 
-  renderProjectRail();
-  syncProjectHeader();
+  const response = await fetch("/api/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: name.trim() }),
+  });
+  const data = await response.json();
+  if (!data.ok) {
+    ceoResponse.textContent = `Error: ${data.error || "Unable to create project"}`;
+    return;
+  }
+  await loadProjects();
 }
 
 function setActiveView(viewName) {
@@ -459,6 +472,7 @@ async function sendCeoChat() {
     body: JSON.stringify({
       objective: ceoObjective.value,
       budget: Number(ceoBudget.value || 100),
+      project_id: activeProjectId,
       state: currentReplay ? { replay_event_count: currentReplay.event_count || 0 } : {},
     }),
   });
@@ -479,7 +493,7 @@ workspaceNav.addEventListener("click", (event) => {
   setActiveView(target.dataset.view || "chat");
 });
 
-projectIcons.addEventListener("click", (event) => {
+projectIcons.addEventListener("click", async (event) => {
   const target = event.target.closest(".project-icon[data-project-id]");
   if (!target) {
     return;
@@ -488,9 +502,19 @@ projectIcons.addEventListener("click", (event) => {
   if (!project || project.status === "deleted") {
     return;
   }
+
+  const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}/select`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  const data = await response.json();
+  if (!data.ok) {
+    ceoResponse.textContent = `Error: ${data.error || "Unable to select project"}`;
+    return;
+  }
+
   activeProjectId = project.id;
-  renderProjectRail();
-  syncProjectHeader();
+  await loadProjects();
 });
 
 providerSelect.addEventListener("change", () => {
@@ -513,28 +537,25 @@ sendCeoButton.addEventListener("click", async () => {
   await sendCeoChat();
 });
 
-pauseProjectButton.addEventListener("click", () => {
-  setProjectStatus("paused");
+pauseProjectButton.addEventListener("click", async () => {
+  await setProjectStatus("paused");
 });
 
-resumeProjectButton.addEventListener("click", () => {
-  setProjectStatus("running");
+resumeProjectButton.addEventListener("click", async () => {
+  await setProjectStatus("running");
 });
 
-deleteProjectButton.addEventListener("click", () => {
-  handleDeleteProject();
+deleteProjectButton.addEventListener("click", async () => {
+  await handleDeleteProject();
+});
+
+addProjectButton.addEventListener("click", async () => {
+  await handleCreateProject();
 });
 
 async function bootstrap() {
-  loadProjects();
-  const active = getActiveProject();
-  if (active) {
-    activeProjectId = active.id;
-  }
-  renderProjectRail();
-  syncProjectHeader();
   setActiveView("chat");
-  await Promise.all([loadSessions(), loadProviderSettings()]);
+  await Promise.all([loadProjects(), loadSessions(), loadProviderSettings()]);
 }
 
 bootstrap().catch((err) => {
