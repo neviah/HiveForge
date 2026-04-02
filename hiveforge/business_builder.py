@@ -33,8 +33,10 @@ def _read_context(project_id: str) -> dict[str, Any]:
             "strategy": {},
             "offer_lab": {},
             "product_spec": {},
+            "mission_brief": {},
             "pipeline": {"steps": []},
             "launch": {},
+            "deployment": {},
             "inbox": [],
             "approvals": [],
             "office": {"agents": []},
@@ -50,8 +52,10 @@ def _read_context(project_id: str) -> dict[str, Any]:
             "strategy": {},
             "offer_lab": {},
             "product_spec": {},
+            "mission_brief": {},
             "pipeline": {"steps": []},
             "launch": {},
+            "deployment": {},
             "inbox": [],
             "approvals": [],
             "office": {"agents": []},
@@ -174,6 +178,7 @@ def _task_definitions(project_id: str, project_name: str, objective: str) -> lis
             "role": "project_manager",
             "objective": f"Create the execution roadmap for {project_name}",
             "budget": 120.0,
+            "depends_on": [],
             "artifact": {"label": "Strategy Roadmap", "path": f"{base}/strategy-roadmap.md", "content": roadmap, "category": "strategy"},
         },
         {
@@ -181,6 +186,7 @@ def _task_definitions(project_id: str, project_name: str, objective: str) -> lis
             "role": "researcher",
             "objective": f"Research the market case for {project_name}",
             "budget": 90.0,
+            "depends_on": ["strategy-roadmap"],
             "artifact": {"label": "Market Research", "path": f"{base}/market-research.md", "content": research, "category": "offer_lab"},
         },
         {
@@ -188,6 +194,7 @@ def _task_definitions(project_id: str, project_name: str, objective: str) -> lis
             "role": "writer",
             "objective": f"Draft the offer lab for {project_name}",
             "budget": 80.0,
+            "depends_on": ["market-research"],
             "artifact": {"label": "Offer Lab", "path": f"{base}/offer-lab.md", "content": offer, "category": "offer_lab"},
         },
         {
@@ -195,6 +202,7 @@ def _task_definitions(project_id: str, project_name: str, objective: str) -> lis
             "role": "designer",
             "objective": f"Design the product specification for {project_name}",
             "budget": 95.0,
+            "depends_on": ["offer-lab"],
             "artifact": {"label": "Product Spec", "path": f"{base}/product-spec.md", "content": spec, "category": "product_spec"},
         },
         {
@@ -202,6 +210,7 @@ def _task_definitions(project_id: str, project_name: str, objective: str) -> lis
             "role": "developer",
             "objective": f"Build the landing page scaffold for {project_name}",
             "budget": 180.0,
+            "depends_on": ["product-spec"],
             "artifact": {"label": "Landing Page", "path": f"{base}/website/index.html", "content": landing, "category": "build"},
         },
         {
@@ -209,6 +218,7 @@ def _task_definitions(project_id: str, project_name: str, objective: str) -> lis
             "role": "analyst",
             "objective": f"Define the launch metrics for {project_name}",
             "budget": 70.0,
+            "depends_on": ["offer-lab"],
             "artifact": {"label": "Metrics Plan", "path": f"{base}/metrics-plan.md", "content": metrics, "category": "launch"},
         },
         {
@@ -216,6 +226,7 @@ def _task_definitions(project_id: str, project_name: str, objective: str) -> lis
             "role": "writer",
             "objective": f"Prepare the launch checklist for {project_name}",
             "budget": 70.0,
+            "depends_on": ["landing-page", "metrics-plan"],
             "artifact": {"label": "Launch Checklist", "path": f"{base}/launch-checklist.md", "content": launch, "category": "launch"},
         },
         {
@@ -223,6 +234,7 @@ def _task_definitions(project_id: str, project_name: str, objective: str) -> lis
             "role": "critic",
             "objective": f"Review launch risks for {project_name}",
             "budget": 65.0,
+            "depends_on": ["launch-checklist"],
             "artifact": {"label": "Risk Review", "path": f"{base}/risk-review.md", "content": review, "category": "review"},
         },
     ]
@@ -333,74 +345,107 @@ def run_build_workflow(
     total_specialist_budget = round(budget * 0.68, 2)
     per_task_budget = round(total_specialist_budget / max(len(task_definitions), 1), 2)
 
-    for index, task in enumerate(task_definitions):
-        specialist = marketplace.hire(task["role"])
-        if specialist is None:
+    queued = {task["id"]: task for task in task_definitions}
+    completed: set[str] = set()
+    wave = 0
+
+    while queued:
+        wave += 1
+        ready = [task for task in queued.values() if set(task.get("depends_on", [])) <= completed]
+        if not ready:
+            for task in queued.values():
+                pipeline_steps.append(
+                    {
+                        "id": task["id"],
+                        "title": task["objective"],
+                        "role": task["role"],
+                        "status": "blocked",
+                        "summary": f"Waiting on dependencies: {', '.join(task.get('depends_on', []))}",
+                        "artifact_path": task["artifact"]["path"],
+                        "depends_on": task.get("depends_on", []),
+                        "wave": wave,
+                    }
+                )
+            break
+
+        for task in ready:
+            index = len(completed)
+            specialist = marketplace.hire(task["role"])
+            if specialist is None:
+                pipeline_steps.append(
+                    {
+                        "id": task["id"],
+                        "title": task["objective"],
+                        "role": task["role"],
+                        "status": "blocked",
+                        "summary": "No specialist registered for this role.",
+                        "depends_on": task.get("depends_on", []),
+                        "wave": wave,
+                    }
+                )
+                queued.pop(task["id"], None)
+                continue
+
+            artifact = task["artifact"]
+            state = {
+                "project_id": project_id,
+                "project_name": project_name,
+                "objective": objective,
+                "tool_calls": [
+                    {
+                        "tool": "filesystem",
+                        "operation": "write_file",
+                        "payload": {
+                            "path": artifact["path"],
+                            "content": artifact["content"],
+                            "overwrite": True,
+                        },
+                    }
+                ],
+                "artifact_path": artifact["path"],
+                "nudge_history": nudges or [],
+                "dependencies_completed": sorted(completed),
+            }
+            result = specialist.run_task(task["objective"], state=state, budget=min(task["budget"], per_task_budget))
+            tool_succeeded = _tool_succeeded(result)
+            excerpt = _result_excerpt(result)
+            if tool_succeeded and excerpt.startswith("ERROR:"):
+                excerpt = f"Artifact created at {artifact['path']}. LLM summary unavailable, but the deliverable file was written successfully."
+            step_status = "done" if tool_succeeded or (not str(excerpt).startswith("ERROR:") and not result.get("error")) else "needs_attention"
+
             pipeline_steps.append(
                 {
                     "id": task["id"],
                     "title": task["objective"],
                     "role": task["role"],
-                    "status": "blocked",
-                    "summary": "No specialist registered for this role.",
+                    "status": step_status,
+                    "summary": excerpt,
+                    "artifact_path": artifact["path"],
+                    "depends_on": task.get("depends_on", []),
+                    "wave": wave,
                 }
             )
-            continue
-
-        artifact = task["artifact"]
-        state = {
-            "project_id": project_id,
-            "project_name": project_name,
-            "objective": objective,
-            "tool_calls": [
+            office_agents.append(
                 {
-                    "tool": "filesystem",
-                    "operation": "write_file",
-                    "payload": {
-                        "path": artifact["path"],
-                        "content": artifact["content"],
-                        "overwrite": True,
-                    },
+                    "id": specialist.profile.name,
+                    "role": task["role"],
+                    "lane": "done" if step_status == "done" else "approvals",
+                    "desk": index % 4,
+                    "mood": "working" if step_status == "done" else "waiting",
+                    "task": task["id"],
                 }
-            ],
-            "artifact_path": artifact["path"],
-            "nudge_history": nudges or [],
-        }
-        result = specialist.run_task(task["objective"], state=state, budget=min(task["budget"], per_task_budget))
-        tool_succeeded = _tool_succeeded(result)
-        excerpt = _result_excerpt(result)
-        if tool_succeeded and excerpt.startswith("ERROR:"):
-            excerpt = f"Artifact created at {artifact['path']}. LLM summary unavailable, but the deliverable file was written successfully."
-        step_status = "done" if tool_succeeded or (not str(excerpt).startswith("ERROR:") and not result.get("error")) else "needs_attention"
-
-        pipeline_steps.append(
-            {
-                "id": task["id"],
-                "title": task["objective"],
-                "role": task["role"],
-                "status": step_status,
-                "summary": excerpt,
-                "artifact_path": artifact["path"],
-            }
-        )
-        office_agents.append(
-            {
-                "id": specialist.profile.name,
-                "role": task["role"],
-                "lane": "done" if step_status == "done" else "approvals",
-                "desk": index % 4,
-                "mood": "working" if step_status == "done" else "waiting",
-                "task": task["id"],
-            }
-        )
-        _register_artifact(context, label=artifact["label"], relative_path=artifact["path"], category=artifact["category"])
-        _append_inbox(
-            context,
-            sender=specialist.profile.name,
-            subject=f"{artifact['label']} ready",
-            body=excerpt,
-            kind="update" if step_status == "done" else "warning",
-        )
+            )
+            _register_artifact(context, label=artifact["label"], relative_path=artifact["path"], category=artifact["category"])
+            _append_inbox(
+                context,
+                sender=specialist.profile.name,
+                subject=f"{artifact['label']} ready",
+                body=excerpt,
+                kind="update" if step_status == "done" else "warning",
+            )
+            if step_status == "done":
+                completed.add(task["id"])
+            queued.pop(task["id"], None)
 
     task_map = {task["id"]: task for task in task_definitions}
     context["strategy"] = {
@@ -417,6 +462,14 @@ def run_build_workflow(
         "summary": "Product scope, user flow, and MVP boundaries have been drafted.",
         "artifact_path": f"sandbox/projects/{project_id}/product-spec.md",
         "content": task_map["product-spec"]["artifact"]["content"],
+    }
+    context["mission_brief"] = {
+        "summary": "Mission statement, offer, and product scope combined for quick operator review.",
+        "content": "\n\n".join([
+            f"# Mission Statement\n\n{objective}",
+            "## Offer\n\n" + task_map["offer-lab"]["artifact"]["content"],
+            "## Product\n\n" + task_map["product-spec"]["artifact"]["content"],
+        ]),
     }
     context["pipeline"] = {"steps": pipeline_steps}
     context["launch"] = {
@@ -435,8 +488,20 @@ def run_build_workflow(
             "id": "approve-launch-copy",
             "title": "Approve launch messaging before external distribution",
             "status": "pending",
+            "notes": "CEO requests final review on messaging before launch.",
+        },
+        {
+            "id": "approve-deployment",
+            "title": "Approve deployment target and data stack",
+            "status": "pending",
+            "notes": "Suggested target: Vercel. Suggested DB: Supabase Postgres unless custom constraints require plain Postgres.",
         }
     ]
+    context["deployment"] = {
+        "target": "vercel",
+        "database": "supabase-postgres",
+        "status": "awaiting_approval",
+    }
     context["office"] = {"agents": office_agents}
     context["last_run"] = {
         "ts": _now_iso(),

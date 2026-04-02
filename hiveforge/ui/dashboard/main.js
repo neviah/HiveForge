@@ -8,21 +8,21 @@ const activeProjectStatus = document.getElementById("active-project-status");
 const pauseProjectButton = document.getElementById("pause-project");
 const resumeProjectButton = document.getElementById("resume-project");
 const deleteProjectButton = document.getElementById("delete-project");
+const llmDot = document.getElementById("llm-dot");
+const llmStatusText = document.getElementById("llm-status-text");
 
 const sessionSelect = document.getElementById("session-select");
 const reloadSessionsButton = document.getElementById("reload-sessions");
 const timelineBody = document.getElementById("timeline-body");
 const agentKanban = document.getElementById("agent-kanban");
-const inboxList = document.getElementById("inbox-list");
 const marketplaceList = document.getElementById("marketplace-list");
 const approvalsList = document.getElementById("approvals-list");
-const pipelineList = document.getElementById("pipeline-list");
-const offerLabContent = document.getElementById("offer-lab-content");
-const productSpecContent = document.getElementById("product-spec-content");
+const missionBriefContent = document.getElementById("mission-brief-content");
 const launchContent = document.getElementById("launch-content");
 const ceoThread = document.getElementById("ceo-thread");
 const officeCanvas = document.getElementById("office-canvas");
 const refreshOfficeButton = document.getElementById("refresh-office");
+const officeStyleSelect = document.getElementById("office-style");
 
 const metricSessions = document.getElementById("metric-sessions");
 const metricEvents = document.getElementById("metric-events");
@@ -37,6 +37,9 @@ const providerApiKeyEnv = document.getElementById("provider-api-key-env");
 const providerApiKey = document.getElementById("provider-api-key");
 const saveProviderButton = document.getElementById("save-provider");
 const settingsStatus = document.getElementById("settings-status");
+const projectProviderSelect = document.getElementById("project-provider-select");
+const projectProviderModel = document.getElementById("project-provider-model");
+const saveProjectLlmButton = document.getElementById("save-project-llm");
 
 const ceoObjective = document.getElementById("ceo-objective");
 const ceoBudget = document.getElementById("ceo-budget");
@@ -46,23 +49,36 @@ const sendNudgeButton = document.getElementById("send-nudge");
 const ceoResponse = document.getElementById("ceo-response");
 
 let currentReplay = { event_count: 0, agents: [], events: [] };
-let currentContext = {
-  strategy: {},
-  offer_lab: {},
-  product_spec: {},
-  pipeline: { steps: [] },
-  launch: {},
-  inbox: [],
-  approvals: [],
-  office: { agents: [] },
-  conversation: [],
-  artifacts: [],
-};
+let currentContext = defaultProjectContext("agency");
 let providerSettings = { active_provider: "openrouter", providers: [], configs: {} };
 let projects = [];
 let activeProjectId = "agency";
 let officeSprites = [];
 let officeAnimationStarted = false;
+
+function defaultProjectContext(projectId) {
+  return {
+    project_id: projectId,
+    strategy: {},
+    offer_lab: {},
+    product_spec: {},
+    mission_brief: {},
+    pipeline: { steps: [] },
+    launch: {},
+    inbox: [],
+    approvals: [],
+    office: { agents: [] },
+    conversation: [],
+    artifacts: [],
+    llm: {},
+    llm_status: {
+      connected: false,
+      text: "LLM status unavailable",
+      provider: "",
+      model: "",
+    },
+  };
+}
 
 function previewPayload(payload) {
   if (!payload || typeof payload !== "object") {
@@ -162,6 +178,13 @@ function syncProjectHeader() {
   deleteProjectButton.disabled = project.status === "deleted";
 }
 
+function setLlmStatus(status) {
+  const connected = Boolean(status?.connected);
+  llmDot.classList.toggle("connected", connected);
+  llmDot.classList.toggle("disconnected", !connected);
+  llmStatusText.textContent = status?.text || "LLM status unavailable";
+}
+
 async function setProjectStatus(nextStatus) {
   const project = getActiveProject();
   if (!project) {
@@ -241,12 +264,9 @@ function setActiveView(viewName) {
 
   const viewLabels = {
     strategy: "Strategy",
-    "offer-lab": "Offer Lab",
-    "product-spec": "Product Spec",
+    "mission-brief": "Mission Brief",
     office: "Office",
-    "build-pipeline": "Build Pipeline",
     launch: "Launch",
-    inbox: "Inbox",
     approvals: "Approvals",
     marketplace: "Agent Marketplace",
     settings: "Settings",
@@ -304,63 +324,72 @@ function renderThread() {
   });
 }
 
-function renderInbox() {
-  const messages = Array.isArray(currentContext.inbox) ? currentContext.inbox : [];
-  inboxList.innerHTML = "";
-
-  if (messages.length === 0) {
-    inboxList.innerHTML = "<li><strong>No updates yet</strong><span>Agents will send updates here as work progresses.</span></li>";
-    return;
-  }
-
-  messages.forEach((message) => {
-    const li = document.createElement("li");
-    li.innerHTML = `<strong>${message.sender}: ${message.subject}</strong><span>${message.body}</span>`;
-    inboxList.appendChild(li);
-  });
-}
-
 function renderApprovals() {
   const approvals = Array.isArray(currentContext.approvals) ? currentContext.approvals : [];
+  const updates = Array.isArray(currentContext.inbox) ? currentContext.inbox.slice(0, 4) : [];
   approvalsList.innerHTML = "";
 
-  if (approvals.length === 0) {
-    approvalsList.innerHTML = "<li><strong>No approvals pending</strong><span>Current workflow has no outstanding executive approvals.</span></li>";
+  if (approvals.length === 0 && updates.length === 0) {
+    approvalsList.innerHTML = "<li><strong>No approvals pending</strong><span>The active project has no pending approvals or recent escalations.</span></li>";
     return;
   }
 
   approvals.forEach((approval) => {
     const li = document.createElement("li");
-    li.innerHTML = `<strong>${approval.title}</strong><span>Status: ${approval.status}</span>`;
+    const id = String(approval.id || "");
+    const controls = approval.status === "pending"
+      ? `<div class=\"row compact\"><button data-approval-id=\"${id}\" data-decision=\"approved\" type=\"button\">Approve</button><button class=\"danger\" data-approval-id=\"${id}\" data-decision=\"rejected\" type=\"button\">Reject</button></div>`
+      : "";
+    li.innerHTML = `<strong>${approval.title}</strong><span>Status: ${approval.status}</span><span>${approval.notes || ""}</span>${controls}`;
+    approvalsList.appendChild(li);
+  });
+
+  updates.forEach((message) => {
+    const li = document.createElement("li");
+    li.innerHTML = `<strong>Update: ${message.sender || "Agent"}</strong><span>${message.subject || "Update"}</span><span>${message.body || ""}</span>`;
     approvalsList.appendChild(li);
   });
 }
 
-function renderPipeline() {
-  const steps = Array.isArray(currentContext.pipeline?.steps) ? currentContext.pipeline.steps : [];
-  pipelineList.innerHTML = "";
+function renderMissionBrief() {
+  const sections = [];
+  const objective = currentContext.strategy?.objective || "No objective yet.";
+  sections.push(`# Mission Statement\n\n${objective}`);
 
-  if (steps.length === 0) {
-    pipelineList.innerHTML = "<li><strong>No pipeline yet</strong><span>Run Build Business to generate the execution pipeline.</span></li>";
-    return;
-  }
+  const ceo = currentContext.strategy?.ceo_summary || "No CEO summary yet.";
+  const coordinator = currentContext.strategy?.coordinator_summary || "No coordinator plan yet.";
+  sections.push(`## Executive Direction\n\n${ceo}\n\n${coordinator}`);
 
-  steps.forEach((step) => {
-    const li = document.createElement("li");
-    li.innerHTML = `<strong>${step.role}: ${step.title}</strong><span>Status: ${step.status}</span><span>${step.summary || ""}</span>`;
-    pipelineList.appendChild(li);
-  });
+  const offer = currentContext.offer_lab?.content || currentContext.offer_lab?.summary || "Offer lab not generated yet.";
+  sections.push(`## Offer\n\n${offer}`);
+
+  const spec = currentContext.product_spec?.content || currentContext.product_spec?.summary || "Product spec not generated yet.";
+  sections.push(`## Product\n\n${spec}`);
+
+  missionBriefContent.textContent = sections.join("\n\n");
 }
 
 function renderStrategyViews() {
   ceoResponse.textContent = currentContext.strategy?.latest_response || currentContext.strategy?.ceo_summary || "No strategy output yet.";
-  offerLabContent.textContent = currentContext.offer_lab?.content || currentContext.offer_lab?.summary || "Offer lab not generated yet.";
-  productSpecContent.textContent = currentContext.product_spec?.content || currentContext.product_spec?.summary || "Product spec not generated yet.";
   launchContent.textContent = currentContext.launch?.content || currentContext.launch?.summary || "Launch plan not generated yet.";
+  renderMissionBrief();
 }
 
-function renderKanbanFromOffice() {
-  const agents = Array.isArray(currentContext.office?.agents) ? currentContext.office.agents : [];
+function laneForStep(step) {
+  if (step.status === "done") {
+    return "done";
+  }
+  if (step.status === "needs_attention" || step.status === "blocked") {
+    return "approvals";
+  }
+  if (step.status === "active" || step.status === "in_progress") {
+    return "active";
+  }
+  return "queued";
+}
+
+function renderKanbanFromPipeline() {
+  const steps = Array.isArray(currentContext.pipeline?.steps) ? currentContext.pipeline.steps : [];
   agentKanban.innerHTML = "";
 
   const lanes = {
@@ -370,9 +399,8 @@ function renderKanbanFromOffice() {
     done: [],
   };
 
-  agents.forEach((agent) => {
-    const lane = lanes[agent.lane] ? agent.lane : "queued";
-    lanes[lane].push(agent);
+  steps.forEach((step) => {
+    lanes[laneForStep(step)].push(step);
   });
 
   const laneMeta = [
@@ -386,19 +414,18 @@ function renderKanbanFromOffice() {
     const laneEl = document.createElement("article");
     laneEl.className = "kanban-lane";
     const cards = lanes[meta.key]
-      .map((agent) => {
-        const matchingStep = (currentContext.pipeline?.steps || []).find((step) => step.id === agent.task);
-        const score = matchingStep?.status === "done" ? 100 : matchingStep?.status === "needs_attention" ? 55 : 72;
+      .map((step) => {
+        const score = meta.key === "done" ? 100 : meta.key === "approvals" ? 45 : meta.key === "active" ? 66 : 20;
         return `
           <article class="kanban-card ${meta.key}">
             <header>
-              <span class="agent-avatar">${String(agent.id || "AG").slice(0, 2).toUpperCase()}</span>
+              <span class="agent-avatar">${String(step.role || "AG").slice(0, 2).toUpperCase()}</span>
               <div>
-                <h5>${agent.id || "Agent"}</h5>
-                <p>${agent.task || "standby"}</p>
+                <h5>${step.role || "agent"}</h5>
+                <p>${step.title || "task"}</p>
               </div>
             </header>
-            <p class="meta">${agent.role || "specialist"} • ${agent.mood || "working"}</p>
+            <p class="meta">Status: ${step.status || "queued"}</p>
             <div class="progress-track"><div class="progress-fill" style="width:${score}%"></div></div>
           </article>
         `;
@@ -417,20 +444,19 @@ function renderKanbanFromOffice() {
 }
 
 function prepareOfficeSprites() {
-  const agents = Array.isArray(currentContext.office?.agents) ? currentContext.office.agents : [];
-  officeSprites = agents.map((agent, index) => {
-    const laneRow = Math.floor(index / 4);
-    const laneCol = index % 4;
-    const baseX = 120 + laneCol * 180;
-    const baseY = 120 + laneRow * 80;
+  const steps = Array.isArray(currentContext.pipeline?.steps) ? currentContext.pipeline.steps : [];
+  officeSprites = steps.slice(0, 10).map((step, index) => {
+    const laneRow = Math.floor(index / 5);
+    const laneCol = index % 5;
+    const baseX = 94 + laneCol * 148;
+    const baseY = 96 + laneRow * 148;
     return {
-      id: agent.id,
-      role: agent.role,
-      mood: agent.mood,
+      id: step.id,
+      role: step.role,
       x: baseX,
       y: baseY,
-      targetX: baseX + 16,
-      targetY: baseY,
+      targetX: baseX + 12,
+      targetY: baseY + 8,
       speed: 0.7 + (index % 3) * 0.2,
     };
   });
@@ -440,15 +466,66 @@ function drawPixelAgent(ctx, sprite) {
   const color = roleColor(sprite.role);
   const px = Math.round(sprite.x);
   const py = Math.round(sprite.y);
-  ctx.fillStyle = "#1f2937";
-  ctx.fillRect(px + 4, py + 2, 8, 8);
-  ctx.fillStyle = color;
-  ctx.fillRect(px + 2, py + 10, 12, 12);
+  ctx.fillStyle = "#0f172a";
+  ctx.fillRect(px + 5, py + 1, 8, 8);
   ctx.fillStyle = "#f5d0a9";
-  ctx.fillRect(px + 5, py + 4, 6, 4);
+  ctx.fillRect(px + 6, py + 4, 6, 5);
+  ctx.fillStyle = color;
+  ctx.fillRect(px + 3, py + 10, 12, 11);
   ctx.fillStyle = "#111827";
-  ctx.fillRect(px + 2, py + 22, 4, 6);
-  ctx.fillRect(px + 10, py + 22, 4, 6);
+  ctx.fillRect(px + 4, py + 21, 4, 6);
+  ctx.fillRect(px + 10, py + 21, 4, 6);
+}
+
+function drawStudioOffice(ctx) {
+  ctx.fillStyle = "#18253a";
+  ctx.fillRect(0, 0, officeCanvas.width, officeCanvas.height);
+
+  ctx.fillStyle = "#8c6135";
+  ctx.fillRect(0, 0, 420, officeCanvas.height);
+  ctx.fillStyle = "#b48353";
+  for (let y = 0; y < officeCanvas.height; y += 24) {
+    for (let x = 0; x < 420; x += 24) {
+      ctx.fillRect(x + 1, y + 1, 1, 1);
+    }
+  }
+
+  ctx.fillStyle = "#ded4ca";
+  ctx.fillRect(420, 0, officeCanvas.width - 420, 126);
+  ctx.fillRect(420, 134, officeCanvas.width - 420, officeCanvas.height - 134);
+
+  ctx.fillStyle = "#40688a";
+  ctx.fillRect(540, 162, 292, 162);
+
+  ctx.fillStyle = "#9a6b3f";
+  for (let desk = 0; desk < 2; desk += 1) {
+    ctx.fillRect(92 + desk * 178, 88, 94, 32);
+    ctx.fillRect(92 + desk * 178, 234, 94, 32);
+  }
+  for (let desk = 0; desk < 2; desk += 1) {
+    ctx.fillRect(456 + desk * 176, 92, 92, 30);
+    ctx.fillRect(456 + desk * 176, 232, 92, 30);
+  }
+
+  ctx.fillStyle = "#2f3f59";
+  ctx.fillRect(602, 200, 132, 68);
+}
+
+function drawMinimalOffice(ctx) {
+  ctx.fillStyle = "#f1ede4";
+  ctx.fillRect(0, 0, officeCanvas.width, officeCanvas.height);
+  ctx.fillStyle = "#d9cbb7";
+  for (let x = 0; x < officeCanvas.width; x += 32) {
+    ctx.fillRect(x, 0, 1, officeCanvas.height);
+  }
+  for (let y = 0; y < officeCanvas.height; y += 32) {
+    ctx.fillRect(0, y, officeCanvas.width, 1);
+  }
+  ctx.fillStyle = "#9a6b3f";
+  for (let desk = 0; desk < 5; desk += 1) {
+    ctx.fillRect(78 + desk * 148, 68, 76, 26);
+    ctx.fillRect(78 + desk * 148, 214, 76, 26);
+  }
 }
 
 function drawOffice() {
@@ -462,29 +539,21 @@ function drawOffice() {
 
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, officeCanvas.width, officeCanvas.height);
-  ctx.fillStyle = "#f1ede4";
-  ctx.fillRect(0, 0, officeCanvas.width, officeCanvas.height);
-  ctx.fillStyle = "#d9cbb7";
-  for (let x = 0; x < officeCanvas.width; x += 32) {
-    ctx.fillRect(x, 0, 1, officeCanvas.height);
-  }
-  for (let y = 0; y < officeCanvas.height; y += 32) {
-    ctx.fillRect(0, y, officeCanvas.width, 1);
-  }
-  ctx.fillStyle = "#9a6b3f";
-  for (let desk = 0; desk < 4; desk += 1) {
-    ctx.fillRect(90 + desk * 180, 70, 80, 28);
-    ctx.fillRect(90 + desk * 180, 220, 80, 28);
+
+  if (officeStyleSelect.value === "minimal") {
+    drawMinimalOffice(ctx);
+  } else {
+    drawStudioOffice(ctx);
   }
 
   officeSprites.forEach((sprite, index) => {
     const dx = sprite.targetX - sprite.x;
     const dy = sprite.targetY - sprite.y;
     if (Math.abs(dx) < 2 && Math.abs(dy) < 2) {
-      const row = Math.floor(index / 4);
-      const col = index % 4;
-      sprite.targetX = 100 + col * 180 + Math.round(Math.random() * 48);
-      sprite.targetY = 110 + row * 96 + Math.round(Math.random() * 18);
+      const row = Math.floor(index / 5);
+      const col = index % 5;
+      sprite.targetX = 86 + col * 148 + Math.round(Math.random() * 32);
+      sprite.targetY = 94 + row * 146 + Math.round(Math.random() * 24);
     } else {
       sprite.x += Math.sign(dx) * Math.min(Math.abs(dx), sprite.speed);
       sprite.y += Math.sign(dy) * Math.min(Math.abs(dy), sprite.speed);
@@ -506,14 +575,13 @@ function ensureOfficeAnimation() {
 }
 
 function renderProjectViews() {
-  metricAgents.textContent = String((currentContext.office?.agents || []).length);
+  metricAgents.textContent = String((currentContext.pipeline?.steps || []).length);
   renderThread();
-  renderInbox();
   renderApprovals();
-  renderPipeline();
   renderStrategyViews();
-  renderKanbanFromOffice();
+  renderKanbanFromPipeline();
   prepareOfficeSprites();
+  setLlmStatus(currentContext.llm_status || {});
   ensureOfficeAnimation();
 }
 
@@ -527,6 +595,23 @@ function fillProviderForm(providerName) {
   providerApiKey.value = config.api_key || "";
 }
 
+function fillProjectLlmForm() {
+  const llm = currentContext.llm || {};
+  projectProviderSelect.innerHTML = "";
+  providerSettings.providers.forEach((providerName) => {
+    const option = document.createElement("option");
+    option.value = providerName;
+    option.textContent = providerName;
+    projectProviderSelect.appendChild(option);
+  });
+
+  const provider = llm.provider || providerSettings.active_provider || providerSettings.providers[0] || "openrouter";
+  if ([...projectProviderSelect.options].some((opt) => opt.value === provider)) {
+    projectProviderSelect.value = provider;
+  }
+  projectProviderModel.value = llm.model || "";
+}
+
 async function loadProjectContext(projectId) {
   if (!projectId) {
     return;
@@ -536,7 +621,19 @@ async function loadProjectContext(projectId) {
   if (!data.ok) {
     throw new Error(data.error || "Unable to load project context");
   }
-  currentContext = data.context || currentContext;
+
+  const loaded = data.context || defaultProjectContext(projectId);
+  if (loaded.project_id && String(loaded.project_id) !== String(projectId)) {
+    currentContext = defaultProjectContext(projectId);
+  } else {
+    currentContext = {
+      ...defaultProjectContext(projectId),
+      ...loaded,
+      llm_status: loaded.llm_status || data.llm_status || defaultProjectContext(projectId).llm_status,
+    };
+  }
+
+  fillProjectLlmForm();
   renderProjectViews();
 }
 
@@ -631,6 +728,33 @@ async function saveProviderSettings() {
 
   settingsStatus.textContent = `Saved ${data.active_provider} provider configuration.`;
   await loadProviderSettings();
+  await loadProjectContext(activeProjectId);
+}
+
+async function saveProjectLlm() {
+  const activeProject = getActiveProject();
+  if (!activeProject) {
+    settingsStatus.textContent = "Error: No active project selected.";
+    return;
+  }
+
+  settingsStatus.textContent = "Saving project LLM override...";
+  const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/llm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      provider: projectProviderSelect.value,
+      model: projectProviderModel.value.trim(),
+    }),
+  });
+  const data = await response.json();
+  if (!data.ok) {
+    settingsStatus.textContent = `Error: ${data.error || "Unable to save project LLM"}`;
+    return;
+  }
+
+  settingsStatus.textContent = "Saved project LLM override.";
+  await loadProjectContext(activeProject.id);
 }
 
 async function runBuild() {
@@ -701,14 +825,27 @@ async function refreshOffice() {
   if (!activeProjectId) {
     return;
   }
-  const response = await fetch(`/api/projects/${encodeURIComponent(activeProjectId)}/office`);
-  const data = await response.json();
-  if (!data.ok) {
-    ceoResponse.textContent = `Error: ${data.error || "Unable to refresh office"}`;
+  await loadProjectContext(activeProjectId);
+}
+
+async function actOnApproval(approvalId, decision) {
+  const activeProject = getActiveProject();
+  if (!activeProject) {
     return;
   }
-  currentContext.office = data.office || { agents: [] };
-  currentContext.pipeline = data.pipeline || { steps: [] };
+
+  const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/approvals/${encodeURIComponent(approvalId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ decision }),
+  });
+  const data = await response.json();
+  if (!data.ok) {
+    ceoResponse.textContent = `Error: ${data.error || "Unable to update approval"}`;
+    return;
+  }
+
+  currentContext = data.context || currentContext;
   renderProjectViews();
 }
 
@@ -720,6 +857,14 @@ workspaceNav.addEventListener("click", (event) => {
   setActiveView(target.dataset.view || "strategy");
 });
 
+approvalsList.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-approval-id]");
+  if (!button) {
+    return;
+  }
+  await actOnApproval(button.dataset.approvalId, button.dataset.decision);
+});
+
 projectIcons.addEventListener("click", async (event) => {
   const target = event.target.closest(".project-icon[data-project-id]");
   if (!target) {
@@ -729,6 +874,9 @@ projectIcons.addEventListener("click", async (event) => {
   if (!project || project.status === "deleted") {
     return;
   }
+
+  currentContext = defaultProjectContext(project.id);
+  renderProjectViews();
 
   const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}/select`, {
     method: "POST",
@@ -761,6 +909,10 @@ saveProviderButton.addEventListener("click", async () => {
   await saveProviderSettings();
 });
 
+saveProjectLlmButton.addEventListener("click", async () => {
+  await saveProjectLlm();
+});
+
 runBuildButton.addEventListener("click", async () => {
   await runBuild();
 });
@@ -783,6 +935,10 @@ deleteProjectButton.addEventListener("click", async () => {
 
 addProjectButton.addEventListener("click", async () => {
   await handleCreateProject();
+});
+
+officeStyleSelect.addEventListener("change", () => {
+  drawOffice();
 });
 
 refreshOfficeButton.addEventListener("click", async () => {

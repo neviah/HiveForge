@@ -205,6 +205,33 @@ body {
   font-size: 0.9rem;
 }
 
+.llm-chip {
+  margin: 0.35rem 0 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.86rem;
+  color: var(--ink-soft);
+}
+
+.llm-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  display: inline-block;
+}
+
+.llm-dot.connected {
+  background: #2f9e44;
+  box-shadow: 0 0 0 3px rgba(47, 158, 68, 0.18);
+}
+
+.llm-dot.disconnected {
+  background: #e03131;
+  box-shadow: 0 0 0 3px rgba(224, 49, 49, 0.16);
+}
+
 .status-tag {
   margin-left: 0.35rem;
   padding: 0.1rem 0.4rem;
@@ -361,6 +388,10 @@ textarea {
   justify-content: space-between;
 }
 
+.office-controls {
+  margin-bottom: 0;
+}
+
 #office-canvas {
   width: 100%;
   height: auto;
@@ -368,6 +399,7 @@ textarea {
   border-radius: 14px;
   background: #f3ede2;
   display: block;
+  image-rendering: pixelated;
 }
 
 .kanban {

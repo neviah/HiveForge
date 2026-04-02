@@ -23,12 +23,9 @@
 
       <nav class="menu-nav" id="workspace-nav">
         <button class="menu-item active" data-view="strategy" type="button">Strategy</button>
-        <button class="menu-item" data-view="offer-lab" type="button">Offer Lab</button>
-        <button class="menu-item" data-view="product-spec" type="button">Product Spec</button>
+        <button class="menu-item" data-view="mission-brief" type="button">Mission Brief</button>
         <button class="menu-item" data-view="office" type="button">Office</button>
-        <button class="menu-item" data-view="build-pipeline" type="button">Build Pipeline</button>
         <button class="menu-item" data-view="launch" type="button">Launch</button>
-        <button class="menu-item" data-view="inbox" type="button">Inbox</button>
         <button class="menu-item" data-view="approvals" type="button">Approvals</button>
         <button class="menu-item" data-view="marketplace" type="button">Agent Marketplace</button>
         <button class="menu-item" data-view="settings" type="button">Settings</button>
@@ -48,6 +45,7 @@
           <p class="eyebrow">Operating View</p>
           <h2 id="view-title">Strategy</h2>
           <p class="project-chip">Project: <strong id="active-project-name">Software Agency</strong> <span id="active-project-status">running</span></p>
+          <p class="llm-chip"><span id="llm-dot" class="llm-dot disconnected"></span><strong id="llm-status-text">LLM status unavailable</strong></p>
         </div>
         <div class="row compact">
           <label class="label" for="session-select">Session</label>
@@ -84,24 +82,10 @@
         </div>
       </section>
 
-      <section class="view" data-view-panel="offer-lab">
+      <section class="view" data-view-panel="mission-brief">
         <article class="panel">
-          <h3>Offer Lab</h3>
-          <pre id="offer-lab-content" class="pre"></pre>
-        </article>
-      </section>
-
-      <section class="view" data-view-panel="product-spec">
-        <article class="panel">
-          <h3>Product Spec</h3>
-          <pre id="product-spec-content" class="pre"></pre>
-        </article>
-      </section>
-
-      <section class="view" data-view-panel="inbox">
-        <article class="panel">
-          <h3>Inbox</h3>
-          <ul id="inbox-list" class="card-list"></ul>
+          <h3>Mission Brief</h3>
+          <pre id="mission-brief-content" class="pre"></pre>
         </article>
       </section>
 
@@ -110,7 +94,14 @@
           <article class="panel office-panel">
             <div class="row office-header-row">
               <h3>Pixel Office</h3>
-              <button id="refresh-office" type="button">Refresh Office</button>
+              <div class="row compact office-controls">
+                <label class="label" for="office-style">Style</label>
+                <select id="office-style">
+                  <option value="studio">Studio</option>
+                  <option value="minimal">Minimal</option>
+                </select>
+                <button id="refresh-office" type="button">Refresh Office</button>
+              </div>
             </div>
             <canvas id="office-canvas" width="900" height="340"></canvas>
           </article>
@@ -131,14 +122,6 @@
           </article>
         </div>
       </section>
-
-      <section class="view" data-view-panel="build-pipeline">
-        <article class="panel">
-          <h3>Build Pipeline</h3>
-          <ul id="pipeline-list" class="card-list"></ul>
-        </article>
-      </section>
-
       <section class="view" data-view-panel="launch">
         <article class="panel">
           <h3>Launch</h3>
@@ -191,6 +174,20 @@
 
           <div class="row">
             <button id="save-provider" type="button">Save Provider Config</button>
+          </div>
+          <hr>
+          <h4>Project LLM Override</h4>
+          <p class="status">Set a provider/model for the active project. Leave blank to inherit global provider config.</p>
+          <div class="form-grid">
+            <label>Provider
+              <select id="project-provider-select"></select>
+            </label>
+            <label>Model
+              <input id="project-provider-model" type="text" placeholder="nvidia/llama-3.1-nemotron-70b-instruct">
+            </label>
+          </div>
+          <div class="row">
+            <button id="save-project-llm" type="button">Save Project LLM</button>
           </div>
           <p id="settings-status" class="status"></p>
         </article>

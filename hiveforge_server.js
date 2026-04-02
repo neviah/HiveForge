@@ -147,6 +147,78 @@ function readProjectContext(projectId) {
   return readJsonFile(projectContextPath(projectId), defaultProjectContext(projectId));
 }
 
+function writeProjectContext(projectId, context) {
+  ensureDir(PROJECT_DATA_DIR);
+  const merged = { ...defaultProjectContext(projectId), ...(context || {}), project_id: projectId };
+  fs.writeFileSync(projectContextPath(projectId), JSON.stringify(merged, null, 2), "utf-8");
+}
+
+function readModelsConfig() {
+  return readJsonFile(MODELS_PATH, { active_provider: "openrouter", providers: {} });
+}
+
+function modelLabel(modelName) {
+  const value = String(modelName || "").trim();
+  if (!value) {
+    return "Unknown model";
+  }
+  const name = value.includes("/") ? value.split("/").slice(-1)[0] : value;
+  return name.replace(/[-_]+/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+function resolveLlmStatus(projectContext) {
+  const models = readModelsConfig();
+  const projectLlm = projectContext && typeof projectContext.llm === "object" ? projectContext.llm : {};
+  const provider = String(projectLlm.provider || models.active_provider || "openrouter").trim();
+  const providerConfig = models.providers?.[provider] || {};
+  const model = String(projectLlm.model || providerConfig.model || "").trim();
+  const apiKeyEnv = String(providerConfig.api_key_env || "").trim();
+  const inlineKey = String(providerConfig.api_key || "").trim();
+  const envKey = apiKeyEnv ? String(process.env[apiKeyEnv] || "").trim() : "";
+
+  const hasConnectivityInputs = Boolean(provider && model && (inlineKey || envKey));
+  const text = hasConnectivityInputs
+    ? `${modelLabel(model)} (${provider}) connected`
+    : `${modelLabel(model || "Unknown model")} (${provider || "unknown"}) not connected`;
+
+  return {
+    connected: hasConnectivityInputs,
+    provider,
+    model,
+    text,
+  };
+}
+
+function updateApprovalStatus(projectId, approvalId, decision) {
+  const context = readProjectContext(projectId);
+  const approvals = Array.isArray(context.approvals) ? context.approvals : [];
+  const target = approvals.find((item) => String(item.id) === String(approvalId));
+  if (!target) {
+    return { ok: false, error: "Approval not found" };
+  }
+
+  if (decision !== "approved" && decision !== "rejected") {
+    return { ok: false, error: "decision must be approved or rejected" };
+  }
+
+  target.status = decision;
+  target.decided_at = new Date().toISOString();
+  if (!target.notes) {
+    target.notes = decision === "approved" ? "Approved by operator" : "Rejected by operator";
+  }
+  context.inbox = Array.isArray(context.inbox) ? context.inbox : [];
+  context.inbox.unshift({
+    id: `approval-${approvalId}-${Date.now()}`,
+    sender: "Operator",
+    subject: `Approval ${decision}`,
+    body: `${target.title} marked as ${decision}.`,
+    kind: "approval",
+    ts: new Date().toISOString(),
+  });
+  writeProjectContext(projectId, context);
+  return { ok: true, context: { ...context, llm_status: resolveLlmStatus(context) } };
+}
+
 function parseSessionEvents(sessionId) {
   const filePath = path.join(SESSION_DIR, `${sessionId}.jsonl`);
   if (!fs.existsSync(filePath)) {
@@ -319,7 +391,8 @@ const server = http.createServer(async (req, res) => {
     const pathname = requestUrl.pathname;
     const projectActionMatch = pathname.match(/^\/api\/projects\/([^/]+)\/(pause|resume|select)$/);
     const projectDeleteMatch = pathname.match(/^\/api\/projects\/([^/]+)$/);
-    const projectChildMatch = pathname.match(/^\/api\/projects\/([^/]+)\/(context|inbox|office|build|ceo-nudge)$/);
+    const projectChildMatch = pathname.match(/^\/api\/projects\/([^/]+)\/(context|inbox|office|build|ceo-nudge|llm)$/);
+    const approvalMatch = pathname.match(/^\/api\/projects\/([^/]+)\/approvals\/([^/]+)$/);
 
     if (req.method === "GET" && pathname === "/api/health") {
       sendJson(res, 200, { ok: true, service: "hiveforge_server" });
@@ -363,7 +436,7 @@ const server = http.createServer(async (req, res) => {
 
       const context = readProjectContext(projectId);
       if (childResource === "context") {
-        sendJson(res, 200, { ok: true, project, context });
+        sendJson(res, 200, { ok: true, project, context: { ...context, llm_status: resolveLlmStatus(context) }, llm_status: resolveLlmStatus(context) });
         return;
       }
       if (childResource === "inbox") {
@@ -376,6 +449,15 @@ const server = http.createServer(async (req, res) => {
           project,
           office: context.office || { agents: [] },
           pipeline: context.pipeline || { steps: [] },
+        });
+        return;
+      }
+      if (childResource === "llm") {
+        sendJson(res, 200, {
+          ok: true,
+          project,
+          llm: context.llm || {},
+          llm_status: resolveLlmStatus(context),
         });
         return;
       }
@@ -490,6 +572,53 @@ const server = http.createServer(async (req, res) => {
         });
         return;
       }
+
+      if (childResource === "llm") {
+        const provider = String(parsed.provider || "").trim();
+        const model = String(parsed.model || "").trim();
+        const models = readModelsConfig();
+        if (!provider || !models.providers || !models.providers[provider]) {
+          sendJson(res, 400, { ok: false, error: "Unknown provider" });
+          return;
+        }
+
+        const context = readProjectContext(projectId);
+        context.llm = {
+          provider,
+          model,
+        };
+        writeProjectContext(projectId, context);
+
+        sendJson(res, 200, {
+          ok: true,
+          project,
+          llm: context.llm,
+          llm_status: resolveLlmStatus(context),
+        });
+        return;
+      }
+    }
+
+    if (req.method === "POST" && approvalMatch) {
+      const projectId = sanitizeProjectId(decodeURIComponent(approvalMatch[1] || ""));
+      const approvalId = decodeURIComponent(approvalMatch[2] || "");
+      const record = readProjectsRecord();
+      const project = record.projects.find((item) => item.id === projectId);
+      if (!project) {
+        sendJson(res, 404, { ok: false, error: "Project not found" });
+        return;
+      }
+
+      const body = await readRequestBody(req);
+      const parsed = JSON.parse(body || "{}");
+      const decision = String(parsed.decision || "").trim().toLowerCase();
+      const result = updateApprovalStatus(projectId, approvalId, decision);
+      if (!result.ok) {
+        sendJson(res, 400, { ok: false, error: result.error });
+        return;
+      }
+      sendJson(res, 200, { ok: true, project, context: result.context });
+      return;
     }
 
     if (req.method === "POST" && projectActionMatch) {
