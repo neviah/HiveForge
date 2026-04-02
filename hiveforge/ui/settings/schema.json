@@ -1,0 +1,12 @@
+{
+  "providers": ["openrouter", "lmstudio", "ollama"],
+  "fields": {
+    "provider": "string",
+    "model_name": "string",
+    "api_key": "secret",
+    "temperature": "number",
+    "max_tokens": "number",
+    "enabled_agents": "array",
+    "agent_budgets": "object"
+  }
+}

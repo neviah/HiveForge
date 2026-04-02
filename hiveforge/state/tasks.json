@@ -1,0 +1,11 @@
+{
+  "tasks": [
+    {
+      "id": "HF-1",
+      "title": "Scaffold HiveForge clean-room architecture",
+      "status": "done",
+      "owner": "CoordinatorAgent",
+      "priority": "high"
+    }
+  ]
+}

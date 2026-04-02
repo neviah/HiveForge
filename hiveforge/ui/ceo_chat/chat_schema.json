@@ -1,0 +1,14 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "string",
+      "ts": "ISO8601"
+    },
+    {
+      "role": "ceo",
+      "content": "string",
+      "ts": "ISO8601"
+    }
+  ]
+}

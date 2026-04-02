@@ -1,0 +1,7 @@
+{
+  "agents": [
+    {"name": "ExecutiveAgent", "role": "ceo", "enabled": true, "budget": 1000},
+    {"name": "CoordinatorAgent", "role": "coordinator", "enabled": true, "budget": 700},
+    {"name": "DeveloperAgent", "role": "developer", "enabled": true, "budget": 500}
+  ]
+}
