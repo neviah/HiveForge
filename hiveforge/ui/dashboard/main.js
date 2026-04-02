@@ -582,20 +582,15 @@ async function loadSpriteSheets() {
 }
 
 // Tile atlas entries into TilesHouse.png (512×512).
-// Each entry is [sx, sy] for a 16×16 source crop.
-// 0 = wood floor (cream stripe)      top-right quadrant of TilesHouse
-// 1 = alt floor  (salmon/pink)       right edge
-// 2 = desk surface (brown wood top)  top-left
-// 3 = teal carpet                    centre cross rug
-// 4 = wall accent strip              lower-right
-// 5 = feature / door marker          blue patch
+// Each entry is [sx, sy] for a 16×16 source crop aligned to the 16px grid.
+// 0 = wood floor, 1 = light floor, 2 = dark wood desk, 3 = teal rug, 4 = rose divider, 5 = dark feature
 const TILE_ATLAS = [
-  [384,   8],   // 0 – wood floor
-  [448,   8],   // 1 – pink/alt floor
-  [  4,   4],   // 2 – brown desk surface
-  [194, 304],   // 3 – teal carpet
-  [384, 168],   // 4 – accent strip
-  [448, 256],   // 5 – blue feature
+  [400,   0],   // 0 – wood floor
+  [400,  48],   // 1 – light floor
+  [ 16,  32],   // 2 – dark wood desk surface
+  [192, 304],   // 3 – teal carpet
+  [464,  16],   // 4 – rose divider
+  [464,  48],   // 5 – dark feature
 ];
 
 function drawTile(ctx, index, x, y, size = 16) {
@@ -613,6 +608,7 @@ function drawTile(ctx, index, x, y, size = 16) {
 function drawSpriteAgent(ctx, sprite) {
   const px = Math.round(sprite.x);
   const py = Math.round(sprite.y);
+  const drawSize = 40;
 
   if (characterSheet) {
     const FRAME_W = 32;
@@ -627,14 +623,14 @@ function drawSpriteAgent(ctx, sprite) {
     const outfit = outfitSheets[roleOutfitKey(sprite.role)];
 
     // Layer 1: body
-    ctx.drawImage(characterSheet, sx, bodyRow * FRAME_H, FRAME_W, FRAME_H, px, py, 28, 28);
+    ctx.drawImage(characterSheet, sx, bodyRow * FRAME_H, FRAME_W, FRAME_H, px, py, drawSize, drawSize);
     // Layer 2: outfit (same frame, single row at sy=0)
     if (outfit) {
-      ctx.drawImage(outfit, sx, 0, FRAME_W, FRAME_H, px, py, 28, 28);
+      ctx.drawImage(outfit, sx, 0, FRAME_W, FRAME_H, px, py, drawSize, drawSize);
     }
     // Layer 3: hair (same frame, row from hair sheet)
     if (hairSheet) {
-      ctx.drawImage(hairSheet, sx, hairRow * FRAME_H, FRAME_W, FRAME_H, px, py, 28, 28);
+      ctx.drawImage(hairSheet, sx, hairRow * FRAME_H, FRAME_W, FRAME_H, px, py, drawSize, drawSize);
     }
     return;
   }
@@ -645,7 +641,7 @@ function drawSpriteAgent(ctx, sprite) {
     const frameToggle = Math.floor(performance.now() / 320) % 2 === 0;
     const sx = frameToggle ? roleFrame * 32 : roleFrame * 32 + 32;
     const sy = roleFrame < 2 ? 0 : 32;
-    ctx.drawImage(agentSpriteSheet, sx, sy, 32, 32, px, py, 28, 28);
+    ctx.drawImage(agentSpriteSheet, sx, sy, 32, 32, px, py, 32, 32);
     return;
   }
 
@@ -724,7 +720,6 @@ function drawOffice() {
     drawStudioOffice(ctx);
   }
 
-  const frameToggle = Math.floor(performance.now() / 320) % 2 === 0;
   officeSprites.forEach((sprite, index) => {
     const dx = sprite.targetX - sprite.x;
     const dy = sprite.targetY - sprite.y;
