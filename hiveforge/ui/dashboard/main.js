@@ -75,6 +75,19 @@ let carpetSheet = null;        // Interior Carpet-Sheet.png (320×64)
 let outfitSheets = {};         // role → Image for each outfit PNG
 let projectFiles = [];
 let selectedFilePath = "";
+let buildInProgress = false;
+
+const BUILD_STAGE_BLUEPRINT = [
+  { id: "strategy-roadmap", title: "Create the execution roadmap", role: "project_manager", depends_on: [] },
+  { id: "market-research", title: "Research the market case", role: "researcher", depends_on: ["strategy-roadmap"] },
+  { id: "offer-lab", title: "Draft the offer lab", role: "writer", depends_on: ["market-research"] },
+  { id: "product-spec", title: "Design the product specification", role: "designer", depends_on: ["offer-lab"] },
+  { id: "metrics-plan", title: "Define the launch metrics", role: "analyst", depends_on: ["offer-lab"] },
+  { id: "landing-page", title: "Build the first web scaffold", role: "developer", depends_on: ["product-spec"] },
+  { id: "data-connector-notes", title: "Document the live data path", role: "developer", depends_on: ["landing-page"] },
+  { id: "launch-checklist", title: "Prepare the launch checklist", role: "writer", depends_on: ["landing-page", "metrics-plan", "data-connector-notes"] },
+  { id: "risk-review", title: "Review launch risks", role: "critic", depends_on: ["launch-checklist"] },
+];
 
 function defaultProjectContext(projectId) {
   return {
@@ -117,6 +130,18 @@ function normalizeProjectStatus(status) {
 
 function getActiveProject() {
   return projects.find((project) => project.id === activeProjectId) || projects[0] || null;
+}
+
+function buildPlaceholderSteps(projectName) {
+  return BUILD_STAGE_BLUEPRINT.map((step, index) => ({
+    id: step.id,
+    title: `${step.title} for ${projectName}`,
+    role: step.role,
+    status: index === 0 ? "active" : "queued",
+    summary: index === 0 ? "Executive routing and specialist assignment in progress." : "Queued for specialist dispatch.",
+    depends_on: step.depends_on,
+    wave: index + 1,
+  }));
 }
 
 function roleColor(role) {
@@ -414,7 +439,9 @@ function renderKanbanFromPipeline() {
   agentKanban.innerHTML = "";
 
   if (missionBoardNote) {
-    if (steps.length === 0) {
+    if (buildInProgress) {
+      missionBoardNote.textContent = `Build in progress for ${currentContext.project_id || activeProjectId}. Specialists are being routed now.`;
+    } else if (steps.length === 0) {
       missionBoardNote.textContent = `No build run yet for ${currentContext.project_id || activeProjectId}. Click Build Business to generate artifacts.`;
     } else if (steps.every((step) => step.status === "done")) {
       missionBoardNote.textContent = `Latest scaffold run completed. Outputs are in sandbox/projects/${currentContext.project_id || activeProjectId}. Open Files to inspect or preview.`;
@@ -609,39 +636,55 @@ async function loadSpriteSheets() {
   spriteSheetsLoaded = pixelAgentCharSheets.length > 0 || characterSheet !== null || agentSpriteSheet !== null;
 }
 
-// Curated office atlas: chooses specific 16x16 samples from interior sheets.
-// Each entry: [sheet, sx, sy] where sheet is "carpet" or "house".
-const TILE_ATLAS = [
-  ["carpet",  80, 16], // 0 – stripe floor
-  ["carpet", 272, 16], // 1 – light neutral floor
-  ["house",   16, 32], // 2 – desk surface
-  ["carpet", 208, 16], // 3 – green meeting rug
-  ["house",  464, 16], // 4 – divider/wall accent
-  ["house",  464, 48], // 5 – dark accent marker
-  ["carpet", 144, 16], // 6 – warm beige base floor
-];
+const OFFICE_TILE_STYLES = {
+  0: { base: "#bca989", edge: "#9a8567", accent: "#d7c8ad", pattern: "boards" },
+  1: { base: "#e5dcc9", edge: "#c7bca7", accent: "#f4ecdb", pattern: "boards" },
+  2: { base: "#7f5736", edge: "#56371e", accent: "#aa7a4e", pattern: "desk" },
+  3: { base: "#628169", edge: "#42604a", accent: "#84a48a", pattern: "rug" },
+  4: { base: "#6e7782", edge: "#4f5660", accent: "#97a1ab", pattern: "divider" },
+  5: { base: "#c15e4a", edge: "#7f372d", accent: "#e4bf69", pattern: "accent" },
+};
 
 function drawTile(ctx, index, x, y, size = 16) {
-  const entry = TILE_ATLAS[index] || TILE_ATLAS[0];
-  if (entry) {
-    const [sheetName, sx, sy] = entry;
-    const sheet = sheetName === "carpet" ? carpetSheet : tileHouseSheet;
-    if (sheet) {
-      ctx.drawImage(sheet, sx, sy, 16, 16, x, y, size, size);
-      return;
+  const style = OFFICE_TILE_STYLES[index];
+  if (style) {
+    ctx.fillStyle = style.base;
+    ctx.fillRect(x, y, size, size);
+
+    ctx.fillStyle = style.accent;
+    if (style.pattern === "boards") {
+      ctx.fillRect(x, y, size, 2);
+      if ((Math.floor(x / size) + Math.floor(y / size)) % 2 === 0) {
+        ctx.fillRect(x, y + size - 5, size, 2);
+      }
+    } else if (style.pattern === "desk") {
+      ctx.fillRect(x + 2, y + 2, size - 4, 3);
+      ctx.fillRect(x + 3, y + 6, size - 6, size - 10);
+    } else if (style.pattern === "rug") {
+      ctx.fillRect(x + 2, y + 2, size - 4, size - 4);
+      ctx.fillStyle = style.base;
+      ctx.fillRect(x + 5, y + 5, size - 10, size - 10);
+      ctx.fillStyle = style.accent;
+    } else if (style.pattern === "divider") {
+      ctx.fillRect(x, y + 5, size, 3);
+      ctx.fillRect(x + 5, y, 2, size);
+    } else if (style.pattern === "accent") {
+      ctx.fillRect(x + Math.floor(size * 0.25), y + Math.floor(size * 0.25), Math.floor(size * 0.5), Math.floor(size * 0.5));
     }
+
+    ctx.fillStyle = style.edge;
+    ctx.fillRect(x, y + size - 2, size, 2);
+    ctx.fillRect(x + size - 2, y, 2, size);
+    return;
   }
-  // Secondary fallback to pixel-agents grayscale floors.
+
+  // Primary: use pixel-agents floor tiles (0-8).
   if (pixelAgentFloorTiles.length > 0) {
     const tile = pixelAgentFloorTiles[index % pixelAgentFloorTiles.length];
     if (tile) {
       ctx.drawImage(tile, 0, 0, tile.width, tile.height, x, y, size, size);
       return;
     }
-  }
-  if (tileHouseSheet) {
-    ctx.drawImage(tileHouseSheet, 400, 0, 16, 16, x, y, size, size);
-    return;
   }
   // Fallback: legacy SVG tile strip
   if (tileSpriteSheet) {
@@ -741,42 +784,20 @@ function drawSpriteAgent(ctx, sprite) {
 }
 
 function drawStudioOffice(ctx) {
-  const fillRectTiles = (tileIndex, x0, y0, w, h) => {
-    for (let y = y0; y < y0 + h; y += 16) {
-      for (let x = x0; x < x0 + w; x += 16) {
-        drawTile(ctx, tileIndex, x, y);
-      }
-    }
-  };
-
-  // Base office floor.
-  fillRectTiles(6, 0, 0, officeCanvas.width, officeCanvas.height);
-
-  // Left work area and right wing get subtlely different flooring.
-  fillRectTiles(0, 0, 0, 460, officeCanvas.height);
-  fillRectTiles(1, 460, 0, officeCanvas.width - 460, officeCanvas.height);
-
-  // Main corridor divider.
-  fillRectTiles(4, 0, 144, officeCanvas.width, 16);
-
-  // Meeting zone with rug + inner highlight.
-  fillRectTiles(3, 560, 170, 272, 160);
-  fillRectTiles(1, 622, 204, 128, 80);
-
-  // Accent markers near exits.
-  drawTile(ctx, 5, 34, 286, 32);
-  drawTile(ctx, 5, 844, 286, 32);
-
+  // Floor base: left side (tiles 0), right side (tiles 1).
   for (let y = 0; y < officeCanvas.height; y += 16) {
-    if (y % 64 !== 0) {
-      continue;
-    }
     for (let x = 0; x < officeCanvas.width; x += 16) {
-      drawTile(ctx, 4, x, y);
+      const floorTile = x < 420 ? 0 : 1;
+      drawTile(ctx, floorTile, x, y);
     }
   }
 
-  // Desk banks.
+  // Corridor divider stripe.
+  for (let x = 420; x < officeCanvas.width; x += 16) {
+    drawTile(ctx, 4, x, 126);
+  }
+
+  // Desk banks: two rows on left, two on right.
   for (let desk = 0; desk < 2; desk += 1) {
     for (let dx = 0; dx < 6; dx += 1) {
       drawTile(ctx, 2, 92 + desk * 178 + dx * 16, 88);
@@ -785,15 +806,35 @@ function drawStudioOffice(ctx) {
       drawTile(ctx, 2, 456 + desk * 176 + dx * 16, 232);
     }
   }
-}
 
-function drawMinimalOffice(ctx) {
-  for (let y = 0; y < officeCanvas.height; y += 16) {
-    for (let x = 0; x < officeCanvas.width; x += 16) {
-      drawTile(ctx, 6, x, y);
+  // Meeting area: rug zone.
+  for (let y = 162; y < 162 + 160; y += 16) {
+    for (let x = 540; x < 540 + 288; x += 16) {
+      drawTile(ctx, 3, x, y);
     }
   }
 
+  // Inner highlight in meeting area.
+  for (let y = 200; y < 200 + 64; y += 16) {
+    for (let x = 602; x < 602 + 128; x += 16) {
+      drawTile(ctx, 4, x, y);
+    }
+  }
+
+  // Accent markers near exits.
+  drawTile(ctx, 5, 34, 286, 32);
+  drawTile(ctx, 5, 844, 286, 32);
+}
+
+function drawMinimalOffice(ctx) {
+  // Simple uniform floor.
+  for (let y = 0; y < officeCanvas.height; y += 16) {
+    for (let x = 0; x < officeCanvas.width; x += 16) {
+      drawTile(ctx, 1, x, y);
+    }
+  }
+
+  // Desk banks.
   for (let desk = 0; desk < 5; desk += 1) {
     for (let dx = 0; dx < 5; dx += 1) {
       drawTile(ctx, 2, 78 + desk * 148 + dx * 16, 68);
@@ -1140,26 +1181,66 @@ async function runBuild() {
     return;
   }
 
+  buildInProgress = true;
+  runBuildButton.disabled = true;
+  currentContext = {
+    ...currentContext,
+    project_id: activeProject.id,
+    pipeline: { steps: buildPlaceholderSteps(activeProject.name) },
+  };
   ceoResponse.textContent = "Running CEO, coordinator, and specialist workflow...";
-  const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/build`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      objective: ceoObjective.value.trim(),
-      budget: Number(ceoBudget.value || 600),
-    }),
-  });
-  const data = await response.json();
-  if (!data.ok) {
-    ceoResponse.textContent = `Error: ${data.error || "build failed"}`;
-    return;
-  }
-
-  currentContext = data.context || currentContext;
-  ceoResponse.textContent = currentContext.strategy?.ceo_summary || "Build completed.";
   renderProjectViews();
-  await loadProjectFiles();
-  await loadSessions();
+
+  try {
+    const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/build`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        objective: ceoObjective.value.trim(),
+        budget: Number(ceoBudget.value || 600),
+      }),
+    });
+    const data = await response.json();
+    if (!data.ok) {
+      buildInProgress = false;
+      currentContext = {
+        ...currentContext,
+        pipeline: {
+          steps: (currentContext.pipeline?.steps || []).map((step, index) => ({
+            ...step,
+            status: index === 0 ? "needs_attention" : step.status,
+            summary: index === 0 ? (data.error || "Build failed before completion.") : step.summary,
+          })),
+        },
+      };
+      ceoResponse.textContent = `Error: ${data.error || "build failed"}`;
+      renderProjectViews();
+      return;
+    }
+
+    buildInProgress = false;
+    currentContext = data.context || currentContext;
+    ceoResponse.textContent = currentContext.strategy?.ceo_summary || "Build completed.";
+    renderProjectViews();
+    await loadProjectFiles();
+    await loadSessions();
+  } catch (error) {
+    buildInProgress = false;
+    currentContext = {
+      ...currentContext,
+      pipeline: {
+        steps: (currentContext.pipeline?.steps || []).map((step, index) => ({
+          ...step,
+          status: index === 0 ? "needs_attention" : step.status,
+          summary: index === 0 ? String(error?.message || error || "Build request failed.") : step.summary,
+        })),
+      },
+    };
+    ceoResponse.textContent = `Error: ${error?.message || "build failed"}`;
+    renderProjectViews();
+  } finally {
+    runBuildButton.disabled = false;
+  }
 }
 
 async function sendNudge() {
