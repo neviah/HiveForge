@@ -13,6 +13,7 @@ const PROJECTS_ROOT_DIR = path.join(ROOT, "sandbox", "projects");
 const MODELS_PATH = path.join(ROOT, "hiveforge", "config", "models.json");
 const PROJECTS_PATH = path.join(STATE_DIR, "projects.json");
 const PUBLIC_KEY_PATH = path.join(ROOT, "sandbox", ".ssh", "id_rsa.pub");
+const PYTHON_BRIDGE_TIMEOUT_MS = Number(process.env.HIVEFORGE_PYTHON_TIMEOUT_MS || 480000);
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -365,6 +366,29 @@ async function runPythonJson(pythonLines, payload) {
     const child = spawn(pythonExe, ["-c", code], { cwd: ROOT, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+
+    const finish = (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+
+    const timer = setTimeout(() => {
+      const preview = `${stderr}\n${stdout}`.trim().slice(-1200);
+      try {
+        child.kill();
+      } catch (_err) {
+        // Ignore kill errors when process already exited.
+      }
+      finish({
+        ok: false,
+        error: `Python worker timed out after ${PYTHON_BRIDGE_TIMEOUT_MS}ms.${preview ? `\n${preview}` : ""}`,
+      });
+    }, PYTHON_BRIDGE_TIMEOUT_MS);
 
     child.stdout.on("data", (chunk) => {
       stdout += String(chunk);
@@ -373,15 +397,15 @@ async function runPythonJson(pythonLines, payload) {
       stderr += String(chunk);
     });
     child.on("error", (err) => {
-      resolve({ ok: false, error: String(err) });
+      finish({ ok: false, error: String(err) });
     });
     child.on("close", () => {
       try {
         const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
         const parsed = JSON.parse(lines.length > 0 ? lines[lines.length - 1] : "{}");
-        resolve({ ok: true, result: parsed, warning: stderr.trim() || null });
+        finish({ ok: true, result: parsed, warning: stderr.trim() || null });
       } catch (_err) {
-        resolve({ ok: false, error: stderr.trim() || "Unable to parse Python JSON response" });
+        finish({ ok: false, error: stderr.trim() || "Unable to parse Python JSON response" });
       }
     });
 

@@ -76,6 +76,7 @@ let outfitSheets = {};         // role → Image for each outfit PNG
 let projectFiles = [];
 let selectedFilePath = "";
 let buildInProgress = false;
+const BUILD_REQUEST_TIMEOUT_MS = 300000;
 
 const BUILD_STAGE_BLUEPRINT = [
   { id: "strategy-roadmap", title: "Create the execution roadmap", role: "project_manager", depends_on: [] },
@@ -1385,14 +1386,18 @@ async function runBuild() {
   renderProjectViews();
 
   try {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), BUILD_REQUEST_TIMEOUT_MS);
     const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/build`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
       body: JSON.stringify({
         objective: ceoObjective.value.trim(),
         budget: Number(ceoBudget.value || 600),
       }),
     });
+    window.clearTimeout(timeoutId);
     const data = await response.json();
     if (!data.ok) {
       buildInProgress = false;
@@ -1418,6 +1423,7 @@ async function runBuild() {
     await loadProjectFiles();
     await loadSessions();
   } catch (error) {
+    const isAbort = error && (error.name === "AbortError" || String(error).includes("AbortError"));
     buildInProgress = false;
     currentContext = {
       ...currentContext,
@@ -1425,11 +1431,24 @@ async function runBuild() {
         steps: (currentContext.pipeline?.steps || []).map((step, index) => ({
           ...step,
           status: index === 0 ? "needs_attention" : step.status,
-          summary: index === 0 ? String(error?.message || error || "Build request failed.") : step.summary,
+          summary: index === 0
+            ? (isAbort
+              ? `Build request exceeded ${Math.round(BUILD_REQUEST_TIMEOUT_MS / 1000)}s and was cancelled in the UI. Refreshing context for latest backend state.`
+              : String(error?.message || error || "Build request failed."))
+            : step.summary,
         })),
       },
     };
-    ceoResponse.textContent = `Error: ${error?.message || "build failed"}`;
+    ceoResponse.textContent = isAbort
+      ? `Build request timed out after ${Math.round(BUILD_REQUEST_TIMEOUT_MS / 1000)}s. Checking latest project state...`
+      : `Error: ${error?.message || "build failed"}`;
+    if (isAbort) {
+      try {
+        await loadProjectContext(activeProject.id);
+      } catch (_refreshErr) {
+        // Keep current context if refresh fails.
+      }
+    }
     renderProjectViews();
   } finally {
     runBuildButton.disabled = false;
