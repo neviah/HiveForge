@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from hiveforge.agents.agent_base import AgentProfile, HiveForgeAgent
 from hiveforge.models.inference import ModelClient
+from hiveforge.tools.openclaw_wrappers.tool_router import OpenClawToolRouter
 
 
 CRITIC_SYSTEM_PROMPT = """You are CriticAgent, the specialist who ensures quality and catches issues.
@@ -34,6 +35,7 @@ class CriticAgent(HiveForgeAgent):
             )
         )
         self.llm_client = ModelClient()
+        self.router = OpenClawToolRouter()
 
     def run_task(self, objective: str, state: dict, budget: float) -> dict:
         """Run Critic task with LLM-assisted quality review."""

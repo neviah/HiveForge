@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from hiveforge.agents.agent_base import AgentProfile, HiveForgeAgent
 from hiveforge.models.inference import ModelClient
+from hiveforge.tools.openclaw_wrappers.tool_router import OpenClawToolRouter
 
 
 WRITER_SYSTEM_PROMPT = """You are WriterAgent, the specialist who creates and refines content.
@@ -34,6 +35,7 @@ class WriterAgent(HiveForgeAgent):
             )
         )
         self.llm_client = ModelClient()
+        self.router = OpenClawToolRouter()
 
     def run_task(self, objective: str, state: dict, budget: float) -> dict:
         """Run Writer task with LLM-assisted content creation."""

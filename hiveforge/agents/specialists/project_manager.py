@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from hiveforge.agents.agent_base import AgentProfile, HiveForgeAgent
 from hiveforge.models.inference import ModelClient
+from hiveforge.tools.openclaw_wrappers.tool_router import OpenClawToolRouter
 
 
 PM_SYSTEM_PROMPT = """You are ProjectManagerAgent, the specialist who owns project delivery.
@@ -34,6 +35,7 @@ class ProjectManagerAgent(HiveForgeAgent):
             )
         )
         self.llm_client = ModelClient()
+        self.router = OpenClawToolRouter()
 
     def run_task(self, objective: str, state: dict, budget: float) -> dict:
         """Run ProjectManager task with LLM-assisted planning."""

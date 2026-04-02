@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from hiveforge.agents.agent_base import AgentProfile, HiveForgeAgent
 from hiveforge.models.inference import ModelClient
+from hiveforge.tools.openclaw_wrappers.tool_router import OpenClawToolRouter
 
 
 ANALYST_SYSTEM_PROMPT = """You are AnalystAgent, the specialist who extracts insights from data.
@@ -34,6 +35,7 @@ class AnalystAgent(HiveForgeAgent):
             )
         )
         self.llm_client = ModelClient()
+        self.router = OpenClawToolRouter()
 
     def run_task(self, objective: str, state: dict, budget: float) -> dict:
         """Run Analyst task with LLM-assisted data analysis."""
