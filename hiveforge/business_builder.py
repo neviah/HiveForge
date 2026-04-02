@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from hiveforge import CoordinatorAgent, ExecutiveAgent, get_marketplace
+from hiveforge.tools.openclaw_wrappers.tool_router import OpenClawToolRouter
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -172,6 +173,7 @@ def _run_domain_research(
     project_name: str,
     discovery: dict[str, Any],
     llm: Any,
+    external_signals: str = "",
 ) -> str:
     """Deep domain research: understand the landscape before any artifact is generated."""
     if llm is None:
@@ -193,6 +195,9 @@ TARGET USER: {target_user}
 CORE FEATURES TO BUILD: {core_features}
 QUALITY BENCHMARKS: {competitors}
 KNOWN CONSTRAINTS: {constraints}
+
+EXTERNAL WEB SIGNALS (tool-collected):
+{external_signals[:4000] if external_signals else "No external signals captured."}
 
 Research and document the following — be specific, not generic:
 
@@ -219,6 +224,103 @@ Be specific. Reference actual products, APIs, design systems, and patterns by na
         return ""
 
 
+def _collect_external_signals(
+    objective: str,
+    project_name: str,
+    discovery: dict[str, Any],
+) -> str:
+    """Collect lightweight competitor and category signals via browser tools."""
+    category = str(discovery.get("product_category", "web_app"))
+    competitors = [str(item).strip() for item in discovery.get("competitor_references", []) if str(item).strip()]
+    target_user = str(discovery.get("target_user", "users"))
+    core_features = [str(item).strip() for item in discovery.get("core_features", []) if str(item).strip()]
+
+    queries: list[str] = [
+        f"best {category} websites",
+        f"{objective} examples",
+        f"{project_name} alternatives",
+        f"{target_user} pain points {category}",
+    ]
+    if "e_commerce" in category or "dropshipping" in objective.lower():
+        queries.extend([
+            "temu best sellers dropshipping",
+            "dropshipping product trends this year",
+            "shopify dropshipping product catalog examples",
+        ])
+    if core_features:
+        queries.append(f"{category} {' '.join(core_features[:2])} implementation patterns")
+    for competitor in competitors[:4]:
+        queries.append(f"{competitor} product page")
+
+    router = OpenClawToolRouter()
+    lines: list[str] = []
+    seen_urls: set[str] = set()
+
+    for query in queries[:8]:
+        search_result = router.route("browser", "search", query=query, engine="duckduckgo", limit=5)
+        if not search_result.get("ok"):
+            lines.append(f"- Query: {query} | search failed: {search_result.get('error', 'unknown error')}")
+            continue
+
+        lines.append(f"- Query: {query} | results: {search_result.get('results_count', 0)}")
+        results = search_result.get("results", [])
+        if not isinstance(results, list):
+            continue
+
+        for result in results[:3]:
+            if not isinstance(result, dict):
+                continue
+            url = str(result.get("url", "")).strip()
+            title = str(result.get("title", "")).strip() or "Untitled"
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+
+            fetch_result = router.route("browser", "fetch_url", url=url)
+            if not fetch_result.get("ok"):
+                lines.append(f"  - {title} | {url} | fetch failed")
+                continue
+
+            preview = str(fetch_result.get("content_preview", "")).strip()
+            preview = re.sub(r"\s+", " ", preview)
+            if len(preview) > 280:
+                preview = preview[:280] + "..."
+            resolved_title = str(fetch_result.get("title", "")).strip() or title
+            lines.append(f"  - {resolved_title} | {url} | {preview}")
+
+            if len(seen_urls) >= 12:
+                break
+        if len(seen_urls) >= 12:
+            break
+
+    if len(seen_urls) < 3 and ("e_commerce" in category or "dropshipping" in objective.lower()):
+        fallback_urls = [
+            "https://www.temu.com/",
+            "https://www.aliexpress.com/",
+            "https://www.cjdropshipping.com/",
+            "https://www.shopify.com/blog/dropshipping",
+            "https://www.dsers.com/blog/best-dropshipping-products/",
+        ]
+        lines.append("- Fallback source pass: direct dropshipping references")
+        for url in fallback_urls:
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            fetch_result = router.route("browser", "fetch_url", url=url)
+            if not fetch_result.get("ok"):
+                lines.append(f"  - {url} | fetch failed")
+                continue
+            title = str(fetch_result.get("title", "")).strip() or url
+            preview = re.sub(r"\s+", " ", str(fetch_result.get("content_preview", "")).strip())
+            if len(preview) > 280:
+                preview = preview[:280] + "..."
+            lines.append(f"  - {title} | {url} | {preview}")
+            if len(seen_urls) >= 12:
+                break
+
+    return "\n".join(lines)
+
+
 def _generate_artifact_content(
     *,
     task_id: str,
@@ -229,6 +331,7 @@ def _generate_artifact_content(
     discovery: dict[str, Any],
     research: str,
     completed_excerpts: dict[str, str],
+    external_signals: str,
     fallback_content: str,
     llm: Any,
 ) -> str:
@@ -247,6 +350,20 @@ def _generate_artifact_content(
     competitors = discovery.get("competitor_references", [])
     build_priority = discovery.get("build_priority", "quality")
     is_html = Path(artifact_path).suffix.lower() in (".html", ".htm")
+
+    def _is_complete_html(doc: str) -> bool:
+        lowered = doc.lower()
+        if "<!doctype" not in lowered:
+            return False
+        if "</html>" not in lowered or "</body>" not in lowered:
+            return False
+        if "<script" in lowered and "</script>" not in lowered:
+            return False
+        # Guard against hard-cut outputs that end mid-token.
+        tail = doc.strip()[-80:]
+        if tail and not ("</html>" in tail.lower() or tail.endswith("}")):
+            return "</html>" in lowered
+        return True
 
     prior_context = "\n\n".join(
         f"### {tid.replace('-', ' ').title()}\n{excerpt[:600]}"
@@ -337,6 +454,9 @@ DOMAIN CONSTRAINTS: {discovery.get("domain_constraints", [])}
 DOMAIN RESEARCH BACKGROUND:
 {research[:2000] if research else ""}
 
+EXTERNAL WEB SIGNALS (tool-collected):
+{external_signals[:4000] if external_signals else "No external signals captured."}
+
 STRATEGY CONTEXT:
 {completed_excerpts.get("strategy-roadmap", "")[:600]}
 
@@ -353,6 +473,50 @@ Include:
 - Regulatory & Compliance Notes
 
 Output ONLY the Markdown document, beginning with # Market Research."""
+
+    elif task_id == "landing-page":
+        prompt = f"""You are a senior product engineer. Build a substantive, runnable storefront HTML app.
+
+PROJECT: {project_name}
+CATEGORY: {category}
+OBJECTIVE: {objective}
+TARGET USER: {target_user}
+CORE FEATURES: {core_features}
+SECONDARY FEATURES: {secondary_features}
+VISUAL DIRECTION: {visual_direction}
+BRAND TONE: {tone}
+PALETTE HINT: {palette}
+FONT STYLE: {font_style}
+COMPETITOR REFERENCES: {competitors}
+BUILD PRIORITY: {build_priority}
+
+MARKET / RESEARCH CONTEXT:
+{research[:2200] if research else ""}
+
+EXTERNAL WEB SIGNALS (tool-collected):
+{external_signals[:4500] if external_signals else "No external signals captured."}
+
+PRODUCT SPEC CONTEXT:
+{completed_excerpts.get("product-spec", "")[:1500]}
+
+REQUIREMENTS:
+1. Output a COMPLETE standalone HTML document beginning with <!doctype html> and ending with </html>.
+2. Build a real storefront, not a static hero shell.
+3. Include a seeded product catalog with at least 24 products and fields:
+    id, name, category, supplier, price, compareAt, rating, reviews, stockQty, image, tags, source_url.
+4. Product data must look realistic for the category and objective. Use credible supplier/marketplace style naming.
+5. Add filtering, search, sorting, quick view, cart, and checkout state interactions.
+6. Every top navigation link must target a real section id on the same page.
+7. Include a supplier sync abstraction in JS:
+    - async function fetchSupplierProducts(config)
+    - async function syncInventory()
+    - configurable source type including "temu" and "mock"
+    - clear TODO comments where API keys / compliance checks are required
+8. Include graceful empty states and visible stock status.
+9. Do not leave dead controls or dead links.
+10. Keep code valid, complete, and runnable in browser without external build tools.
+
+Output ONLY the HTML document."""
 
     elif task_id == "offer-lab":
         prompt = f"""You are a product positioning and growth expert. Write the offer strategy document.
@@ -494,6 +658,9 @@ CORE FEATURES: {core_features}
 DOMAIN RESEARCH:
 {research[:1500] if research else ""}
 
+EXTERNAL WEB SIGNALS (tool-collected):
+{external_signals[:3000] if external_signals else "No external signals captured."}
+
 Write a technical data connector document in Markdown. Be specific — name actual APIs and SDKs.
 
 Include:
@@ -518,6 +685,9 @@ CATEGORY: {category}
 PRIOR CONTEXT:
 {prior_context[:1200] if prior_context else "No prior context."}
 
+EXTERNAL WEB SIGNALS (tool-collected):
+{external_signals[:2400] if external_signals else "No external signals captured."}
+
 Write a professional, specific, non-generic {artifact_label}.
 Output ONLY the document content, starting with a # heading."""
 
@@ -533,7 +703,7 @@ Output ONLY the document content, starting with a # heading."""
             doctype_match = re.search(r'<!doctype', clean, re.IGNORECASE)
             if doctype_match:
                 clean = clean[doctype_match.start():]
-            if not re.search(r'<!doctype', clean, re.IGNORECASE):
+            if not _is_complete_html(clean):
                 return fallback_content
             return clean
         return result
@@ -1205,7 +1375,16 @@ def run_build_workflow(
     # ------------------------------------------------------------------
     # Phase 2: Domain Research — understand the landscape
     # ------------------------------------------------------------------
-    research = _run_domain_research(objective, project_name, discovery, llm)
+    external_signals = _collect_external_signals(objective, project_name, discovery)
+    if external_signals:
+        context["external_signals"] = external_signals
+        _append_inbox(
+            context,
+            sender="ResearcherAgent",
+            subject="External market signals captured",
+            body=external_signals[:800],
+        )
+    research = _run_domain_research(objective, project_name, discovery, llm, external_signals)
     if research and not research.startswith("ERROR:"):
         research_preview = research[:500] + ("..." if len(research) > 500 else "")
         context["conversation"].append({"sender": "ResearchAgent", "message": research_preview, "ts": _now_iso()})
@@ -1270,6 +1449,7 @@ def run_build_workflow(
                 discovery=discovery,
                 research=research,
                 completed_excerpts=completed_excerpts,
+                external_signals=external_signals,
                 fallback_content=artifact["content"],
                 llm=llm,
             )
