@@ -63,8 +63,12 @@ let activeProjectId = "agency";
 let officeSprites = [];
 let officeAnimationStarted = false;
 let spriteSheetsLoaded = false;
-let agentSpriteSheet = null;
-let tileSpriteSheet = null;
+let agentSpriteSheet = null;   // legacy SVG fallback
+let tileSpriteSheet = null;    // legacy SVG fallback
+let characterSheet = null;     // MetroCity Character Model.png (768×192, 32×32 frames)
+let hairSheet = null;          // MetroCity Hairs.png (768×256, 32×32 frames)
+let tileHouseSheet = null;     // Interior TilesHouse.png (512×512)
+let outfitSheets = {};         // role → Image for each outfit PNG
 let projectFiles = [];
 let selectedFilePath = "";
 
@@ -486,6 +490,35 @@ function prepareOfficeSprites() {
   });
 }
 
+function roleCharacterRow(role) {
+  // Character Model.png rows: 0-2 = female (light/med/dark), 3-5 = male (light/med/dark)
+  if (role === 'project_manager') return 3;
+  if (role === 'developer')       return 1;
+  if (role === 'researcher')      return 0;
+  if (role === 'writer')          return 2;
+  if (role === 'designer')        return 4;
+  if (role === 'analyst')         return 5;
+  if (role === 'critic')          return 3;
+  return 0;
+}
+
+function roleHairRow(role) {
+  // Hairs.png rows: 0=brown, 1=grey, 2=red, 3=orange, 4=light-brown, 5=med-brown, 6=dark, 7=black
+  if (role === 'project_manager') return 6;
+  if (role === 'developer')       return 4;
+  if (role === 'researcher')      return 2;
+  if (role === 'writer')          return 1;
+  if (role === 'designer')        return 3;
+  if (role === 'analyst')         return 7;
+  if (role === 'critic')          return 0;
+  return 5;
+}
+
+function roleOutfitKey(role) {
+  if (outfitSheets[role]) return role;
+  return 'developer';
+}
+
 function spriteRoleFrame(role) {
   if (role === "project_manager") return 0;
   if (role === "researcher") return 1;
@@ -502,45 +535,123 @@ async function loadSpriteSheets() {
     return;
   }
 
-  const loadImage = (src) => new Promise((resolve, reject) => {
+  const loadImage = (src) => new Promise((resolve) => {
     const image = new Image();
     image.onload = () => resolve(image);
-    image.onerror = reject;
+    image.onerror = () => resolve(null);
     image.src = src;
   });
 
-  try {
-    [agentSpriteSheet, tileSpriteSheet] = await Promise.all([
-      loadImage("./assets/sprites/agents.svg"),
-      loadImage("./assets/sprites/office_tiles.svg"),
-    ]);
-    spriteSheetsLoaded = true;
-  } catch (_err) {
-    spriteSheetsLoaded = false;
-  }
+  const BASE = "./assets/imports/raw";
+  const [
+    charImg, hairImg, tileImg,
+    outfit_pm, outfit_dev, outfit_res,
+    outfit_wr, outfit_des, outfit_an, outfit_crit,
+    svgAgents, svgTiles,
+  ] = await Promise.all([
+    loadImage(`${BASE}/metrocity/CharacterModel/Character%20Model.png`),
+    loadImage(`${BASE}/metrocity/Hair/Hairs.png`),
+    loadImage(`${BASE}/interior/Home/TilesHouse.png`),
+    loadImage(`${BASE}/metrocity/Outfits/Suit.png`),
+    loadImage(`${BASE}/metrocity/Outfits/Outfit2.png`),
+    loadImage(`${BASE}/metrocity/Outfits/Outfit3.png`),
+    loadImage(`${BASE}/metrocity/Outfits/Outfit5.png`),
+    loadImage(`${BASE}/metrocity/Outfits/Outfit4.png`),
+    loadImage(`${BASE}/metrocity/Outfits/Outfit1.png`),
+    loadImage(`${BASE}/metrocity/Outfits/Outfit6.png`),
+    loadImage("./assets/sprites/agents.svg"),
+    loadImage("./assets/sprites/office_tiles.svg"),
+  ]);
+
+  characterSheet = charImg;
+  hairSheet = hairImg;
+  tileHouseSheet = tileImg;
+  outfitSheets = {
+    project_manager: outfit_pm,
+    developer:       outfit_dev,
+    researcher:      outfit_res,
+    writer:          outfit_wr,
+    designer:        outfit_des,
+    analyst:         outfit_an,
+    critic:          outfit_crit,
+  };
+  agentSpriteSheet = svgAgents;
+  tileSpriteSheet  = svgTiles;
+
+  spriteSheetsLoaded = characterSheet !== null || agentSpriteSheet !== null;
 }
+
+// Tile atlas entries into TilesHouse.png (512×512).
+// Each entry is [sx, sy] for a 16×16 source crop.
+// 0 = wood floor (cream stripe)      top-right quadrant of TilesHouse
+// 1 = alt floor  (salmon/pink)       right edge
+// 2 = desk surface (brown wood top)  top-left
+// 3 = teal carpet                    centre cross rug
+// 4 = wall accent strip              lower-right
+// 5 = feature / door marker          blue patch
+const TILE_ATLAS = [
+  [384,   8],   // 0 – wood floor
+  [448,   8],   // 1 – pink/alt floor
+  [  4,   4],   // 2 – brown desk surface
+  [194, 304],   // 3 – teal carpet
+  [384, 168],   // 4 – accent strip
+  [448, 256],   // 5 – blue feature
+];
 
 function drawTile(ctx, index, x, y, size = 16) {
-  if (!tileSpriteSheet) {
+  if (tileHouseSheet) {
+    const [sx, sy] = TILE_ATLAS[index] || TILE_ATLAS[0];
+    ctx.drawImage(tileHouseSheet, sx, sy, 16, 16, x, y, size, size);
     return;
   }
-  const sx = index * 16;
-  ctx.drawImage(tileSpriteSheet, sx, 0, 16, 16, x, y, size, size);
+  // Fallback: legacy SVG tile strip
+  if (tileSpriteSheet) {
+    ctx.drawImage(tileSpriteSheet, index * 16, 0, 16, 16, x, y, size, size);
+  }
 }
 
-function drawSpriteAgent(ctx, sprite, frameToggle) {
+function drawSpriteAgent(ctx, sprite) {
   const px = Math.round(sprite.x);
   const py = Math.round(sprite.y);
-  if (!agentSpriteSheet) {
-    ctx.fillStyle = roleColor(sprite.role);
-    ctx.fillRect(px + 4, py + 8, 12, 12);
+
+  if (characterSheet) {
+    const FRAME_W = 32;
+    const FRAME_H = 32;
+    // Direction cols: down=0-5, left=6-11, right=12-17, up=18-23
+    const dir = sprite.dir !== undefined ? sprite.dir : 0;
+    const walkFrame = Math.floor(performance.now() / 120) % 6;
+    const col = dir * 6 + walkFrame;
+    const sx = col * FRAME_W;
+    const bodyRow = roleCharacterRow(sprite.role);
+    const hairRow = roleHairRow(sprite.role);
+    const outfit = outfitSheets[roleOutfitKey(sprite.role)];
+
+    // Layer 1: body
+    ctx.drawImage(characterSheet, sx, bodyRow * FRAME_H, FRAME_W, FRAME_H, px, py, 28, 28);
+    // Layer 2: outfit (same frame, single row at sy=0)
+    if (outfit) {
+      ctx.drawImage(outfit, sx, 0, FRAME_W, FRAME_H, px, py, 28, 28);
+    }
+    // Layer 3: hair (same frame, row from hair sheet)
+    if (hairSheet) {
+      ctx.drawImage(hairSheet, sx, hairRow * FRAME_H, FRAME_W, FRAME_H, px, py, 28, 28);
+    }
     return;
   }
 
-  const roleFrame = spriteRoleFrame(sprite.role);
-  const sx = frameToggle ? roleFrame * 32 : roleFrame * 32 + 32;
-  const sy = roleFrame < 2 ? 0 : 32;
-  ctx.drawImage(agentSpriteSheet, sx, sy, 32, 32, px, py, 28, 28);
+  // Fallback: legacy SVG sprite
+  if (agentSpriteSheet) {
+    const roleFrame = spriteRoleFrame(sprite.role);
+    const frameToggle = Math.floor(performance.now() / 320) % 2 === 0;
+    const sx = frameToggle ? roleFrame * 32 : roleFrame * 32 + 32;
+    const sy = roleFrame < 2 ? 0 : 32;
+    ctx.drawImage(agentSpriteSheet, sx, sy, 32, 32, px, py, 28, 28);
+    return;
+  }
+
+  // Fallback: solid-color rect
+  ctx.fillStyle = roleColor(sprite.role);
+  ctx.fillRect(px + 4, py + 8, 12, 12);
 }
 
 function drawStudioOffice(ctx) {
@@ -625,8 +736,14 @@ function drawOffice() {
     } else {
       sprite.x += Math.sign(dx) * Math.min(Math.abs(dx), sprite.speed);
       sprite.y += Math.sign(dy) * Math.min(Math.abs(dy), sprite.speed);
+      // 0=down, 1=left, 2=right, 3=up
+      if (Math.abs(dx) >= Math.abs(dy)) {
+        sprite.dir = dx < 0 ? 1 : 2;
+      } else {
+        sprite.dir = dy < 0 ? 3 : 0;
+      }
     }
-    drawSpriteAgent(ctx, sprite, frameToggle);
+    drawSpriteAgent(ctx, sprite);
   });
 }
 

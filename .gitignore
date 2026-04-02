@@ -20,3 +20,4 @@ hiveforge/state/project_data/
 node_modules/
 .clawhub/
 /skills/
+hiveforge/ui/dashboard/assets/imports/raw/
