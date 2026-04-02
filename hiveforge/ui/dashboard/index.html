@@ -9,18 +9,59 @@
 <body>
   <header class="header">
     <h1>HiveForge OS</h1>
-    <p>Multi-agent operating dashboard</p>
+    <p>Session replay, live agent telemetry, and CEO control</p>
   </header>
 
   <main class="grid">
-    <section id="project-overview" class="panel">Project Overview Panel</section>
-    <section id="agent-activity" class="panel">Agent Activity Monitor</section>
-    <section id="kanban" class="panel">Kanban Board</section>
-    <section id="settings" class="panel">Settings Panel</section>
-    <section id="ceo-chat" class="panel">CEO Chat Interface</section>
-    <section id="logs" class="panel">Logs and Timeline</section>
-    <section id="vault" class="panel">Credential Vault</section>
-    <section id="sandbox-controls" class="panel">Sandbox Controls</section>
+    <section id="project-overview" class="panel span-2">
+      <h2>Project Overview</h2>
+      <div class="metrics">
+        <div class="metric"><span>Sessions</span><strong id="metric-sessions">0</strong></div>
+        <div class="metric"><span>Events</span><strong id="metric-events">0</strong></div>
+        <div class="metric"><span>Agents Seen</span><strong id="metric-agents">0</strong></div>
+      </div>
+      <label class="label" for="session-select">Choose recorded session</label>
+      <div class="row">
+        <select id="session-select"></select>
+        <button id="reload-sessions" type="button">Reload</button>
+      </div>
+    </section>
+
+    <section id="agent-activity" class="panel">
+      <h2>Agent Activity</h2>
+      <ul id="agent-list" class="list"></ul>
+    </section>
+
+    <section id="settings" class="panel">
+      <h2>Provider Settings</h2>
+      <label class="label" for="provider-select">Active LLM provider</label>
+      <div class="row">
+        <select id="provider-select"></select>
+        <button id="save-provider" type="button">Save</button>
+      </div>
+      <p id="settings-status" class="status"></p>
+    </section>
+
+    <section id="ceo-chat" class="panel span-2">
+      <h2>CEO Chat</h2>
+      <label class="label" for="ceo-objective">Objective</label>
+      <textarea id="ceo-objective" rows="4" placeholder="Describe the business or engineering objective..."></textarea>
+      <div class="row">
+        <label class="inline">Budget <input id="ceo-budget" type="number" min="1" value="100"></label>
+        <button id="send-ceo" type="button">Run CEO</button>
+      </div>
+      <pre id="ceo-response" class="pre"></pre>
+    </section>
+
+    <section id="logs" class="panel span-2">
+      <h2>Replay Timeline</h2>
+      <table>
+        <thead>
+          <tr><th>Timestamp</th><th>Type</th><th>Agent</th><th>Source</th><th>Preview</th></tr>
+        </thead>
+        <tbody id="timeline-body"></tbody>
+      </table>
+    </section>
   </main>
 
   <script type="module" src="./main.js"></script>

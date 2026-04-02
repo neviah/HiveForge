@@ -28,6 +28,10 @@ body {
   padding: 1rem;
 }
 
+.span-2 {
+  grid-column: span 2;
+}
+
 .panel {
   min-height: 180px;
   border: 1px solid var(--line);
@@ -35,4 +39,136 @@ body {
   padding: 1rem;
   background: var(--panel);
   box-shadow: 0 8px 24px rgba(48, 28, 8, 0.08);
+}
+
+.panel h2 {
+  margin-top: 0;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(110px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.8rem;
+}
+
+.metric {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.5rem;
+  background: #fff3df;
+}
+
+.metric span {
+  display: block;
+  font-size: 0.8rem;
+}
+
+.metric strong {
+  display: block;
+  font-size: 1.4rem;
+}
+
+.label {
+  display: block;
+  font-size: 0.85rem;
+  margin-bottom: 0.35rem;
+}
+
+.row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.6rem;
+}
+
+select,
+button,
+textarea,
+input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.45rem 0.55rem;
+  font: inherit;
+  color: inherit;
+}
+
+select,
+textarea,
+input {
+  background: #fff;
+}
+
+button {
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+button:hover {
+  filter: brightness(1.05);
+}
+
+textarea {
+  width: 100%;
+}
+
+.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.status {
+  min-height: 1.2rem;
+  margin: 0;
+}
+
+.pre {
+  white-space: pre-wrap;
+  max-height: 280px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 0.65rem;
+}
+
+.list {
+  margin: 0;
+  padding-left: 1rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+th,
+td {
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  padding: 0.4rem;
+  vertical-align: top;
+}
+
+tbody {
+  display: block;
+  max-height: 320px;
+  overflow: auto;
+}
+
+thead,
+tbody tr {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+}
+
+@media (max-width: 900px) {
+  .span-2 {
+    grid-column: span 1;
+  }
 }
