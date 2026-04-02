@@ -65,6 +65,8 @@ let officeAnimationStarted = false;
 let spriteSheetsLoaded = false;
 let agentSpriteSheet = null;   // legacy SVG fallback
 let tileSpriteSheet = null;    // legacy SVG fallback
+let pixelAgentCharSheets = []; // pixel-agents char_0..char_5 (112x96, 7x3 frames)
+let pixelAgentFloorTiles = []; // pixel-agents floor_0..floor_8 (16x16)
 let characterSheet = null;     // MetroCity Character Model.png (768×192, 32×32 frames)
 let hairSheet = null;          // MetroCity Hairs.png (768×256, 32×32 frames)
 let characterShadow = null;    // MetroCity Shadow.png (32×32)
@@ -520,6 +522,17 @@ function roleOutfitKey(role) {
   return 'developer';
 }
 
+function rolePaletteIndex(role) {
+  if (role === 'project_manager') return 0;
+  if (role === 'developer')       return 1;
+  if (role === 'researcher')      return 2;
+  if (role === 'writer')          return 3;
+  if (role === 'designer')        return 4;
+  if (role === 'analyst')         return 5;
+  if (role === 'critic')          return 0;
+  return 1;
+}
+
 function spriteRoleFrame(role) {
   if (role === "project_manager") return 0;
   if (role === "researcher") return 1;
@@ -544,6 +557,15 @@ async function loadSpriteSheets() {
   });
 
   const BASE = "./assets/imports/raw";
+  const PIXEL_BASE = "./assets/imports/pixel-agents";
+
+  const [pixelChars, pixelFloors] = await Promise.all([
+    Promise.all(Array.from({ length: 6 }, (_v, i) => loadImage(`${PIXEL_BASE}/characters/char_${i}.png`))),
+    Promise.all(Array.from({ length: 9 }, (_v, i) => loadImage(`${PIXEL_BASE}/floors/floor_${i}.png`))),
+  ]);
+  pixelAgentCharSheets = pixelChars.filter((img) => img !== null);
+  pixelAgentFloorTiles = pixelFloors.filter((img) => img !== null);
+
   const [
     charImg, hairImg, shadowImg, tileImg,
     outfit_pm, outfit_dev, outfit_res,
@@ -581,7 +603,7 @@ async function loadSpriteSheets() {
   agentSpriteSheet = svgAgents;
   tileSpriteSheet  = svgTiles;
 
-  spriteSheetsLoaded = characterSheet !== null || agentSpriteSheet !== null;
+  spriteSheetsLoaded = pixelAgentCharSheets.length > 0 || characterSheet !== null || agentSpriteSheet !== null;
 }
 
 // Tile atlas entries into TilesHouse.png (512×512).
@@ -597,6 +619,13 @@ const TILE_ATLAS = [
 ];
 
 function drawTile(ctx, index, x, y, size = 16) {
+  if (pixelAgentFloorTiles.length > 0) {
+    const tile = pixelAgentFloorTiles[index % pixelAgentFloorTiles.length];
+    if (tile) {
+      ctx.drawImage(tile, 0, 0, tile.width, tile.height, x, y, size, size);
+      return;
+    }
+  }
   if (tileHouseSheet) {
     const [sx, sy] = TILE_ATLAS[index] || TILE_ATLAS[0];
     ctx.drawImage(tileHouseSheet, sx, sy, 16, 16, x, y, size, size);
@@ -611,6 +640,46 @@ function drawTile(ctx, index, x, y, size = 16) {
 function drawSpriteAgent(ctx, sprite) {
   const px = Math.round(sprite.x);
   const py = Math.round(sprite.y);
+
+  if (pixelAgentCharSheets.length > 0) {
+    const sheet = pixelAgentCharSheets[rolePaletteIndex(sprite.role) % pixelAgentCharSheets.length];
+    if (sheet) {
+      const FRAME_W = 16;
+      const FRAME_H = 32;
+      const walkCycle = [0, 1, 2, 1];
+      const frame = walkCycle[Math.floor(performance.now() / 140) % walkCycle.length];
+      const dir = sprite.dir !== undefined ? sprite.dir : 0;
+
+      let row = 0;
+      let flip = false;
+      if (dir === 3) row = 1;        // up
+      else if (dir === 2) row = 2;   // right
+      else if (dir === 1) {          // left (flipped right)
+        row = 2;
+        flip = true;
+      }
+
+      const sx = frame * FRAME_W;
+      const sy = row * FRAME_H;
+      const drawW = 24;
+      const drawH = 48;
+      // Bottom-center anchor, matching pixel-agents style.
+      const drawX = Math.round(px + 14 - drawW / 2);
+      const drawY = Math.round(py + 30 - drawH);
+
+      if (flip) {
+        ctx.save();
+        ctx.translate(drawX + drawW, drawY);
+        ctx.scale(-1, 1);
+        ctx.drawImage(sheet, sx, sy, FRAME_W, FRAME_H, 0, 0, drawW, drawH);
+        ctx.restore();
+      } else {
+        ctx.drawImage(sheet, sx, sy, FRAME_W, FRAME_H, drawX, drawY, drawW, drawH);
+      }
+      return;
+    }
+  }
+
   const drawSize = 56;
   const drawX = px - 12;
   const drawY = py - 22;
