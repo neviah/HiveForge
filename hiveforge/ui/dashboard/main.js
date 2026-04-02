@@ -503,20 +503,42 @@ function renderKanbanFromPipeline() {
 
 function prepareOfficeSprites() {
   const steps = Array.isArray(currentContext.pipeline?.steps) ? currentContext.pipeline.steps : [];
+  const existing = {};
+  officeSprites.forEach((s) => { existing[s.id] = s; });
+
   officeSprites = steps.slice(0, 10).map((step, index) => {
     const laneRow = Math.floor(index / 5);
     const laneCol = index % 5;
     const baseX = 94 + laneCol * 148;
     const baseY = 96 + laneRow * 148;
+    const newStatus = step.status || 'queued';
+
+    if (existing[step.id]) {
+      const prev = existing[step.id];
+      const wasStatus = prev.status;
+      prev.status = newStatus;
+      prev.speed = statusSpeed(newStatus);
+      // Burst particles when a step first hits 'done'
+      if (wasStatus !== 'done' && newStatus === 'done') {
+        prev.particles = Array.from({ length: 12 }, () => createParticle(prev.x, prev.y));
+      }
+      return prev;
+    }
+
     return {
       id: step.id,
       role: step.role,
+      status: newStatus,
       x: baseX,
       y: baseY,
       targetX: baseX + 12,
       targetY: baseY + 8,
-      speed: 0.7 + (index % 3) * 0.2,
+      homeX: baseX,
+      homeY: baseY,
+      speed: statusSpeed(newStatus),
       frame: 0,
+      particles: [],
+      emoteBob: Math.random() * Math.PI * 2,
     };
   });
 }
@@ -570,6 +592,26 @@ function spriteRoleFrame(role) {
   if (role === "analyst") return 0;
   if (role === "critic") return 2;
   return 3;
+}
+
+function statusSpeed(status) {
+  if (status === 'active' || status === 'in_progress') return 1.6;
+  if (status === 'done') return 0;
+  if (status === 'needs_attention' || status === 'blocked') return 0.4;
+  return 0.35;
+}
+
+function createParticle(x, y) {
+  const colors = ['#fbbf24', '#34d399', '#60a5fa', '#f472b6', '#a78bfa'];
+  return {
+    x: x + 14 + (Math.random() - 0.5) * 16,
+    y: y - 10,
+    vx: (Math.random() - 0.5) * 2.5,
+    vy: -1.5 - Math.random() * 1.5,
+    life: 1.0,
+    color: colors[Math.floor(Math.random() * colors.length)],
+    size: 2 + Math.random() * 2,
+  };
 }
 
 async function loadSpriteSheets() {
@@ -701,8 +743,20 @@ function drawSpriteAgent(ctx, sprite) {
     if (sheet) {
       const FRAME_W = 16;
       const FRAME_H = 32;
-      const walkCycle = [0, 1, 2, 1];
-      const frame = walkCycle[Math.floor(performance.now() / 140) % walkCycle.length];
+      const agentStatus = sprite.status || 'queued';
+      const isMoving = Math.abs(sprite.targetX - sprite.x) > 2 || Math.abs(sprite.targetY - sprite.y) > 2;
+      let walkCycle, frameRate;
+      if (agentStatus === 'active' || agentStatus === 'in_progress') {
+        walkCycle = [0, 1, 2, 3, 4, 5, 6, 5, 4, 3, 2, 1];
+        frameRate = 100;
+      } else if (agentStatus === 'done' || !isMoving) {
+        walkCycle = [0];
+        frameRate = 400;
+      } else {
+        walkCycle = [0, 1, 0, 1];
+        frameRate = 260;
+      }
+      const frame = walkCycle[Math.floor(performance.now() / frameRate) % walkCycle.length];
       const dir = sprite.dir !== undefined ? sprite.dir : 0;
 
       let row = 0;
@@ -781,6 +835,88 @@ function drawSpriteAgent(ctx, sprite) {
   // Fallback: solid-color rect
   ctx.fillStyle = roleColor(sprite.role);
   ctx.fillRect(px + 4, py + 8, 12, 12);
+}
+
+function drawAgentEmote(ctx, sprite) {
+  const status = sprite.status || 'queued';
+  const now = performance.now();
+  const bob = Math.sin(now / 600 + (sprite.emoteBob || 0)) * 3;
+
+  const px = Math.round(sprite.x);
+  const py = Math.round(sprite.y);
+  const emoteX = px + 14;
+  const emoteY = py - 18 + bob;
+
+  let bgColor, textColor, label;
+
+  if (status === 'active' || status === 'in_progress') {
+    bgColor = '#3b82f6';
+    textColor = '#fff';
+    // Animate gear spin via cycling label chars
+    const spin = Math.floor(now / 180) % 4;
+    label = ['◐', '◓', '◑', '◒'][spin];
+  } else if (status === 'done') {
+    bgColor = '#22c55e';
+    textColor = '#fff';
+    label = '★';
+  } else if (status === 'needs_attention' || status === 'blocked') {
+    const flash = Math.floor(now / 280) % 2 === 0;
+    bgColor = flash ? '#ef4444' : '#f97316';
+    textColor = '#fff';
+    label = '!';
+  } else {
+    // queued — soft gray dots
+    bgColor = 'rgba(80,80,80,0.65)';
+    textColor = '#ddd';
+    const dots = Math.floor(now / 480) % 3;
+    label = dots === 0 ? '.' : dots === 1 ? '..' : '...';
+  }
+
+  const bubbleW = 18;
+  const bubbleH = 13;
+  const bx = emoteX - bubbleW / 2;
+  const by = emoteY - bubbleH;
+
+  ctx.save();
+  ctx.fillStyle = bgColor;
+  // Bubble body
+  ctx.beginPath();
+  if (ctx.roundRect) {
+    ctx.roundRect(bx, by, bubbleW, bubbleH, 3);
+  } else {
+    ctx.rect(bx, by, bubbleW, bubbleH);
+  }
+  ctx.fill();
+  // Tail
+  ctx.beginPath();
+  ctx.moveTo(emoteX - 3, by + bubbleH);
+  ctx.lineTo(emoteX + 3, by + bubbleH);
+  ctx.lineTo(emoteX, by + bubbleH + 4);
+  ctx.closePath();
+  ctx.fill();
+  // Label
+  ctx.fillStyle = textColor;
+  ctx.font = 'bold 7px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, emoteX, by + bubbleH / 2);
+  ctx.restore();
+}
+
+function drawAgentParticles(ctx, sprite) {
+  if (!sprite.particles || sprite.particles.length === 0) return;
+  sprite.particles = sprite.particles.filter((p) => p.life > 0);
+  sprite.particles.forEach((p) => {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.06;
+    p.life -= 0.022;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, p.life);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(Math.round(p.x), Math.round(p.y), Math.ceil(p.size), Math.ceil(p.size));
+    ctx.restore();
+  });
 }
 
 function drawStudioOffice(ctx) {
@@ -862,24 +998,45 @@ function drawOffice() {
   }
 
   officeSprites.forEach((sprite, index) => {
-    const dx = sprite.targetX - sprite.x;
-    const dy = sprite.targetY - sprite.y;
-    if (Math.abs(dx) < 2 && Math.abs(dy) < 2) {
-      const row = Math.floor(index / 5);
-      const col = index % 5;
-      sprite.targetX = 86 + col * 148 + Math.round(Math.random() * 32);
-      sprite.targetY = 94 + row * 146 + Math.round(Math.random() * 24);
+    const status = sprite.status || 'queued';
+    const hx = sprite.homeX !== undefined ? sprite.homeX : sprite.x;
+    const hy = sprite.homeY !== undefined ? sprite.homeY : sprite.y;
+
+    if (status === 'done') {
+      // Stand still — face down, show celebration
+      sprite.dir = 0;
     } else {
-      sprite.x += Math.sign(dx) * Math.min(Math.abs(dx), sprite.speed);
-      sprite.y += Math.sign(dy) * Math.min(Math.abs(dy), sprite.speed);
-      // 0=down, 1=left, 2=right, 3=up
-      if (Math.abs(dx) >= Math.abs(dy)) {
-        sprite.dir = dx < 0 ? 1 : 2;
+      const dx = sprite.targetX - sprite.x;
+      const dy = sprite.targetY - sprite.y;
+      if (Math.abs(dx) < 2 && Math.abs(dy) < 2) {
+        if (status === 'active' || status === 'in_progress') {
+          // Energetic — roam across a wide area around desk
+          sprite.targetX = hx + (Math.random() - 0.5) * 80;
+          sprite.targetY = hy + (Math.random() - 0.5) * 50;
+        } else if (status === 'needs_attention' || status === 'blocked') {
+          // Pace nervously in a tight zone
+          sprite.targetX = hx + (Math.random() - 0.5) * 18;
+          sprite.targetY = hy + (Math.random() - 0.5) * 12;
+        } else {
+          // Queued — slow idle drift near home
+          sprite.targetX = hx + Math.round(Math.random() * 20) - 10;
+          sprite.targetY = hy + Math.round(Math.random() * 14) - 7;
+        }
       } else {
-        sprite.dir = dy < 0 ? 3 : 0;
+        sprite.x += Math.sign(dx) * Math.min(Math.abs(dx), sprite.speed);
+        sprite.y += Math.sign(dy) * Math.min(Math.abs(dy), sprite.speed);
+        // 0=down, 1=left, 2=right, 3=up
+        if (Math.abs(dx) >= Math.abs(dy)) {
+          sprite.dir = dx < 0 ? 1 : 2;
+        } else {
+          sprite.dir = dy < 0 ? 3 : 0;
+        }
       }
     }
+
     drawSpriteAgent(ctx, sprite);
+    drawAgentEmote(ctx, sprite);
+    drawAgentParticles(ctx, sprite);
   });
 }
 
