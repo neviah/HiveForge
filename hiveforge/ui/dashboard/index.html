@@ -12,10 +12,10 @@
       <h1 class="logo">HF</h1>
       <p class="rail-label">Projects</p>
       <div class="project-icons" id="project-icons">
-        <button class="project-icon active" type="button" title="Software Agency">A</button>
-        <button class="project-icon" type="button" title="Publishing">P</button>
-        <button class="project-icon" type="button" title="Research Lab">R</button>
-        <button class="project-icon" type="button" title="Game Studio">G</button>
+        <button class="project-icon active" data-project-id="agency" type="button" title="Software Agency">A</button>
+        <button class="project-icon" data-project-id="publishing" type="button" title="Publishing">P</button>
+        <button class="project-icon" data-project-id="research" type="button" title="Research Lab">R</button>
+        <button class="project-icon" data-project-id="game" type="button" title="Game Studio">G</button>
       </div>
       <button class="project-icon add" type="button" title="Add project">+</button>
     </aside>
@@ -49,11 +49,15 @@
         <div>
           <p class="eyebrow">Operating View</p>
           <h2 id="view-title">CEO Chat</h2>
+          <p class="project-chip">Project: <strong id="active-project-name">Software Agency</strong> <span id="active-project-status">running</span></p>
         </div>
         <div class="row compact">
           <label class="label" for="session-select">Session</label>
           <select id="session-select"></select>
           <button id="reload-sessions" type="button">Reload</button>
+          <button id="pause-project" type="button">Pause</button>
+          <button id="resume-project" type="button">Resume</button>
+          <button id="delete-project" type="button" class="danger">Delete</button>
         </div>
       </header>
 
@@ -84,10 +88,10 @@
       </section>
 
       <section class="view" data-view-panel="kanban">
-        <div class="layout-two">
-          <article class="panel">
-            <h3>Agent Flow</h3>
-            <div id="agent-kanban" class="kanban"></div>
+        <div class="layout-stack">
+          <article class="panel kanban-panel">
+            <h3>Agent Mission Board</h3>
+            <div id="agent-kanban" class="kanban-columns"></div>
           </article>
 
           <article class="panel">

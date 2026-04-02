@@ -1,6 +1,12 @@
 const workspaceNav = document.getElementById("workspace-nav");
 const viewTitle = document.getElementById("view-title");
 const views = [...document.querySelectorAll("[data-view-panel]")];
+const projectIcons = document.getElementById("project-icons");
+const activeProjectName = document.getElementById("active-project-name");
+const activeProjectStatus = document.getElementById("active-project-status");
+const pauseProjectButton = document.getElementById("pause-project");
+const resumeProjectButton = document.getElementById("resume-project");
+const deleteProjectButton = document.getElementById("delete-project");
 
 const sessionSelect = document.getElementById("session-select");
 const reloadSessionsButton = document.getElementById("reload-sessions");
@@ -34,12 +40,138 @@ const ceoResponse = document.getElementById("ceo-response");
 let currentReplay = { event_count: 0, agents: [], events: [] };
 let providerSettings = { active_provider: "openrouter", providers: [], configs: {} };
 
+const PROJECT_STORAGE_KEY = "hiveforge.projects.v1";
+const DEFAULT_PROJECTS = [
+  { id: "agency", name: "Software Agency", status: "running" },
+  { id: "publishing", name: "Publishing", status: "running" },
+  { id: "research", name: "Research Lab", status: "paused" },
+  { id: "game", name: "Game Studio", status: "running" },
+];
+
+let projects = [];
+let activeProjectId = "agency";
+
 function previewPayload(payload) {
   if (!payload || typeof payload !== "object") {
     return "";
   }
   const text = JSON.stringify(payload);
   return text.length > 120 ? `${text.slice(0, 120)}...` : text;
+}
+
+function normalizeProjectStatus(status) {
+  if (status === "paused" || status === "deleted") {
+    return status;
+  }
+  return "running";
+}
+
+function loadProjects() {
+  try {
+    const raw = localStorage.getItem(PROJECT_STORAGE_KEY);
+    if (!raw) {
+      projects = [...DEFAULT_PROJECTS];
+      return;
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      projects = [...DEFAULT_PROJECTS];
+      return;
+    }
+
+    projects = parsed
+      .filter((project) => project && typeof project === "object" && project.id && project.name)
+      .map((project) => ({
+        id: String(project.id),
+        name: String(project.name),
+        status: normalizeProjectStatus(String(project.status || "running")),
+      }));
+
+    if (projects.length === 0) {
+      projects = [...DEFAULT_PROJECTS];
+    }
+  } catch (_err) {
+    projects = [...DEFAULT_PROJECTS];
+  }
+}
+
+function saveProjects() {
+  localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(projects));
+}
+
+function getActiveProject() {
+  return projects.find((project) => project.id === activeProjectId) || projects[0] || null;
+}
+
+function renderProjectRail() {
+  const icons = [...projectIcons.querySelectorAll(".project-icon[data-project-id]")];
+  icons.forEach((button) => {
+    const project = projects.find((item) => item.id === button.dataset.projectId);
+    if (!project) {
+      button.classList.add("is-hidden");
+      return;
+    }
+    button.classList.remove("is-hidden");
+    button.classList.toggle("active", project.id === activeProjectId);
+    button.title = `${project.name} (${project.status})`;
+    button.dataset.projectStatus = project.status;
+  });
+}
+
+function syncProjectHeader() {
+  const project = getActiveProject();
+  if (!project) {
+    activeProjectName.textContent = "None";
+    activeProjectStatus.textContent = "deleted";
+    pauseProjectButton.disabled = true;
+    resumeProjectButton.disabled = true;
+    deleteProjectButton.disabled = true;
+    return;
+  }
+
+  activeProjectName.textContent = project.name;
+  activeProjectStatus.textContent = project.status;
+  activeProjectStatus.className = `status-tag ${project.status}`;
+
+  pauseProjectButton.disabled = project.status !== "running";
+  resumeProjectButton.disabled = project.status !== "paused";
+  deleteProjectButton.disabled = project.status === "deleted";
+}
+
+function setProjectStatus(nextStatus) {
+  const project = getActiveProject();
+  if (!project) {
+    return;
+  }
+
+  project.status = normalizeProjectStatus(nextStatus);
+  saveProjects();
+  renderProjectRail();
+  syncProjectHeader();
+}
+
+function handleDeleteProject() {
+  const project = getActiveProject();
+  if (!project) {
+    return;
+  }
+
+  const confirmed = window.confirm(`Delete ${project.name}? This will only remove it from this dashboard view.`);
+  if (!confirmed) {
+    return;
+  }
+
+  project.status = "deleted";
+  saveProjects();
+
+  const next = projects.find((item) => item.status !== "deleted");
+  if (next) {
+    activeProjectId = next.id;
+  }
+
+  renderProjectRail();
+  syncProjectHeader();
 }
 
 function setActiveView(viewName) {
@@ -76,20 +208,77 @@ function renderKanban(replay) {
   agentKanban.innerHTML = "";
 
   if (agents.length === 0) {
-    agentKanban.innerHTML = '<div class="kanban-card"><h4>No active agents</h4><p>Run CEO chat to generate workflow activity.</p></div>';
+    agentKanban.innerHTML = '<article class="kanban-lane"><header><h4>Queued</h4><span class="lane-count">0</span></header><div class="lane-body"><div class="kanban-card"><p>Run CEO chat to generate workflow activity.</p></div></div></article>';
     return;
   }
 
+  const lanes = {
+    queued: [],
+    active: [],
+    approvals: [],
+    done: [],
+  };
+
+  const classifyLane = (eventType) => {
+    if (!eventType) return "queued";
+    if (eventType.includes("approval") || eventType.includes("human_input")) return "approvals";
+    if (eventType.includes("complete") || eventType.includes("end") || eventType.includes("evaluate") || eventType.includes("memory")) return "done";
+    if (eventType.includes("start") || eventType.includes("call") || eventType.includes("phase") || eventType.includes("dispatch")) return "active";
+    return "queued";
+  };
+
   agents.forEach((agentName) => {
-    const latest = [...events].reverse().find((evt) => evt.agent_id === agentName);
-    const card = document.createElement("article");
-    card.className = "kanban-card";
-    card.innerHTML = `
-      <h4>${agentName}</h4>
-      <p>Last event: ${latest ? latest.event_type : "none"}</p>
-      <p>Source: ${latest ? latest.source : "n/a"}</p>
+    const agentEvents = events.filter((evt) => evt.agent_id === agentName);
+    const latest = agentEvents[agentEvents.length - 1] || null;
+    const lane = classifyLane(latest?.event_type || "");
+    const confidence = Math.min(100, 20 + agentEvents.length * 10);
+
+    lanes[lane].push({
+      name: agentName,
+      latestType: latest?.event_type || "none",
+      source: latest?.source || "n/a",
+      score: confidence,
+      volume: agentEvents.length,
+    });
+  });
+
+  const laneMeta = [
+    { key: "queued", title: "Queued" },
+    { key: "active", title: "In Progress" },
+    { key: "approvals", title: "Needs Approval" },
+    { key: "done", title: "Completed" },
+  ];
+
+  laneMeta.forEach((meta) => {
+    const laneEl = document.createElement("article");
+    laneEl.className = "kanban-lane";
+
+    const cards = lanes[meta.key]
+      .map(
+        (item) => `
+        <article class="kanban-card ${meta.key}">
+          <header>
+            <span class="agent-avatar">${item.name.slice(0, 2).toUpperCase()}</span>
+            <div>
+              <h5>${item.name}</h5>
+              <p>${item.latestType}</p>
+            </div>
+          </header>
+          <p class="meta">${item.source} • ${item.volume} events</p>
+          <div class="progress-track"><div class="progress-fill" style="width:${item.score}%"></div></div>
+        </article>
+      `,
+      )
+      .join("");
+
+    laneEl.innerHTML = `
+      <header>
+        <h4>${meta.title}</h4>
+        <span class="lane-count">${lanes[meta.key].length}</span>
+      </header>
+      <div class="lane-body">${cards || '<p class="empty-lane">No items</p>'}</div>
     `;
-    agentKanban.appendChild(card);
+    agentKanban.appendChild(laneEl);
   });
 }
 
@@ -253,6 +442,16 @@ async function saveProviderSettings() {
 }
 
 async function sendCeoChat() {
+  const activeProject = getActiveProject();
+  if (activeProject && activeProject.status === "paused") {
+    ceoResponse.textContent = "Project is paused. Resume the project to run CEO tasks.";
+    return;
+  }
+  if (activeProject && activeProject.status === "deleted") {
+    ceoResponse.textContent = "Project is deleted in this view. Pick another project.";
+    return;
+  }
+
   ceoResponse.textContent = "Running CEO analysis...";
   const response = await fetch("/api/ceo/chat", {
     method: "POST",
@@ -280,6 +479,20 @@ workspaceNav.addEventListener("click", (event) => {
   setActiveView(target.dataset.view || "chat");
 });
 
+projectIcons.addEventListener("click", (event) => {
+  const target = event.target.closest(".project-icon[data-project-id]");
+  if (!target) {
+    return;
+  }
+  const project = projects.find((item) => item.id === target.dataset.projectId);
+  if (!project || project.status === "deleted") {
+    return;
+  }
+  activeProjectId = project.id;
+  renderProjectRail();
+  syncProjectHeader();
+});
+
 providerSelect.addEventListener("change", () => {
   fillProviderForm(providerSelect.value);
 });
@@ -300,7 +513,26 @@ sendCeoButton.addEventListener("click", async () => {
   await sendCeoChat();
 });
 
+pauseProjectButton.addEventListener("click", () => {
+  setProjectStatus("paused");
+});
+
+resumeProjectButton.addEventListener("click", () => {
+  setProjectStatus("running");
+});
+
+deleteProjectButton.addEventListener("click", () => {
+  handleDeleteProject();
+});
+
 async function bootstrap() {
+  loadProjects();
+  const active = getActiveProject();
+  if (active) {
+    activeProjectId = active.id;
+  }
+  renderProjectRail();
+  syncProjectHeader();
   setActiveView("chat");
   await Promise.all([loadSessions(), loadProviderSettings()]);
 }

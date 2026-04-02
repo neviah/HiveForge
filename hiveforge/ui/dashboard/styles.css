@@ -91,6 +91,20 @@ body {
   background: rgba(32, 201, 151, 0.2);
 }
 
+.project-icon[data-project-status="paused"] {
+  border-color: rgba(255, 198, 61, 0.8);
+  background: rgba(255, 198, 61, 0.16);
+}
+
+.project-icon[data-project-status="deleted"] {
+  border-color: rgba(252, 108, 133, 0.7);
+  background: rgba(252, 108, 133, 0.18);
+}
+
+.is-hidden {
+  display: none;
+}
+
 .project-icon.add {
   margin-top: auto;
   font-size: 1.2rem;
@@ -185,6 +199,37 @@ body {
   margin: 0;
 }
 
+.project-chip {
+  margin: 0.3rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+.status-tag {
+  margin-left: 0.35rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--line);
+}
+
+.status-tag.running {
+  background: rgba(63, 120, 76, 0.14);
+  color: #2b6a3a;
+}
+
+.status-tag.paused {
+  background: rgba(255, 198, 61, 0.16);
+  color: #8f6d06;
+}
+
+.status-tag.deleted {
+  background: rgba(252, 108, 133, 0.15);
+  color: #8d1f37;
+}
+
 .view {
   display: none;
 }
@@ -267,6 +312,10 @@ button {
   cursor: pointer;
 }
 
+button.danger {
+  background: #b83256;
+}
+
 button:hover {
   filter: brightness(1.08);
 }
@@ -306,11 +355,140 @@ textarea {
   gap: 0.55rem;
 }
 
+.layout-stack {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.kanban-panel {
+  background:
+    linear-gradient(160deg, rgba(15, 139, 141, 0.12) 0%, rgba(45, 48, 71, 0.08) 100%),
+    var(--panel);
+}
+
+.kanban-columns {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(210px, 1fr));
+  gap: 0.7rem;
+}
+
+.kanban-lane {
+  border: 1px solid #cad6dc;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.85);
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+}
+
+.kanban-lane > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.55rem 0.65rem;
+  border-bottom: 1px solid #dde4e8;
+  background: linear-gradient(120deg, rgba(255, 255, 255, 0.85), rgba(237, 243, 250, 0.85));
+}
+
+.kanban-lane h4 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.lane-count {
+  border-radius: 999px;
+  min-width: 1.5rem;
+  text-align: center;
+  padding: 0.1rem 0.35rem;
+  background: var(--accent-2);
+  color: #fff;
+  font-size: 0.75rem;
+}
+
+.lane-body {
+  padding: 0.6rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
 .kanban-card {
   border: 1px solid var(--line);
   border-radius: 12px;
   background: #fff;
   padding: 0.65rem;
+}
+
+.kanban-card header {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.agent-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-2);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.kanban-card h5 {
+  margin: 0;
+  font-size: 0.86rem;
+}
+
+.kanban-card p {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+
+.kanban-card .meta {
+  margin-top: 0.45rem;
+}
+
+.progress-track {
+  margin-top: 0.45rem;
+  height: 8px;
+  border-radius: 999px;
+  background: #e8ecf2;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #1c7ed6, #12b886);
+}
+
+.kanban-card.active {
+  border-color: rgba(28, 126, 214, 0.5);
+  box-shadow: 0 4px 12px rgba(28, 126, 214, 0.16);
+}
+
+.kanban-card.approvals {
+  border-color: rgba(255, 146, 43, 0.6);
+  box-shadow: 0 4px 12px rgba(255, 146, 43, 0.14);
+}
+
+.kanban-card.done {
+  border-color: rgba(63, 120, 76, 0.5);
+  box-shadow: 0 4px 12px rgba(63, 120, 76, 0.14);
+}
+
+.kanban-card.queued {
+  border-color: rgba(111, 66, 193, 0.4);
+}
+
+.empty-lane {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--ink-soft);
 }
 
 .kanban-card h4 {
@@ -401,6 +579,10 @@ tbody tr {
   .form-grid {
     grid-template-columns: 1fr;
   }
+
+  .kanban-columns {
+    grid-template-columns: repeat(2, minmax(200px, 1fr));
+  }
 }
 
 @media (max-width: 900px) {
@@ -427,5 +609,9 @@ tbody tr {
   .menu-pane,
   .content-pane {
     min-height: auto;
+  }
+
+  .kanban-columns {
+    grid-template-columns: 1fr;
   }
 }
