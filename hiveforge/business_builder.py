@@ -13,6 +13,14 @@ from hiveforge.tools.openclaw_wrappers.tool_router import OpenClawToolRouter
 ROOT = Path(__file__).resolve().parents[1]
 PROJECTS_DIR = ROOT / "sandbox" / "projects"
 PROJECT_DATA_DIR = ROOT / "hiveforge" / "state" / "project_data"
+MARKETPLACE_AGENTS_DIR = ROOT / "hiveforge" / "marketplace" / "agency_agents_upstream"
+
+_DESIGN_PLAYBOOK_FILES: tuple[str, ...] = (
+    "design/design-ui-designer.md",
+    "design/design-ux-architect.md",
+    "design/design-brand-guardian.md",
+)
+_DESIGN_PLAYBOOK_CACHE: str | None = None
 
 
 def _now_iso() -> str:
@@ -99,6 +107,38 @@ def _slug(text: str) -> str:
     while "--" in cleaned:
         cleaned = cleaned.replace("--", "-")
     return cleaned.strip("-") or "venture"
+
+
+def _strip_yaml_frontmatter(text: str) -> str:
+    if text.startswith("---\n"):
+        parts = text.split("\n---\n", 1)
+        if len(parts) == 2:
+            return parts[1]
+    return text
+
+
+def _load_design_playbook() -> str:
+    global _DESIGN_PLAYBOOK_CACHE
+    if _DESIGN_PLAYBOOK_CACHE is not None:
+        return _DESIGN_PLAYBOOK_CACHE
+
+    chunks: list[str] = []
+    for rel in _DESIGN_PLAYBOOK_FILES:
+        path = MARKETPLACE_AGENTS_DIR / rel
+        if not path.exists():
+            continue
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        body = _strip_yaml_frontmatter(raw).strip()
+        if not body:
+            continue
+        excerpt = body[:2600]
+        chunks.append(f"# {path.stem}\n{excerpt}")
+
+    _DESIGN_PLAYBOOK_CACHE = "\n\n".join(chunks)
+    return _DESIGN_PLAYBOOK_CACHE
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +434,7 @@ def _generate_artifact_content(
     competitors = discovery.get("competitor_references", [])
     build_priority = discovery.get("build_priority", "quality")
     is_html = Path(artifact_path).suffix.lower() in (".html", ".htm")
+    design_playbook = _load_design_playbook()
     delivery_rules = _domain_delivery_rules(
         category=category,
         objective=objective,
@@ -447,6 +488,9 @@ DOMAIN RESEARCH:
 PRODUCT SPECIFICATION:
 {completed_excerpts.get("product-spec", "Build all core features listed above.")[:1500]}
 
+MARKETPLACE DESIGN PLAYBOOK:
+{design_playbook[:6500] if design_playbook else "No design playbook available."}
+
 REQUIREMENTS FOR THE OUTPUT:
 1. A complete <!doctype html> page with ALL CSS in <style> and ALL JS in <script>
 2. Design quality at the level of {competitors_str} — this is the standard to meet or exceed
@@ -461,6 +505,10 @@ REQUIREMENTS FOR THE OUTPUT:
 11. Multiple clearly distinct sections (hero, core product UI, features, social proof, footer)
 12. The product should feel ALIVE — populated with realistic sample data where applicable
 13. NO external image dependencies — use CSS gradients, SVG shapes, and icon fonts
+14. Build a coherent design system using CSS variables for color, typography scale, spacing, radii, and elevation
+15. All key controls must include default, hover, focus-visible, disabled, and validation/error states when relevant
+16. Accessibility is mandatory: semantic landmarks, visible focus ring, keyboard navigation, and WCAG AA contrast
+17. Use restrained motion with purpose (entrance, hover, and feedback), never distracting or excessive
 
 OUTPUT: The ENTIRE index.html file starting with <!doctype html>.
 Nothing else — no explanation, no markdown fence, no preamble. Just the HTML."""
@@ -549,8 +597,18 @@ EXTERNAL WEB SIGNALS (tool-collected):
 PRODUCT SPEC CONTEXT:
 {completed_excerpts.get("product-spec", "")[:1500]}
 
+MARKETPLACE DESIGN PLAYBOOK:
+{design_playbook[:6500] if design_playbook else "No design playbook available."}
+
 REQUIREMENTS:
 {delivery_rules}
+
+DESIGN QUALITY REQUIREMENTS (MANDATORY):
+- Build a coherent design system with CSS variables for palette, type scale, spacing, radius, and elevation.
+- Use intentional visual hierarchy, spacing rhythm, and typography suited to {target_user}.
+- Include complete interaction states: default, hover, focus-visible, disabled, and error where relevant.
+- Meet accessibility expectations: semantic landmarks, keyboard-friendly flows, and WCAG AA contrast.
+- Add subtle purposeful motion for feedback and transitions.
 
 Final output constraints:
 - Keep code valid, complete, and runnable in browser without external build tools.
