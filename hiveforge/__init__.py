@@ -5,25 +5,26 @@ Key Components:
 - AgentLoopRuntime: 6-phase loop (OBSERVE → REFLECT → PLAN → ACT → EVALUATE → MEMORY)
 - ExecutiveAgent (CEO): Interprets goals, breaks work into tasks, hires specialists
 - CoordinatorAgent: Routes tasks, enforces budgets, merges outputs
-- 7 Specialist Agents: ProjectManager, Developer, Researcher, Writer, Analyst, Critic, Designer
+- SpecialistMarketplace: Smart hiring of 7 core specialists + lazy-loading extended agents
 - ModelClient: Unified LLM interface (Anthropic, OpenAI, OpenRouter, Ollama, LM Studio)
 - OpenClawToolRouter: Task execution engine (filesystem, browser, API, messaging, command)
 
 Usage:
     from hiveforge import ExecutiveAgent, CoordinatorAgent, ModelClient
-    from hiveforge.agents.specialists import DeveloperAgent, ProjectManagerAgent
-    from hiveforge.agents.specialists.marketplace import instantiate_all_specialists
+    from hiveforge import get_marketplace
     
-    # Simple: hire one specialist
-    developer = DeveloperAgent()
+    # Simple: CEO with marketplace
+    ceo = ExecutiveAgent()
+    dev = ceo.hire_specialist("developer")
     
-    # Advanced: instantiate all specialists on standby
-    all_agents = instantiate_all_specialists()
-    developer = all_agents["developer"]
+    # Advanced: Direct marketplace access
+    marketplace = get_marketplace()
+    all_stats = marketplace.get_stats()
 """
 
 from .agents.ceo import ExecutiveAgent
 from .agents.coordinator import CoordinatorAgent  
+from .agents.marketplace import SpecialistMarketplace, get_marketplace, reset_marketplace
 from .loop import AgentLoopRuntime, AgentContext, AgentStepResult
 from .tools import OpenClawToolRouter
 from .models.inference import ModelProviderConfig, ModelClient, InferenceContext, get_provider_instance
@@ -40,6 +41,9 @@ from .agents.specialists import (
 __all__ = [
     "ExecutiveAgent",
     "CoordinatorAgent",
+    "SpecialistMarketplace",
+    "get_marketplace",
+    "reset_marketplace",
     "ProjectManagerAgent",
     "DeveloperAgent",
     "ResearcherAgent",
