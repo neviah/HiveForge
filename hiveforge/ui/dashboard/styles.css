@@ -349,6 +349,27 @@ textarea {
   padding: 0.65rem;
 }
 
+.conversation-list {
+  margin-bottom: 0.8rem;
+}
+
+.office-panel {
+  background: linear-gradient(180deg, rgba(255, 252, 245, 0.95), rgba(240, 236, 226, 0.96));
+}
+
+.office-header-row {
+  justify-content: space-between;
+}
+
+#office-canvas {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #f3ede2;
+  display: block;
+}
+
 .kanban {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -514,6 +535,8 @@ textarea {
   border-radius: 12px;
   background: #fff;
   padding: 0.65rem;
+  display: grid;
+  gap: 0.25rem;
 }
 
 .card-list strong {

@@ -8,6 +8,7 @@ const ROOT = __dirname;
 const DASHBOARD_DIR = path.join(ROOT, "hiveforge", "ui", "dashboard");
 const SESSION_DIR = path.join(ROOT, "hiveforge", "state", "sessions");
 const STATE_DIR = path.join(ROOT, "hiveforge", "state");
+const PROJECT_DATA_DIR = path.join(STATE_DIR, "project_data");
 const MODELS_PATH = path.join(ROOT, "hiveforge", "config", "models.json");
 const PROJECTS_PATH = path.join(STATE_DIR, "projects.json");
 const PUBLIC_KEY_PATH = path.join(ROOT, "sandbox", ".ssh", "id_rsa.pub");
@@ -120,6 +121,32 @@ function writeProjectsRecord(record) {
   fs.writeFileSync(PROJECTS_PATH, JSON.stringify(record, null, 2), "utf-8");
 }
 
+function defaultProjectContext(projectId) {
+  return {
+    project_id: projectId,
+    strategy: {},
+    offer_lab: {},
+    product_spec: {},
+    pipeline: { steps: [] },
+    launch: {},
+    inbox: [],
+    approvals: [],
+    office: { agents: [] },
+    conversation: [],
+    artifacts: [],
+    last_run: null,
+  };
+}
+
+function projectContextPath(projectId) {
+  return path.join(PROJECT_DATA_DIR, `${projectId}.json`);
+}
+
+function readProjectContext(projectId) {
+  ensureDir(PROJECT_DATA_DIR);
+  return readJsonFile(projectContextPath(projectId), defaultProjectContext(projectId));
+}
+
 function parseSessionEvents(sessionId) {
   const filePath = path.join(SESSION_DIR, `${sessionId}.jsonl`);
   if (!fs.existsSync(filePath)) {
@@ -187,25 +214,13 @@ function readRequestBody(req) {
   });
 }
 
-async function runCeoChat(objective, state, budget) {
+async function runPythonJson(pythonLines, payload) {
   const venvPythonExe = path.join(ROOT, ".venv", "Scripts", "python.exe");
   const pythonExe = fs.existsSync(venvPythonExe) ? venvPythonExe : "python";
-  const code = [
-    "import json",
-    "from hiveforge import ExecutiveAgent",
-    "payload = json.loads(input())",
-    "objective = payload.get('objective', '')",
-    "state = payload.get('state', {})",
-    "budget = payload.get('budget', 100.0)",
-    "agent = ExecutiveAgent()",
-    "result = agent.run_task(objective=objective, state=state, budget=budget)",
-    "print(json.dumps(result, ensure_ascii=True))",
-  ].join("\n");
+  const code = pythonLines.join("\n");
 
   return new Promise((resolve) => {
     const child = spawn(pythonExe, ["-c", code], { cwd: ROOT, stdio: ["pipe", "pipe", "pipe"] });
-    const payload = JSON.stringify({ objective, state, budget });
-
     let stdout = "";
     let stderr = "";
 
@@ -215,25 +230,65 @@ async function runCeoChat(objective, state, budget) {
     child.stderr.on("data", (chunk) => {
       stderr += String(chunk);
     });
-
     child.on("error", (err) => {
       resolve({ ok: false, error: String(err) });
     });
-
     child.on("close", () => {
       try {
         const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
-        const lastLine = lines.length > 0 ? lines[lines.length - 1] : "{}";
-        const parsed = JSON.parse(lastLine);
+        const parsed = JSON.parse(lines.length > 0 ? lines[lines.length - 1] : "{}");
         resolve({ ok: true, result: parsed, warning: stderr.trim() || null });
       } catch (_err) {
-        resolve({ ok: false, error: stderr.trim() || "Unable to parse CEO response" });
+        resolve({ ok: false, error: stderr.trim() || "Unable to parse Python JSON response" });
       }
     });
 
-    child.stdin.write(payload);
+    child.stdin.write(JSON.stringify(payload));
     child.stdin.end();
   });
+}
+
+async function runCeoChat(objective, state, budget) {
+  return runPythonJson(
+    [
+      "import json",
+      "from hiveforge import ExecutiveAgent",
+      "payload = json.loads(input())",
+      "objective = payload.get('objective', '')",
+      "state = payload.get('state', {})",
+      "budget = payload.get('budget', 100.0)",
+      "agent = ExecutiveAgent()",
+      "result = agent.run_task(objective=objective, state=state, budget=budget)",
+      "print(json.dumps(result, ensure_ascii=True))",
+    ],
+    { objective, state, budget },
+  );
+}
+
+async function runBuildWorkflow(projectId, projectName, objective, budget, nudges) {
+  return runPythonJson(
+    [
+      "import json",
+      "from hiveforge.business_builder import run_build_workflow",
+      "payload = json.loads(input())",
+      "result = run_build_workflow(project_id=payload['project_id'], project_name=payload['project_name'], objective=payload['objective'], budget=payload['budget'], nudges=payload.get('nudges', []))",
+      "print(json.dumps(result, ensure_ascii=True))",
+    ],
+    { project_id: projectId, project_name: projectName, objective, budget, nudges: nudges || [] },
+  );
+}
+
+async function runCeoNudge(projectId, projectName, message, budget) {
+  return runPythonJson(
+    [
+      "import json",
+      "from hiveforge.business_builder import run_ceo_nudge",
+      "payload = json.loads(input())",
+      "result = run_ceo_nudge(project_id=payload['project_id'], project_name=payload['project_name'], message=payload['message'], budget=payload['budget'])",
+      "print(json.dumps(result, ensure_ascii=True))",
+    ],
+    { project_id: projectId, project_name: projectName, message, budget },
+  );
 }
 
 function serveStatic(res, pathname) {
@@ -264,6 +319,7 @@ const server = http.createServer(async (req, res) => {
     const pathname = requestUrl.pathname;
     const projectActionMatch = pathname.match(/^\/api\/projects\/([^/]+)\/(pause|resume|select)$/);
     const projectDeleteMatch = pathname.match(/^\/api\/projects\/([^/]+)$/);
+    const projectChildMatch = pathname.match(/^\/api\/projects\/([^/]+)\/(context|inbox|office|build|ceo-nudge)$/);
 
     if (req.method === "GET" && pathname === "/api/health") {
       sendJson(res, 200, { ok: true, service: "hiveforge_server" });
@@ -292,6 +348,37 @@ const server = http.createServer(async (req, res) => {
         projects: record.projects,
       });
       return;
+    }
+
+    if (req.method === "GET" && projectChildMatch) {
+      const projectId = sanitizeProjectId(decodeURIComponent(projectChildMatch[1] || ""));
+      const childResource = projectChildMatch[2];
+      const record = readProjectsRecord();
+      const project = record.projects.find((item) => item.id === projectId);
+
+      if (!project) {
+        sendJson(res, 404, { ok: false, error: "Project not found" });
+        return;
+      }
+
+      const context = readProjectContext(projectId);
+      if (childResource === "context") {
+        sendJson(res, 200, { ok: true, project, context });
+        return;
+      }
+      if (childResource === "inbox") {
+        sendJson(res, 200, { ok: true, project, inbox: context.inbox || [] });
+        return;
+      }
+      if (childResource === "office") {
+        sendJson(res, 200, {
+          ok: true,
+          project,
+          office: context.office || { agents: [] },
+          pipeline: context.pipeline || { steps: [] },
+        });
+        return;
+      }
     }
 
     if (req.method === "POST" && pathname === "/api/projects") {
@@ -332,6 +419,77 @@ const server = http.createServer(async (req, res) => {
         project: newProject,
       });
       return;
+    }
+
+    if (req.method === "POST" && projectChildMatch) {
+      const projectId = sanitizeProjectId(decodeURIComponent(projectChildMatch[1] || ""));
+      const childResource = projectChildMatch[2];
+      const record = readProjectsRecord();
+      const project = record.projects.find((item) => item.id === projectId);
+
+      if (!project) {
+        sendJson(res, 404, { ok: false, error: "Project not found" });
+        return;
+      }
+
+      const body = await readRequestBody(req);
+      const parsed = JSON.parse(body || "{}");
+
+      if (childResource === "build") {
+        const objective = String(parsed.objective || "").trim();
+        const budget = Number(parsed.budget || 600);
+        const context = readProjectContext(projectId);
+        const nudges = Array.isArray(context.conversation) ? context.conversation : [];
+
+        if (!objective) {
+          sendJson(res, 400, { ok: false, error: "objective is required" });
+          return;
+        }
+        if (project.status === "paused") {
+          sendJson(res, 409, { ok: false, error: "Project is paused. Resume it before building." });
+          return;
+        }
+
+        const buildResult = await runBuildWorkflow(projectId, project.name, objective, budget, nudges);
+        if (!buildResult.ok) {
+          sendJson(res, 500, { ok: false, error: buildResult.error });
+          return;
+        }
+
+        sendJson(res, 200, {
+          ok: true,
+          project,
+          result: buildResult.result,
+          warning: buildResult.warning,
+          context: readProjectContext(projectId),
+        });
+        return;
+      }
+
+      if (childResource === "ceo-nudge") {
+        const message = String(parsed.message || "").trim();
+        const budget = Number(parsed.budget || 120);
+
+        if (!message) {
+          sendJson(res, 400, { ok: false, error: "message is required" });
+          return;
+        }
+
+        const nudgeResult = await runCeoNudge(projectId, project.name, message, budget);
+        if (!nudgeResult.ok) {
+          sendJson(res, 500, { ok: false, error: nudgeResult.error });
+          return;
+        }
+
+        sendJson(res, 200, {
+          ok: true,
+          project,
+          result: nudgeResult.result,
+          warning: nudgeResult.warning,
+          context: readProjectContext(projectId),
+        });
+        return;
+      }
     }
 
     if (req.method === "POST" && projectActionMatch) {

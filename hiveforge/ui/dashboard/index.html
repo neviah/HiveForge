@@ -22,13 +22,15 @@
       </header>
 
       <nav class="menu-nav" id="workspace-nav">
-        <button class="menu-item active" data-view="chat" type="button">Chat</button>
-        <button class="menu-item" data-view="inbox" type="button">Inbox</button>
+        <button class="menu-item active" data-view="strategy" type="button">Strategy</button>
+        <button class="menu-item" data-view="offer-lab" type="button">Offer Lab</button>
+        <button class="menu-item" data-view="product-spec" type="button">Product Spec</button>
         <button class="menu-item" data-view="office" type="button">Office</button>
-        <button class="menu-item" data-view="marketplace" type="button">Agent Marketplace</button>
+        <button class="menu-item" data-view="build-pipeline" type="button">Build Pipeline</button>
+        <button class="menu-item" data-view="launch" type="button">Launch</button>
+        <button class="menu-item" data-view="inbox" type="button">Inbox</button>
         <button class="menu-item" data-view="approvals" type="button">Approvals</button>
-        <button class="menu-item" data-view="documents" type="button">Documents</button>
-        <button class="menu-item" data-view="finance" type="button">Finance</button>
+        <button class="menu-item" data-view="marketplace" type="button">Agent Marketplace</button>
         <button class="menu-item" data-view="settings" type="button">Settings</button>
       </nav>
 
@@ -44,7 +46,7 @@
       <header class="content-header panel subtle">
         <div>
           <p class="eyebrow">Operating View</p>
-          <h2 id="view-title">CEO Chat</h2>
+          <h2 id="view-title">Strategy</h2>
           <p class="project-chip">Project: <strong id="active-project-name">Software Agency</strong> <span id="active-project-status">running</span></p>
         </div>
         <div class="row compact">
@@ -57,23 +59,43 @@
         </div>
       </header>
 
-      <section class="view active" data-view-panel="chat">
+      <section class="view active" data-view-panel="strategy">
         <div class="layout-two">
           <article class="panel">
-            <h3>CEO Chat</h3>
+            <h3>Build Brief</h3>
             <label class="label" for="ceo-objective">Objective</label>
-            <textarea id="ceo-objective" rows="5" placeholder="Describe what you want this company to execute..."></textarea>
+            <textarea id="ceo-objective" rows="5" placeholder="Build a SaaS product for ..."></textarea>
             <div class="row">
               <label class="inline">Budget <input id="ceo-budget" type="number" min="1" value="100"></label>
-              <button id="send-ceo" type="button">Run CEO</button>
+              <button id="run-build" type="button">Build Business</button>
+            </div>
+            <label class="label" for="ceo-nudge">CEO Nudge</label>
+            <textarea id="ceo-nudge" rows="3" placeholder="Additional direction, context, constraints, or adjustments..."></textarea>
+            <div class="row">
+              <button id="send-nudge" type="button">Send Nudge</button>
             </div>
           </article>
 
           <article class="panel">
-            <h3>Response</h3>
+            <h3>CEO Thread</h3>
+            <ul id="ceo-thread" class="card-list conversation-list"></ul>
             <pre id="ceo-response" class="pre"></pre>
           </article>
         </div>
+      </section>
+
+      <section class="view" data-view-panel="offer-lab">
+        <article class="panel">
+          <h3>Offer Lab</h3>
+          <pre id="offer-lab-content" class="pre"></pre>
+        </article>
+      </section>
+
+      <section class="view" data-view-panel="product-spec">
+        <article class="panel">
+          <h3>Product Spec</h3>
+          <pre id="product-spec-content" class="pre"></pre>
+        </article>
       </section>
 
       <section class="view" data-view-panel="inbox">
@@ -85,6 +107,14 @@
 
       <section class="view" data-view-panel="office">
         <div class="layout-stack">
+          <article class="panel office-panel">
+            <div class="row office-header-row">
+              <h3>Pixel Office</h3>
+              <button id="refresh-office" type="button">Refresh Office</button>
+            </div>
+            <canvas id="office-canvas" width="900" height="340"></canvas>
+          </article>
+
           <article class="panel kanban-panel">
             <h3>Agent Mission Board</h3>
             <div id="agent-kanban" class="kanban-columns"></div>
@@ -102,6 +132,20 @@
         </div>
       </section>
 
+      <section class="view" data-view-panel="build-pipeline">
+        <article class="panel">
+          <h3>Build Pipeline</h3>
+          <ul id="pipeline-list" class="card-list"></ul>
+        </article>
+      </section>
+
+      <section class="view" data-view-panel="launch">
+        <article class="panel">
+          <h3>Launch</h3>
+          <pre id="launch-content" class="pre"></pre>
+        </article>
+      </section>
+
       <section class="view" data-view-panel="marketplace">
         <article class="panel">
           <h3>Agent Marketplace</h3>
@@ -113,28 +157,6 @@
         <article class="panel">
           <h3>Approvals Queue</h3>
           <ul id="approvals-list" class="card-list"></ul>
-        </article>
-      </section>
-
-      <section class="view" data-view-panel="documents">
-        <article class="panel">
-          <h3>Knowledge Base</h3>
-          <ul class="card-list">
-            <li><strong>Architecture</strong><span>hiveforge_architecture.md</span></li>
-            <li><strong>Credential Broker</strong><span>credential_broker_v1.md</span></li>
-            <li><strong>Milestone Plan</strong><span>milestone_b_credential_and_runtime_checks.md</span></li>
-          </ul>
-        </article>
-      </section>
-
-      <section class="view" data-view-panel="finance">
-        <article class="panel">
-          <h3>Finance Snapshot</h3>
-          <div class="metrics">
-            <div class="metric"><span>Budget Used</span><strong id="finance-budget-used">0</strong></div>
-            <div class="metric"><span>Estimated Burn</span><strong id="finance-burn">0</strong></div>
-            <div class="metric"><span>Open Approvals</span><strong id="finance-approvals">0</strong></div>
-          </div>
         </article>
       </section>
 

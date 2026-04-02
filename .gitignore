@@ -16,6 +16,7 @@ sandbox/credentials/policies/
 sandbox/agents/
 hiveforge/state/sessions/
 hiveforge/state/tool_audit.jsonl
+hiveforge/state/project_data/
 node_modules/
 .clawhub/
 /skills/
