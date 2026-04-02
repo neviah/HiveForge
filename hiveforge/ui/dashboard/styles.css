@@ -606,6 +606,26 @@ textarea {
   color: var(--ink-soft);
 }
 
+.kanban-roster {
+  width: 100%;
+}
+
+.roster-heading {
+  margin: 0 0 0.8rem;
+  font-size: 0.86rem;
+  color: var(--ink-soft);
+}
+
+.roster-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 0.7rem;
+}
+
+.roster-card {
+  opacity: 0.82;
+}
+
 .kanban-card h4 {
   margin: 0;
 }

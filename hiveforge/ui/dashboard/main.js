@@ -443,11 +443,45 @@ function renderKanbanFromPipeline() {
       missionBoardNote.textContent = `Build in progress for ${currentContext.project_id || activeProjectId}. Specialists are being routed now.`;
     } else if (steps.length === 0) {
       missionBoardNote.textContent = `No build run yet for ${currentContext.project_id || activeProjectId}. Click Build Business to generate artifacts.`;
-    } else if (steps.every((step) => step.status === "done")) {
+    } else if (steps.length > 0 && steps.every((step) => step.status === "done")) {
       missionBoardNote.textContent = `Latest scaffold run completed. Outputs are in sandbox/projects/${currentContext.project_id || activeProjectId}. Open Files to inspect or preview.`;
     } else {
       missionBoardNote.textContent = `Build in progress for ${currentContext.project_id || activeProjectId}.`;
     }
+  }
+
+  // No build run yet: show the agent roster so the board isn't empty
+  if (!buildInProgress && steps.length === 0) {
+    const rosterDescriptions = {
+      project_manager: "Turns goals into milestones and delivery plans",
+      researcher: "Validates market signals and positioning",
+      writer: "Crafts the offer, copy, and launch narrative",
+      designer: "Translates strategy into usable interfaces",
+      developer: "Builds product scaffolds and integrations",
+      analyst: "Defines metrics and success criteria",
+      critic: "Reviews logic and flags launch risks",
+    };
+    const rosterEl = document.createElement("div");
+    rosterEl.className = "kanban-roster";
+    const cards = Object.keys(rosterDescriptions).map((role) => `
+      <article class="kanban-card queued roster-card">
+        <header>
+          <span class="agent-avatar">${role.slice(0, 2).toUpperCase()}</span>
+          <div>
+            <h5>${role.replace(/_/g, ' ')}</h5>
+            <p>${rosterDescriptions[role]}</p>
+          </div>
+        </header>
+        <p class="meta">Status: standing by</p>
+        <div class="progress-track"><div class="progress-fill" style="width:0%"></div></div>
+      </article>
+    `).join('');
+    rosterEl.innerHTML = `
+      <p class="roster-heading">Your team is standing by &mdash; configure a project objective and click <strong>Build Business</strong> to deploy them.</p>
+      <div class="roster-grid">${cards}</div>
+    `;
+    agentKanban.appendChild(rosterEl);
+    return;
   }
 
   const lanes = {
@@ -503,10 +537,12 @@ function renderKanbanFromPipeline() {
 
 function prepareOfficeSprites() {
   const steps = Array.isArray(currentContext.pipeline?.steps) ? currentContext.pipeline.steps : [];
+  // When no build has run, populate the office with the full agent roster idling
+  const roster = steps.length > 0 ? steps : BUILD_STAGE_BLUEPRINT.map((s) => ({ id: s.id, role: s.role, status: 'queued' }));
   const existing = {};
   officeSprites.forEach((s) => { existing[s.id] = s; });
 
-  officeSprites = steps.slice(0, 10).map((step, index) => {
+  officeSprites = roster.slice(0, 10).map((step, index) => {
     const laneRow = Math.floor(index / 5);
     const laneCol = index % 5;
     const baseX = 94 + laneCol * 148;
