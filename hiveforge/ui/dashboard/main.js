@@ -67,6 +67,7 @@ let agentSpriteSheet = null;   // legacy SVG fallback
 let tileSpriteSheet = null;    // legacy SVG fallback
 let characterSheet = null;     // MetroCity Character Model.png (768×192, 32×32 frames)
 let hairSheet = null;          // MetroCity Hairs.png (768×256, 32×32 frames)
+let characterShadow = null;    // MetroCity Shadow.png (32×32)
 let tileHouseSheet = null;     // Interior TilesHouse.png (512×512)
 let outfitSheets = {};         // role → Image for each outfit PNG
 let projectFiles = [];
@@ -544,13 +545,14 @@ async function loadSpriteSheets() {
 
   const BASE = "./assets/imports/raw";
   const [
-    charImg, hairImg, tileImg,
+    charImg, hairImg, shadowImg, tileImg,
     outfit_pm, outfit_dev, outfit_res,
     outfit_wr, outfit_des, outfit_an, outfit_crit,
     svgAgents, svgTiles,
   ] = await Promise.all([
     loadImage(`${BASE}/metrocity/CharacterModel/Character%20Model.png`),
     loadImage(`${BASE}/metrocity/Hair/Hairs.png`),
+    loadImage(`${BASE}/metrocity/CharacterModel/Shadow.png`),
     loadImage(`${BASE}/interior/Home/TilesHouse.png`),
     loadImage(`${BASE}/metrocity/Outfits/Suit.png`),
     loadImage(`${BASE}/metrocity/Outfits/Outfit2.png`),
@@ -565,6 +567,7 @@ async function loadSpriteSheets() {
 
   characterSheet = charImg;
   hairSheet = hairImg;
+  characterShadow = shadowImg;
   tileHouseSheet = tileImg;
   outfitSheets = {
     project_manager: outfit_pm,
@@ -608,29 +611,35 @@ function drawTile(ctx, index, x, y, size = 16) {
 function drawSpriteAgent(ctx, sprite) {
   const px = Math.round(sprite.x);
   const py = Math.round(sprite.y);
-  const drawSize = 40;
+  const drawSize = 56;
+  const drawX = px - 12;
+  const drawY = py - 22;
 
   if (characterSheet) {
     const FRAME_W = 32;
     const FRAME_H = 32;
     // Direction cols: down=0-5, left=6-11, right=12-17, up=18-23
     const dir = sprite.dir !== undefined ? sprite.dir : 0;
-    const walkFrame = Math.floor(performance.now() / 120) % 6;
+    const walkCycle = [0, 1, 2, 1];
+    const walkFrame = walkCycle[Math.floor(performance.now() / 140) % walkCycle.length];
     const col = dir * 6 + walkFrame;
     const sx = col * FRAME_W;
     const bodyRow = roleCharacterRow(sprite.role);
     const hairRow = roleHairRow(sprite.role);
     const outfit = outfitSheets[roleOutfitKey(sprite.role)];
 
+    if (characterShadow) {
+      ctx.drawImage(characterShadow, 0, 0, FRAME_W, FRAME_H, drawX, drawY, drawSize, drawSize);
+    }
     // Layer 1: body
-    ctx.drawImage(characterSheet, sx, bodyRow * FRAME_H, FRAME_W, FRAME_H, px, py, drawSize, drawSize);
+    ctx.drawImage(characterSheet, sx, bodyRow * FRAME_H, FRAME_W, FRAME_H, drawX, drawY, drawSize, drawSize);
     // Layer 2: outfit (same frame, single row at sy=0)
     if (outfit) {
-      ctx.drawImage(outfit, sx, 0, FRAME_W, FRAME_H, px, py, drawSize, drawSize);
+      ctx.drawImage(outfit, sx, 0, FRAME_W, FRAME_H, drawX, drawY, drawSize, drawSize);
     }
     // Layer 3: hair (same frame, row from hair sheet)
     if (hairSheet) {
-      ctx.drawImage(hairSheet, sx, hairRow * FRAME_H, FRAME_W, FRAME_H, px, py, drawSize, drawSize);
+      ctx.drawImage(hairSheet, sx, hairRow * FRAME_H, FRAME_W, FRAME_H, drawX, drawY, drawSize, drawSize);
     }
     return;
   }
