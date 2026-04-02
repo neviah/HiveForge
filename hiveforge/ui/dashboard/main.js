@@ -71,6 +71,7 @@ let characterSheet = null;     // MetroCity Character Model.png (768×192, 32×3
 let hairSheet = null;          // MetroCity Hairs.png (768×256, 32×32 frames)
 let characterShadow = null;    // MetroCity Shadow.png (32×32)
 let tileHouseSheet = null;     // Interior TilesHouse.png (512×512)
+let carpetSheet = null;        // Interior Carpet-Sheet.png (320×64)
 let outfitSheets = {};         // role → Image for each outfit PNG
 let projectFiles = [];
 let selectedFilePath = "";
@@ -567,7 +568,7 @@ async function loadSpriteSheets() {
   pixelAgentFloorTiles = pixelFloors.filter((img) => img !== null);
 
   const [
-    charImg, hairImg, shadowImg, tileImg,
+    charImg, hairImg, shadowImg, tileImg, carpetImg,
     outfit_pm, outfit_dev, outfit_res,
     outfit_wr, outfit_des, outfit_an, outfit_crit,
     svgAgents, svgTiles,
@@ -576,6 +577,7 @@ async function loadSpriteSheets() {
     loadImage(`${BASE}/metrocity/Hair/Hairs.png`),
     loadImage(`${BASE}/metrocity/CharacterModel/Shadow.png`),
     loadImage(`${BASE}/interior/Home/TilesHouse.png`),
+    loadImage(`${BASE}/interior/Home/Carpet-Sheet.png`),
     loadImage(`${BASE}/metrocity/Outfits/Suit.png`),
     loadImage(`${BASE}/metrocity/Outfits/Outfit2.png`),
     loadImage(`${BASE}/metrocity/Outfits/Outfit3.png`),
@@ -591,6 +593,7 @@ async function loadSpriteSheets() {
   hairSheet = hairImg;
   characterShadow = shadowImg;
   tileHouseSheet = tileImg;
+  carpetSheet = carpetImg;
   outfitSheets = {
     project_manager: outfit_pm,
     developer:       outfit_dev,
@@ -606,19 +609,29 @@ async function loadSpriteSheets() {
   spriteSheetsLoaded = pixelAgentCharSheets.length > 0 || characterSheet !== null || agentSpriteSheet !== null;
 }
 
-// Tile atlas entries into TilesHouse.png (512×512).
-// Each entry is [sx, sy] for a 16×16 source crop aligned to the 16px grid.
-// 0 = wood floor, 1 = light floor, 2 = dark wood desk, 3 = teal rug, 4 = rose divider, 5 = dark feature
+// Curated office atlas: chooses specific 16x16 samples from interior sheets.
+// Each entry: [sheet, sx, sy] where sheet is "carpet" or "house".
 const TILE_ATLAS = [
-  [400,   0],   // 0 – wood floor
-  [400,  48],   // 1 – light floor
-  [ 16,  32],   // 2 – dark wood desk surface
-  [192, 304],   // 3 – teal carpet
-  [464,  16],   // 4 – rose divider
-  [464,  48],   // 5 – dark feature
+  ["carpet",  80, 16], // 0 – stripe floor
+  ["carpet", 272, 16], // 1 – light neutral floor
+  ["house",   16, 32], // 2 – desk surface
+  ["carpet", 208, 16], // 3 – green meeting rug
+  ["house",  464, 16], // 4 – divider/wall accent
+  ["house",  464, 48], // 5 – dark accent marker
+  ["carpet", 144, 16], // 6 – warm beige base floor
 ];
 
 function drawTile(ctx, index, x, y, size = 16) {
+  const entry = TILE_ATLAS[index] || TILE_ATLAS[0];
+  if (entry) {
+    const [sheetName, sx, sy] = entry;
+    const sheet = sheetName === "carpet" ? carpetSheet : tileHouseSheet;
+    if (sheet) {
+      ctx.drawImage(sheet, sx, sy, 16, 16, x, y, size, size);
+      return;
+    }
+  }
+  // Secondary fallback to pixel-agents grayscale floors.
   if (pixelAgentFloorTiles.length > 0) {
     const tile = pixelAgentFloorTiles[index % pixelAgentFloorTiles.length];
     if (tile) {
@@ -627,8 +640,7 @@ function drawTile(ctx, index, x, y, size = 16) {
     }
   }
   if (tileHouseSheet) {
-    const [sx, sy] = TILE_ATLAS[index] || TILE_ATLAS[0];
-    ctx.drawImage(tileHouseSheet, sx, sy, 16, 16, x, y, size, size);
+    ctx.drawImage(tileHouseSheet, 400, 0, 16, 16, x, y, size, size);
     return;
   }
   // Fallback: legacy SVG tile strip
@@ -729,17 +741,42 @@ function drawSpriteAgent(ctx, sprite) {
 }
 
 function drawStudioOffice(ctx) {
+  const fillRectTiles = (tileIndex, x0, y0, w, h) => {
+    for (let y = y0; y < y0 + h; y += 16) {
+      for (let x = x0; x < x0 + w; x += 16) {
+        drawTile(ctx, tileIndex, x, y);
+      }
+    }
+  };
+
+  // Base office floor.
+  fillRectTiles(6, 0, 0, officeCanvas.width, officeCanvas.height);
+
+  // Left work area and right wing get subtlely different flooring.
+  fillRectTiles(0, 0, 0, 460, officeCanvas.height);
+  fillRectTiles(1, 460, 0, officeCanvas.width - 460, officeCanvas.height);
+
+  // Main corridor divider.
+  fillRectTiles(4, 0, 144, officeCanvas.width, 16);
+
+  // Meeting zone with rug + inner highlight.
+  fillRectTiles(3, 560, 170, 272, 160);
+  fillRectTiles(1, 622, 204, 128, 80);
+
+  // Accent markers near exits.
+  drawTile(ctx, 5, 34, 286, 32);
+  drawTile(ctx, 5, 844, 286, 32);
+
   for (let y = 0; y < officeCanvas.height; y += 16) {
+    if (y % 64 !== 0) {
+      continue;
+    }
     for (let x = 0; x < officeCanvas.width; x += 16) {
-      const floorTile = x < 420 ? 0 : 1;
-      drawTile(ctx, floorTile, x, y);
+      drawTile(ctx, 4, x, y);
     }
   }
 
-  for (let x = 420; x < officeCanvas.width; x += 16) {
-    drawTile(ctx, 4, x, 126);
-  }
-
+  // Desk banks.
   for (let desk = 0; desk < 2; desk += 1) {
     for (let dx = 0; dx < 6; dx += 1) {
       drawTile(ctx, 2, 92 + desk * 178 + dx * 16, 88);
@@ -748,27 +785,12 @@ function drawStudioOffice(ctx) {
       drawTile(ctx, 2, 456 + desk * 176 + dx * 16, 232);
     }
   }
-
-  for (let y = 162; y < 162 + 160; y += 16) {
-    for (let x = 540; x < 540 + 288; x += 16) {
-      drawTile(ctx, 3, x, y);
-    }
-  }
-
-  for (let y = 200; y < 200 + 64; y += 16) {
-    for (let x = 602; x < 602 + 128; x += 16) {
-      drawTile(ctx, 4, x, y);
-    }
-  }
-
-  drawTile(ctx, 5, 34, 286, 32);
-  drawTile(ctx, 5, 844, 286, 32);
 }
 
 function drawMinimalOffice(ctx) {
   for (let y = 0; y < officeCanvas.height; y += 16) {
     for (let x = 0; x < officeCanvas.width; x += 16) {
-      drawTile(ctx, 1, x, y);
+      drawTile(ctx, 6, x, y);
     }
   }
 
