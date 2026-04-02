@@ -241,12 +241,13 @@ def _collect_external_signals(
         f"{project_name} alternatives",
         f"{target_user} pain points {category}",
     ]
-    if "e_commerce" in category or "dropshipping" in objective.lower():
-        queries.extend([
-            "temu best sellers dropshipping",
-            "dropshipping product trends this year",
-            "shopify dropshipping product catalog examples",
-        ])
+    queries.extend(
+        [
+            f"{category} ux patterns",
+            f"{category} feature checklist",
+            f"{category} onboarding flow examples",
+        ]
+    )
     if core_features:
         queries.append(f"{category} {' '.join(core_features[:2])} implementation patterns")
     for competitor in competitors[:4]:
@@ -293,15 +294,9 @@ def _collect_external_signals(
         if len(seen_urls) >= 12:
             break
 
-    if len(seen_urls) < 3 and ("e_commerce" in category or "dropshipping" in objective.lower()):
-        fallback_urls = [
-            "https://www.temu.com/",
-            "https://www.aliexpress.com/",
-            "https://www.cjdropshipping.com/",
-            "https://www.shopify.com/blog/dropshipping",
-            "https://www.dsers.com/blog/best-dropshipping-products/",
-        ]
-        lines.append("- Fallback source pass: direct dropshipping references")
+    if len(seen_urls) < 3 and competitors:
+        fallback_urls = [f"https://www.{_slug(name)}.com/" for name in competitors[:5]]
+        lines.append("- Fallback source pass: competitor homepages")
         for url in fallback_urls:
             if url in seen_urls:
                 continue
@@ -319,6 +314,55 @@ def _collect_external_signals(
                 break
 
     return "\n".join(lines)
+
+
+def _domain_delivery_rules(category: str, objective: str, core_features: list[str], target_user: str) -> str:
+    rules = [
+        "- Implement a complete, runnable, single-file HTML app with valid <!doctype html> ... </html>.",
+        "- Avoid generic shells. The UI and interactions must reflect the actual product category.",
+        "- All navigation links and primary controls must be functional (no dead links/buttons).",
+        "- Use competitor and research cues to prioritize top 3 must-have features for v1.",
+        "- Include realistic seeded data aligned to the domain, then structure code to allow live data replacement.",
+        "- Add clear integration placeholders (functions, configs, TODOs) for live provider wiring and compliance checks.",
+        "- Include explicit empty/loading/error states for the core user journey.",
+    ]
+
+    c = category.lower()
+    if "e_commerce" in c or "marketplace" in c:
+        rules.extend(
+            [
+                "- Include catalog, filtering, product detail/quick view, cart, and checkout flow.",
+                "- Provide inventory/provider sync abstractions (e.g., fetchProviderItems and syncInventory).",
+            ]
+        )
+    elif "booking" in c or "healthtech" in c:
+        rules.extend(
+            [
+                "- Include service list, staff/specialist profiles, availability calendar/time slots, and booking confirmation flow.",
+                "- Provide scheduling/provider sync abstractions (e.g., fetchAvailability and createBooking).",
+            ]
+        )
+    elif "real_estate" in c:
+        rules.extend(
+            [
+                "- Include listing search, map/list toggles or rich list views, filters, detail cards, and inquiry flow.",
+                "- Provide listing data sync abstractions (e.g., fetchListings and syncListings).",
+            ]
+        )
+    elif "saas" in c or "analytics" in c or "productivity" in c:
+        rules.extend(
+            [
+                "- Include dashboard views, key workflows, and at least one end-to-end task completion flow.",
+                "- Provide backend integration abstractions for data fetch/mutation and auth/session boundaries.",
+            ]
+        )
+
+    rules.append(f"- Objective anchor: {objective}")
+    rules.append(f"- Primary user anchor: {target_user}")
+    if core_features:
+        rules.append(f"- Core feature anchors: {', '.join(core_features[:8])}")
+
+    return "\n".join(rules)
 
 
 def _generate_artifact_content(
@@ -350,6 +394,12 @@ def _generate_artifact_content(
     competitors = discovery.get("competitor_references", [])
     build_priority = discovery.get("build_priority", "quality")
     is_html = Path(artifact_path).suffix.lower() in (".html", ".htm")
+    delivery_rules = _domain_delivery_rules(
+        category=category,
+        objective=objective,
+        core_features=[str(item) for item in core_features],
+        target_user=str(target_user),
+    )
 
     def _is_complete_html(doc: str) -> bool:
         lowered = doc.lower()
@@ -475,7 +525,7 @@ Include:
 Output ONLY the Markdown document, beginning with # Market Research."""
 
     elif task_id == "landing-page":
-        prompt = f"""You are a senior product engineer. Build a substantive, runnable storefront HTML app.
+        prompt = f"""You are a senior product engineer. Build a substantive, runnable product website/app.
 
 PROJECT: {project_name}
 CATEGORY: {category}
@@ -500,21 +550,12 @@ PRODUCT SPEC CONTEXT:
 {completed_excerpts.get("product-spec", "")[:1500]}
 
 REQUIREMENTS:
-1. Output a COMPLETE standalone HTML document beginning with <!doctype html> and ending with </html>.
-2. Build a real storefront, not a static hero shell.
-3. Include a seeded product catalog with at least 24 products and fields:
-    id, name, category, supplier, price, compareAt, rating, reviews, stockQty, image, tags, source_url.
-4. Product data must look realistic for the category and objective. Use credible supplier/marketplace style naming.
-5. Add filtering, search, sorting, quick view, cart, and checkout state interactions.
-6. Every top navigation link must target a real section id on the same page.
-7. Include a supplier sync abstraction in JS:
-    - async function fetchSupplierProducts(config)
-    - async function syncInventory()
-    - configurable source type including "temu" and "mock"
-    - clear TODO comments where API keys / compliance checks are required
-8. Include graceful empty states and visible stock status.
-9. Do not leave dead controls or dead links.
-10. Keep code valid, complete, and runnable in browser without external build tools.
+{delivery_rules}
+
+Final output constraints:
+- Keep code valid, complete, and runnable in browser without external build tools.
+- Every top navigation link must target a real section id on the same page.
+- Do not leave dead controls or dead links.
 
 Output ONLY the HTML document."""
 
