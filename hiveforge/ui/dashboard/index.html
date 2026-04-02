@@ -7,62 +7,167 @@
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-  <header class="header">
-    <h1>HiveForge OS</h1>
-    <p>Session replay, live agent telemetry, and CEO control</p>
-  </header>
-
-  <main class="grid">
-    <section id="project-overview" class="panel span-2">
-      <h2>Project Overview</h2>
-      <div class="metrics">
-        <div class="metric"><span>Sessions</span><strong id="metric-sessions">0</strong></div>
-        <div class="metric"><span>Events</span><strong id="metric-events">0</strong></div>
-        <div class="metric"><span>Agents Seen</span><strong id="metric-agents">0</strong></div>
+  <div class="shell">
+    <aside class="project-rail">
+      <h1 class="logo">HF</h1>
+      <p class="rail-label">Projects</p>
+      <div class="project-icons" id="project-icons">
+        <button class="project-icon active" type="button" title="Software Agency">A</button>
+        <button class="project-icon" type="button" title="Publishing">P</button>
+        <button class="project-icon" type="button" title="Research Lab">R</button>
+        <button class="project-icon" type="button" title="Game Studio">G</button>
       </div>
-      <label class="label" for="session-select">Choose recorded session</label>
-      <div class="row">
-        <select id="session-select"></select>
-        <button id="reload-sessions" type="button">Reload</button>
-      </div>
-    </section>
+      <button class="project-icon add" type="button" title="Add project">+</button>
+    </aside>
 
-    <section id="agent-activity" class="panel">
-      <h2>Agent Activity</h2>
-      <ul id="agent-list" class="list"></ul>
-    </section>
+    <aside class="menu-pane">
+      <header class="menu-header">
+        <p class="eyebrow">Company Workspace</p>
+        <h2>HiveForge Command</h2>
+      </header>
 
-    <section id="settings" class="panel">
-      <h2>Provider Settings</h2>
-      <label class="label" for="provider-select">Active LLM provider</label>
-      <div class="row">
-        <select id="provider-select"></select>
-        <button id="save-provider" type="button">Save</button>
-      </div>
-      <p id="settings-status" class="status"></p>
-    </section>
+      <nav class="menu-nav" id="workspace-nav">
+        <button class="menu-item active" data-view="chat" type="button">Chat</button>
+        <button class="menu-item" data-view="inbox" type="button">Inbox</button>
+        <button class="menu-item" data-view="kanban" type="button">Kanban</button>
+        <button class="menu-item" data-view="approvals" type="button">Approvals</button>
+        <button class="menu-item" data-view="documents" type="button">Documents</button>
+        <button class="menu-item" data-view="finance" type="button">Finance</button>
+        <button class="menu-item" data-view="settings" type="button">Settings</button>
+      </nav>
 
-    <section id="ceo-chat" class="panel span-2">
-      <h2>CEO Chat</h2>
-      <label class="label" for="ceo-objective">Objective</label>
-      <textarea id="ceo-objective" rows="4" placeholder="Describe the business or engineering objective..."></textarea>
-      <div class="row">
-        <label class="inline">Budget <input id="ceo-budget" type="number" min="1" value="100"></label>
-        <button id="send-ceo" type="button">Run CEO</button>
-      </div>
-      <pre id="ceo-response" class="pre"></pre>
-    </section>
+      <section class="left-metrics panel subtle">
+        <h3>Live Summary</h3>
+        <p>Sessions: <strong id="metric-sessions">0</strong></p>
+        <p>Events: <strong id="metric-events">0</strong></p>
+        <p>Agents: <strong id="metric-agents">0</strong></p>
+      </section>
+    </aside>
 
-    <section id="logs" class="panel span-2">
-      <h2>Replay Timeline</h2>
-      <table>
-        <thead>
-          <tr><th>Timestamp</th><th>Type</th><th>Agent</th><th>Source</th><th>Preview</th></tr>
-        </thead>
-        <tbody id="timeline-body"></tbody>
-      </table>
-    </section>
-  </main>
+    <main class="content-pane">
+      <header class="content-header panel subtle">
+        <div>
+          <p class="eyebrow">Operating View</p>
+          <h2 id="view-title">CEO Chat</h2>
+        </div>
+        <div class="row compact">
+          <label class="label" for="session-select">Session</label>
+          <select id="session-select"></select>
+          <button id="reload-sessions" type="button">Reload</button>
+        </div>
+      </header>
+
+      <section class="view active" data-view-panel="chat">
+        <div class="layout-two">
+          <article class="panel">
+            <h3>CEO Chat</h3>
+            <label class="label" for="ceo-objective">Objective</label>
+            <textarea id="ceo-objective" rows="5" placeholder="Describe what you want this company to execute..."></textarea>
+            <div class="row">
+              <label class="inline">Budget <input id="ceo-budget" type="number" min="1" value="100"></label>
+              <button id="send-ceo" type="button">Run CEO</button>
+            </div>
+          </article>
+
+          <article class="panel">
+            <h3>Response</h3>
+            <pre id="ceo-response" class="pre"></pre>
+          </article>
+        </div>
+      </section>
+
+      <section class="view" data-view-panel="inbox">
+        <article class="panel">
+          <h3>Inbox</h3>
+          <ul id="inbox-list" class="card-list"></ul>
+        </article>
+      </section>
+
+      <section class="view" data-view-panel="kanban">
+        <div class="layout-two">
+          <article class="panel">
+            <h3>Agent Flow</h3>
+            <div id="agent-kanban" class="kanban"></div>
+          </article>
+
+          <article class="panel">
+            <h3>Replay Timeline</h3>
+            <table>
+              <thead>
+                <tr><th>Timestamp</th><th>Type</th><th>Agent</th><th>Source</th><th>Preview</th></tr>
+              </thead>
+              <tbody id="timeline-body"></tbody>
+            </table>
+          </article>
+        </div>
+      </section>
+
+      <section class="view" data-view-panel="approvals">
+        <article class="panel">
+          <h3>Approvals Queue</h3>
+          <ul id="approvals-list" class="card-list"></ul>
+        </article>
+      </section>
+
+      <section class="view" data-view-panel="documents">
+        <article class="panel">
+          <h3>Knowledge Base</h3>
+          <ul class="card-list">
+            <li><strong>Architecture</strong><span>hiveforge_architecture.md</span></li>
+            <li><strong>Credential Broker</strong><span>credential_broker_v1.md</span></li>
+            <li><strong>Milestone Plan</strong><span>milestone_b_credential_and_runtime_checks.md</span></li>
+          </ul>
+        </article>
+      </section>
+
+      <section class="view" data-view-panel="finance">
+        <article class="panel">
+          <h3>Finance Snapshot</h3>
+          <div class="metrics">
+            <div class="metric"><span>Budget Used</span><strong id="finance-budget-used">0</strong></div>
+            <div class="metric"><span>Estimated Burn</span><strong id="finance-burn">0</strong></div>
+            <div class="metric"><span>Open Approvals</span><strong id="finance-approvals">0</strong></div>
+          </div>
+        </article>
+      </section>
+
+      <section class="view" data-view-panel="settings">
+        <article class="panel">
+          <h3>Provider Settings</h3>
+          <div class="row">
+            <label class="label" for="provider-select">Active Provider</label>
+            <select id="provider-select"></select>
+          </div>
+
+          <div class="form-grid">
+            <label>Base URL
+              <input id="provider-base-url" type="text" placeholder="https://openrouter.ai/api/v1">
+            </label>
+            <label>Model
+              <input id="provider-model" type="text" placeholder="openai/gpt-4.1-mini">
+            </label>
+            <label>Temperature
+              <input id="provider-temperature" type="number" step="0.01" min="0" max="2">
+            </label>
+            <label>Max Tokens
+              <input id="provider-max-tokens" type="number" min="1">
+            </label>
+            <label>API Key Env Name
+              <input id="provider-api-key-env" type="text" placeholder="OPENROUTER_API_KEY">
+            </label>
+            <label>API Key (optional)
+              <input id="provider-api-key" type="password" placeholder="Paste key to save in local models.json">
+            </label>
+          </div>
+
+          <div class="row">
+            <button id="save-provider" type="button">Save Provider Config</button>
+          </div>
+          <p id="settings-status" class="status"></p>
+        </article>
+      </section>
+    </main>
+  </div>
 
   <script type="module" src="./main.js"></script>
 </body>

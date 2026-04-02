@@ -219,6 +219,7 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         active_provider: models.active_provider || "openrouter",
         providers: Object.keys(models.providers || {}),
+        configs: models.providers || {},
       });
       return;
     }
@@ -227,6 +228,7 @@ const server = http.createServer(async (req, res) => {
       const body = await readRequestBody(req);
       const parsed = JSON.parse(body || "{}");
       const activeProvider = String(parsed.active_provider || "").trim();
+      const providerConfig = parsed.provider_config && typeof parsed.provider_config === "object" ? parsed.provider_config : null;
 
       const models = readJsonFile(MODELS_PATH, { active_provider: "openrouter", providers: {} });
       if (!activeProvider || !models.providers || !models.providers[activeProvider]) {
@@ -234,9 +236,21 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      if (providerConfig) {
+        const existing = models.providers[activeProvider] || {};
+        models.providers[activeProvider] = {
+          ...existing,
+          ...providerConfig,
+        };
+      }
+
       models.active_provider = activeProvider;
       fs.writeFileSync(MODELS_PATH, JSON.stringify(models, null, 2), "utf-8");
-      sendJson(res, 200, { ok: true, active_provider: activeProvider });
+      sendJson(res, 200, {
+        ok: true,
+        active_provider: activeProvider,
+        provider_config: models.providers[activeProvider],
+      });
       return;
     }
 
