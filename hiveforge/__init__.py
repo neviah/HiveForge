@@ -28,6 +28,7 @@ from .agents.marketplace import SpecialistMarketplace, get_marketplace, reset_ma
 from .loop import AgentLoopRuntime, AgentContext, AgentStepResult
 from .tools import OpenClawToolRouter
 from .models.inference import ModelProviderConfig, ModelClient, InferenceContext, get_provider_instance
+from .telemetry import list_recorded_sessions, load_session_events, replay_session
 from .agents.specialists import (
     ProjectManagerAgent,
     DeveloperAgent,
@@ -59,4 +60,7 @@ __all__ = [
     "ModelClient",
     "InferenceContext",
     "get_provider_instance",
+    "list_recorded_sessions",
+    "load_session_events",
+    "replay_session",
 ]

@@ -11,6 +11,7 @@ import threading
 import time
 from typing import Any
 
+from hiveforge.telemetry import get_session_recorder
 from hiveforge.tools.openclaw_wrappers.tool_router import OpenClawToolRouter
 
 _DEFAULT_POLICY_PATH = Path(__file__).resolve().parents[2] / "config" / "tool_policy.json"
@@ -101,6 +102,20 @@ def _audit(
     with _LOCK:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, ensure_ascii=True) + "\n")
+    get_session_recorder().record(
+        event_type="tool_call",
+        source="specialists.tool_execution",
+        agent_id=agent_name,
+        role=role,
+        payload={
+            "index": index,
+            "tool": tool,
+            "operation": operation,
+            "decision": decision,
+            "reason": reason,
+            "ok": ok,
+        },
+    )
 
 
 def _is_rate_limited(agent_name: str, role: str) -> bool:

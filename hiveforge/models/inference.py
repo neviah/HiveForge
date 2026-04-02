@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from hiveforge.models.provider_base import LLMProvider
+from hiveforge.telemetry import get_session_recorder
 
 
 class ModelProviderConfig:
@@ -94,20 +95,67 @@ class ModelClient:
         max_tokens: int | None = None,
     ) -> str:
         """Synchronous inference call."""
+        recorder = get_session_recorder()
         if not self.provider:
+            recorder.record(
+                event_type="llm_call",
+                source="models.inference",
+                payload={
+                    "provider": self.provider_name,
+                    "ok": False,
+                    "error": "provider not initialized",
+                    "prompt_preview": prompt[:200],
+                },
+            )
+            recorder.record(
+                event_type="llm_response",
+                source="models.inference",
+                payload={
+                    "provider": self.provider_name,
+                    "ok": False,
+                    "error": "provider not initialized",
+                },
+            )
             return f"ERROR: {self.provider_name} provider not initialized"
 
         temp = temperature or self.provider_config.get("temperature", 0.2)
         tokens = max_tokens or self.provider_config.get("max_tokens", 4000)
+        recorder.record(
+            event_type="llm_call",
+            source="models.inference",
+            payload={
+                "provider": self.provider_name,
+                "temperature": temp,
+                "max_tokens": tokens,
+                "prompt_chars": len(prompt),
+                "prompt_preview": prompt[:200],
+            },
+        )
 
         try:
-            return self.provider.infer(
+            response = self.provider.infer(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 temperature=temp,
                 max_tokens=tokens,
             )
+            recorder.record(
+                event_type="llm_response",
+                source="models.inference",
+                payload={
+                    "provider": self.provider_name,
+                    "ok": True,
+                    "response_chars": len(response),
+                    "response_preview": response[:200],
+                },
+            )
+            return response
         except Exception as e:
+            recorder.record(
+                event_type="llm_response",
+                source="models.inference",
+                payload={"provider": self.provider_name, "ok": False, "error": str(e)},
+            )
             return f"ERROR: {str(e)}"
 
     def infer_stream(
