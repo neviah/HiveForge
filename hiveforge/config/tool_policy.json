@@ -1,0 +1,114 @@
+{
+  "roles": {
+    "project_manager": {
+      "tools": {
+        "filesystem": ["read_file", "write_file", "edit_file", "list_directory"],
+        "messaging": ["send_email", "send_slack"],
+        "api": ["http_request"]
+      },
+      "limits": {
+        "max_calls_per_task": 10,
+        "max_calls_per_minute": 20,
+        "max_calls_per_tool": {
+          "messaging": 6,
+          "filesystem": 8,
+          "api": 10
+        }
+      }
+    },
+    "developer": {
+      "tools": {
+        "filesystem": ["read_file", "write_file", "edit_file", "list_directory", "create_directory"],
+        "command": ["execute"],
+        "api": ["http_request"],
+        "browser": ["fetch_url", "search"]
+      },
+      "limits": {
+        "max_calls_per_task": 14,
+        "max_calls_per_minute": 24,
+        "max_calls_per_tool": {
+          "command": 4,
+          "filesystem": 10,
+          "api": 8,
+          "browser": 8
+        }
+      }
+    },
+    "researcher": {
+      "tools": {
+        "browser": ["fetch_url", "search"],
+        "api": ["http_request", "parse_json"],
+        "filesystem": ["read_file", "write_file", "list_directory"]
+      },
+      "limits": {
+        "max_calls_per_task": 12,
+        "max_calls_per_minute": 20,
+        "max_calls_per_tool": {
+          "browser": 8,
+          "api": 8,
+          "filesystem": 6
+        }
+      }
+    },
+    "writer": {
+      "tools": {
+        "filesystem": ["read_file", "write_file", "edit_file", "list_directory"],
+        "browser": ["fetch_url", "search"]
+      },
+      "limits": {
+        "max_calls_per_task": 10,
+        "max_calls_per_minute": 16,
+        "max_calls_per_tool": {
+          "filesystem": 8,
+          "browser": 6
+        }
+      }
+    },
+    "analyst": {
+      "tools": {
+        "filesystem": ["read_file", "write_file", "edit_file", "list_directory"],
+        "api": ["http_request", "parse_json"],
+        "browser": ["fetch_url", "search"]
+      },
+      "limits": {
+        "max_calls_per_task": 12,
+        "max_calls_per_minute": 20,
+        "max_calls_per_tool": {
+          "filesystem": 8,
+          "api": 8,
+          "browser": 6
+        }
+      }
+    },
+    "critic": {
+      "tools": {
+        "filesystem": ["read_file", "list_directory"],
+        "browser": ["fetch_url", "search"],
+        "api": ["http_request"]
+      },
+      "limits": {
+        "max_calls_per_task": 8,
+        "max_calls_per_minute": 12,
+        "max_calls_per_tool": {
+          "filesystem": 6,
+          "browser": 6,
+          "api": 6
+        }
+      }
+    },
+    "designer": {
+      "tools": {
+        "filesystem": ["read_file", "write_file", "edit_file", "list_directory"],
+        "browser": ["fetch_url", "search", "screenshot"]
+      },
+      "limits": {
+        "max_calls_per_task": 10,
+        "max_calls_per_minute": 16,
+        "max_calls_per_tool": {
+          "filesystem": 8,
+          "browser": 8
+        }
+      }
+    }
+  }
+}
