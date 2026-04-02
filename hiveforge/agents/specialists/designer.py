@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from hiveforge.agents.agent_base import AgentProfile, HiveForgeAgent
+from hiveforge.agents.specialists.tool_execution import execute_tool_calls
 from hiveforge.models.inference import ModelClient
 from hiveforge.tools.openclaw_wrappers.tool_router import OpenClawToolRouter
 
@@ -40,12 +41,14 @@ class DesignerAgent(HiveForgeAgent):
     def run_task(self, objective: str, state: dict, budget: float) -> dict:
         """Run Designer task with LLM-assisted design planning."""
         loop_result = super().run_task(objective, state, budget)
+        tool_results = execute_tool_calls(self.router, state)
 
         try:
             llm_response = self.llm_client.infer(
                 prompt=f"""Design task: {objective}
 
 User context and requirements: {state}
+Tool execution results: {tool_results}
 Budget: ${budget}
 
 Provide:
@@ -64,6 +67,7 @@ Provide:
                 "objective": objective,
                 "design_spec": llm_response,
                 "loop_result": loop_result,
+                "tool_results": tool_results,
                 "budget_allocated": budget,
             }
         except Exception as e:
@@ -71,4 +75,5 @@ Provide:
                 "agent": self.profile.name,
                 "error": str(e),
                 "fallback_result": loop_result,
+                "tool_results": tool_results,
             }
