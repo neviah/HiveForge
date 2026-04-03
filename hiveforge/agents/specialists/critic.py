@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from hiveforge.agents.agent_base import AgentProfile, HiveForgeAgent
 from hiveforge.agents.specialists.tool_execution import execute_tool_calls
 from hiveforge.models.inference import ModelClient
@@ -21,6 +23,40 @@ Your responsibilities:
 You are rigorous and honest. You distinguish minor issues from showstoppers. You explain
 your critique constructively. You're not here to be liked; you're here to catch problems early."""
 
+_MARKETPLACE_CODE_REVIEWER_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "marketplace"
+    / "agency_agents_upstream"
+    / "engineering"
+    / "engineering-code-reviewer.md"
+)
+
+
+def _strip_frontmatter(text: str) -> str:
+    if text.startswith("---\n"):
+        parts = text.split("\n---\n", 1)
+        if len(parts) == 2:
+            return parts[1]
+    return text
+
+
+def _load_marketplace_critic_prompt() -> str:
+    if not _MARKETPLACE_CODE_REVIEWER_PATH.exists():
+        return ""
+    try:
+        raw = _MARKETPLACE_CODE_REVIEWER_PATH.read_text(encoding="utf-8")
+        return _strip_frontmatter(raw).strip()[:5000]
+    except Exception:
+        return ""
+
+
+MARKETPLACE_CRITIC_PROMPT = _load_marketplace_critic_prompt()
+COMBINED_CRITIC_SYSTEM_PROMPT = (
+    CRITIC_SYSTEM_PROMPT
+    if not MARKETPLACE_CRITIC_PROMPT
+    else f"{CRITIC_SYSTEM_PROMPT}\n\nReference playbook from marketplace Code Reviewer agent:\n{MARKETPLACE_CRITIC_PROMPT}"
+)
+
 
 class CriticAgent(HiveForgeAgent):
     """Specialist: Quality assurance, review, risk assessment."""
@@ -32,7 +68,7 @@ class CriticAgent(HiveForgeAgent):
                 role="critic",
                 skills=["qa", "review", "risk assessment"],
                 hourly_cost=85.0,
-                metadata={"system_prompt": CRITIC_SYSTEM_PROMPT},
+                metadata={"system_prompt": COMBINED_CRITIC_SYSTEM_PROMPT},
             )
         )
         self.llm_client = ModelClient()
@@ -57,7 +93,7 @@ Provide:
 3. Edge cases and failure modes uncovered
 4. Security, performance, or maintainability concerns
 5. Recommendations and approval/rejection decision""",
-                system_prompt=CRITIC_SYSTEM_PROMPT,
+                system_prompt=COMBINED_CRITIC_SYSTEM_PROMPT,
             )
 
             return {

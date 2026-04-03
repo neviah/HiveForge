@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from hiveforge.agents.agent_base import AgentProfile, HiveForgeAgent
 from hiveforge.agents.specialists.tool_execution import execute_tool_calls
 from hiveforge.models.inference import ModelClient
@@ -21,6 +23,40 @@ Your responsibilities:
 You are quantitative. You think in terms of evidence, trends, and trade-offs. You ask
 about data quality, sample sizes, confounding variables, and decision thresholds."""
 
+_MARKETPLACE_FEEDBACK_SYNTH_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "marketplace"
+    / "agency_agents_upstream"
+    / "product"
+    / "product-feedback-synthesizer.md"
+)
+
+
+def _strip_frontmatter(text: str) -> str:
+    if text.startswith("---\n"):
+        parts = text.split("\n---\n", 1)
+        if len(parts) == 2:
+            return parts[1]
+    return text
+
+
+def _load_marketplace_analyst_prompt() -> str:
+    if not _MARKETPLACE_FEEDBACK_SYNTH_PATH.exists():
+        return ""
+    try:
+        raw = _MARKETPLACE_FEEDBACK_SYNTH_PATH.read_text(encoding="utf-8")
+        return _strip_frontmatter(raw).strip()[:5000]
+    except Exception:
+        return ""
+
+
+MARKETPLACE_ANALYST_PROMPT = _load_marketplace_analyst_prompt()
+COMBINED_ANALYST_SYSTEM_PROMPT = (
+    ANALYST_SYSTEM_PROMPT
+    if not MARKETPLACE_ANALYST_PROMPT
+    else f"{ANALYST_SYSTEM_PROMPT}\n\nReference playbook from marketplace Feedback Synthesizer agent:\n{MARKETPLACE_ANALYST_PROMPT}"
+)
+
 
 class AnalystAgent(HiveForgeAgent):
     """Specialist: Data analysis, metrics, forecasting, insights."""
@@ -32,7 +68,7 @@ class AnalystAgent(HiveForgeAgent):
                 role="analyst",
                 skills=["metrics", "forecasting", "data analysis"],
                 hourly_cost=90.0,
-                metadata={"system_prompt": ANALYST_SYSTEM_PROMPT},
+                metadata={"system_prompt": COMBINED_ANALYST_SYSTEM_PROMPT},
             )
         )
         self.llm_client = ModelClient()
@@ -57,7 +93,7 @@ Provide:
 3. Analysis approach and tools suggested
 4. Expected insights and blind spots
 5. Recommendations based on likely patterns""",
-                system_prompt=ANALYST_SYSTEM_PROMPT,
+                system_prompt=COMBINED_ANALYST_SYSTEM_PROMPT,
             )
 
             return {

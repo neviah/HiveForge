@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from hiveforge.agents.agent_base import AgentProfile, HiveForgeAgent
 from hiveforge.agents.specialists.tool_execution import execute_tool_calls
 from hiveforge.models.inference import ModelClient
@@ -21,6 +23,40 @@ Your responsibilities:
 You are disciplined. You think in terms of critical path, dependencies, and resource constraints.
 You ask hard questions about feasibility and scope creep."""
 
+_MARKETPLACE_PRODUCT_MANAGER_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "marketplace"
+    / "agency_agents_upstream"
+    / "product"
+    / "product-manager.md"
+)
+
+
+def _strip_frontmatter(text: str) -> str:
+    if text.startswith("---\n"):
+        parts = text.split("\n---\n", 1)
+        if len(parts) == 2:
+            return parts[1]
+    return text
+
+
+def _load_marketplace_pm_prompt() -> str:
+    if not _MARKETPLACE_PRODUCT_MANAGER_PATH.exists():
+        return ""
+    try:
+        raw = _MARKETPLACE_PRODUCT_MANAGER_PATH.read_text(encoding="utf-8")
+        return _strip_frontmatter(raw).strip()[:5000]
+    except Exception:
+        return ""
+
+
+MARKETPLACE_PM_PROMPT = _load_marketplace_pm_prompt()
+COMBINED_PM_SYSTEM_PROMPT = (
+    PM_SYSTEM_PROMPT
+    if not MARKETPLACE_PM_PROMPT
+    else f"{PM_SYSTEM_PROMPT}\n\nReference playbook from marketplace Product Manager agent:\n{MARKETPLACE_PM_PROMPT}"
+)
+
 
 class ProjectManagerAgent(HiveForgeAgent):
     """Specialist: Project planning, scheduling, and delivery."""
@@ -32,7 +68,7 @@ class ProjectManagerAgent(HiveForgeAgent):
                 role="project_manager",
                 skills=["planning", "risk management", "scheduling"],
                 hourly_cost=95.0,
-                metadata={"system_prompt": PM_SYSTEM_PROMPT},
+                metadata={"system_prompt": COMBINED_PM_SYSTEM_PROMPT},
             )
         )
         self.llm_client = ModelClient()
@@ -56,7 +92,7 @@ Provide:
 2. Effort estimate (hours) for each phase
 3. Critical path and risk areas
 4. Timeline estimate and key deliverables""",
-                system_prompt=PM_SYSTEM_PROMPT,
+                system_prompt=COMBINED_PM_SYSTEM_PROMPT,
             )
 
             return {

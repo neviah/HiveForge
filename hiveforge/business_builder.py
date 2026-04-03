@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,7 @@ _DESIGN_PLAYBOOK_FILES: tuple[str, ...] = (
     "design/design-brand-guardian.md",
 )
 _DESIGN_PLAYBOOK_CACHE: str | None = None
+_UUPRO_SEARCH_PY = ROOT / "hiveforge" / "tools" / "ui_ux_pro_max" / "scripts" / "search.py"
 
 
 def _now_iso() -> str:
@@ -139,6 +142,32 @@ def _load_design_playbook() -> str:
 
     _DESIGN_PLAYBOOK_CACHE = "\n\n".join(chunks)
     return _DESIGN_PLAYBOOK_CACHE
+
+
+def _get_design_system_spec(query: str, project_name: str) -> str:
+    """Generate an industry-specific design system spec using ui-ux-pro-max."""
+    if not _UUPRO_SEARCH_PY.exists():
+        return ""
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(_UUPRO_SEARCH_PY),
+                query,
+                "--design-system",
+                "-p", project_name,
+                "--format", "markdown",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            encoding="utf-8",
+            errors="replace",
+        )
+        output = result.stdout.strip()
+        return output[:3500] if output else ""
+    except Exception:
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +464,14 @@ def _generate_artifact_content(
     build_priority = discovery.get("build_priority", "quality")
     is_html = Path(artifact_path).suffix.lower() in (".html", ".htm")
     design_playbook = _load_design_playbook()
+    design_system_spec = (
+        _get_design_system_spec(
+            f"{category} {visual_direction} {' '.join(str(f) for f in core_features[:3])}",
+            project_name,
+        )
+        if is_html
+        else ""
+    )
     delivery_rules = _domain_delivery_rules(
         category=category,
         objective=objective,
@@ -490,6 +527,9 @@ PRODUCT SPECIFICATION:
 
 MARKETPLACE DESIGN PLAYBOOK:
 {design_playbook[:6500] if design_playbook else "No design playbook available."}
+
+INDUSTRY-SPECIFIC DESIGN SYSTEM (ui-ux-pro-max analysis):
+{design_system_spec if design_system_spec else "Apply the marketplace playbook above as the design standard."}
 
 REQUIREMENTS FOR THE OUTPUT:
 1. A complete <!doctype html> page with ALL CSS in <style> and ALL JS in <script>

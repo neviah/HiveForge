@@ -257,6 +257,13 @@ User Objective
 - Audit trail for compliance
 - Ability to replay and analyze multi-agent workflows
 
+### Phase 7: Image Generation for Agents
+- Agents can generate hero images, mockups, and UI assets during builds
+- Provider: HuggingFace Inference API free tier (primary) + OpenRouter free models (fallback)
+- Integration: `IMAGE_PROVIDER` config flag (`huggingface | openrouter | disabled`)
+- CEOs approves paid image requests; free-tier used by default
+- Generated images embedded as base64 data URIs in HTML artifacts (no external deps)
+
 ---
 
 ## Files Modified This Session

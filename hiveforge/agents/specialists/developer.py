@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from hiveforge.agents.agent_base import AgentProfile, HiveForgeAgent
 from hiveforge.agents.specialists.tool_execution import execute_tool_calls
 from hiveforge.models.inference import ModelClient
@@ -21,6 +23,40 @@ Your responsibilities:
 You are pragmatic. You balance perfection with shipping. You ask about requirements clarity,
 scope boundaries, and deployment constraints. You flag technical debt and bottlenecks early."""
 
+_MARKETPLACE_FRONTEND_DEV_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "marketplace"
+    / "agency_agents_upstream"
+    / "engineering"
+    / "engineering-frontend-developer.md"
+)
+
+
+def _strip_frontmatter(text: str) -> str:
+    if text.startswith("---\n"):
+        parts = text.split("\n---\n", 1)
+        if len(parts) == 2:
+            return parts[1]
+    return text
+
+
+def _load_marketplace_developer_prompt() -> str:
+    if not _MARKETPLACE_FRONTEND_DEV_PATH.exists():
+        return ""
+    try:
+        raw = _MARKETPLACE_FRONTEND_DEV_PATH.read_text(encoding="utf-8")
+        return _strip_frontmatter(raw).strip()[:5000]
+    except Exception:
+        return ""
+
+
+MARKETPLACE_DEVELOPER_PROMPT = _load_marketplace_developer_prompt()
+COMBINED_DEVELOPER_SYSTEM_PROMPT = (
+    DEVELOPER_SYSTEM_PROMPT
+    if not MARKETPLACE_DEVELOPER_PROMPT
+    else f"{DEVELOPER_SYSTEM_PROMPT}\n\nReference playbook from marketplace Frontend Developer agent:\n{MARKETPLACE_DEVELOPER_PROMPT}"
+)
+
 
 class DeveloperAgent(HiveForgeAgent):
     """Specialist: Code implementation, testing, architecture."""
@@ -32,7 +68,7 @@ class DeveloperAgent(HiveForgeAgent):
                 role="developer",
                 skills=["python", "architecture", "testing"],
                 hourly_cost=120.0,
-                metadata={"system_prompt": DEVELOPER_SYSTEM_PROMPT},
+                metadata={"system_prompt": COMBINED_DEVELOPER_SYSTEM_PROMPT},
             )
         )
         self.llm_client = ModelClient()
@@ -57,7 +93,7 @@ Provide:
 3. Testing strategy (unit, integration, edge cases)
 4. Deployment checklist
 5. Risks and mitigations""",
-                system_prompt=DEVELOPER_SYSTEM_PROMPT,
+                system_prompt=COMBINED_DEVELOPER_SYSTEM_PROMPT,
             )
 
             return {

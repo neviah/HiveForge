@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from hiveforge.agents.agent_base import AgentProfile, HiveForgeAgent
 from hiveforge.agents.specialists.tool_execution import execute_tool_calls
 from hiveforge.models.inference import ModelClient
@@ -21,6 +23,40 @@ Your responsibilities:
 You are rigorous. You distinguish facts from opinions. You cite sources. You surface
 uncertainty and limitations. You ask clarifying questions about what "true enough" means."""
 
+_MARKETPLACE_TREND_RESEARCHER_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "marketplace"
+    / "agency_agents_upstream"
+    / "product"
+    / "product-trend-researcher.md"
+)
+
+
+def _strip_frontmatter(text: str) -> str:
+    if text.startswith("---\n"):
+        parts = text.split("\n---\n", 1)
+        if len(parts) == 2:
+            return parts[1]
+    return text
+
+
+def _load_marketplace_researcher_prompt() -> str:
+    if not _MARKETPLACE_TREND_RESEARCHER_PATH.exists():
+        return ""
+    try:
+        raw = _MARKETPLACE_TREND_RESEARCHER_PATH.read_text(encoding="utf-8")
+        return _strip_frontmatter(raw).strip()[:5000]
+    except Exception:
+        return ""
+
+
+MARKETPLACE_RESEARCHER_PROMPT = _load_marketplace_researcher_prompt()
+COMBINED_RESEARCHER_SYSTEM_PROMPT = (
+    RESEARCHER_SYSTEM_PROMPT
+    if not MARKETPLACE_RESEARCHER_PROMPT
+    else f"{RESEARCHER_SYSTEM_PROMPT}\n\nReference playbook from marketplace Trend Researcher agent:\n{MARKETPLACE_RESEARCHER_PROMPT}"
+)
+
 
 class ResearcherAgent(HiveForgeAgent):
     """Specialist: Research, fact-finding, analysis, synthesis."""
@@ -32,7 +68,7 @@ class ResearcherAgent(HiveForgeAgent):
                 role="researcher",
                 skills=["analysis", "fact_finding", "synthesis"],
                 hourly_cost=80.0,
-                metadata={"system_prompt": RESEARCHER_SYSTEM_PROMPT},
+                metadata={"system_prompt": COMBINED_RESEARCHER_SYSTEM_PROMPT},
             )
         )
         self.llm_client = ModelClient()
@@ -57,7 +93,7 @@ Provide:
 3. Preliminary findings and gaps
 4. Confidence levels for each claim
 5. Next steps for deeper investigation""",
-                system_prompt=RESEARCHER_SYSTEM_PROMPT,
+                system_prompt=COMBINED_RESEARCHER_SYSTEM_PROMPT,
             )
 
             return {
