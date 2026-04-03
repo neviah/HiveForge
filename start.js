@@ -4,7 +4,7 @@ module.exports = {
   daemon: true,
   run: [
     {
-      when: "{{!exists('sandbox/config.json')}}",
+      when: "{{!exists('.venv/Scripts/python.exe')}}",
       method: 'shell.run',
       params: {
         message: [
@@ -13,7 +13,7 @@ module.exports = {
       }
     },
     {
-      when: "{{exists('sandbox/config.json')}}",
+      when: "{{exists('.venv/Scripts/python.exe')}}",
       method: 'shell.run',
       params: {
         message: [
@@ -26,7 +26,7 @@ module.exports = {
       }
     },
     {
-      when: "{{exists('sandbox/config.json')}}",
+      when: "{{exists('.venv/Scripts/python.exe')}}",
       method: 'local.set',
       params: {
         url: "{{input.event[1]}}"

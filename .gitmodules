@@ -1,3 +1,6 @@
-[submodule "agency-agents"]
-	path = agency-agents
+[submodule "hiveforge/marketplace/agency_agents_upstream"]
+	path = hiveforge/marketplace/agency_agents_upstream
 	url = https://github.com/msitarzewski/agency-agents
+[submodule "hiveforge/third_party/openclaw_upstream"]
+	path = hiveforge/third_party/openclaw_upstream
+	url = https://github.com/openclaw/openclaw.git

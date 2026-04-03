@@ -7,7 +7,8 @@ module.exports = {
       params: {
         message: [
           'mkdir sandbox 2>nul',
-          'mkdir sandbox\\workspace 2>nul'
+          'mkdir sandbox\\workspace 2>nul',
+          'mkdir sandbox\\projects 2>nul'
         ]
       }
     },
@@ -15,28 +16,27 @@ module.exports = {
       method: 'shell.run',
       params: {
         message: [
-          'git submodule update --init --recursive'
+          'git submodule sync --recursive && git submodule update --init --recursive || echo [HiveForge] Warning: submodule sync failed; continuing with local files.'
         ]
       }
     },
     {
-      when: "{{!exists('sandbox/venv/Scripts/python.exe')}}",
+      when: "{{!exists('.venv/Scripts/python.exe')}}",
       method: 'shell.run',
       params: {
         message: [
-          'python -m venv sandbox/venv'
+          'python -m venv .venv'
         ]
       }
     },
     {
       method: 'shell.run',
       params: {
-        venv: 'sandbox/venv',
+        venv: '.venv',
         message: [
           'python -m pip install --upgrade pip',
-          'uv pip install ./openclaw',
-          'uv pip install playwright gitpython',
-          'python -m playwright install chromium'
+          'python -m pip install openai anthropic playwright',
+          'python -m playwright install chromium || echo [HiveForge] Playwright Chromium install failed; browser tools may be limited.'
         ]
       }
     },
@@ -44,7 +44,6 @@ module.exports = {
       method: 'shell.run',
       params: {
         message: [
-          'node create_sandbox.js',
           'echo HiveForge install completed.'
         ]
       }

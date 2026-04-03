@@ -27,8 +27,8 @@
       "href": "sandbox/workspace"
     },
     {
-      "text": "Integration Config",
-      "href": "sandbox/config.example.json"
+      "text": "Model Config",
+      "href": "hiveforge/config/models.json"
     },
     {
       "text": "Show GitHub Public Key",
@@ -36,7 +36,7 @@
     },
     {
       "text": "Settings",
-      "href": "sandbox/config.json"
+      "href": "hiveforge/config/models.json"
     }
   ]
 }

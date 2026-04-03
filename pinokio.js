@@ -7,7 +7,7 @@ module.exports = {
 	icon: 'icon.png',
 	menu: async (kernel, info) => {
 		const sandboxExists = info.exists('sandbox');
-		const venvExists = info.exists('sandbox/venv');
+		const venvExists = info.exists('.venv');
 		const installed = sandboxExists && venvExists;
 
 		const running = {
@@ -68,7 +68,7 @@ module.exports = {
 				{
 					icon: 'fa-solid fa-eye',
 					text: 'View Logs',
-					href: 'sandbox/hiveforge.log'
+					href: 'logs'
 				},
 				{
 					icon: 'fa-solid fa-folder-open',
@@ -77,8 +77,8 @@ module.exports = {
 				},
 				{
 					icon: 'fa-solid fa-sliders',
-					text: 'Integration Config',
-					href: 'sandbox/config.json'
+					text: 'Model Config',
+					href: 'hiveforge/config/models.json'
 				},
 				{
 					icon: 'fa-regular fa-key',
