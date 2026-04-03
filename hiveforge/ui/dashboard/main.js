@@ -55,6 +55,23 @@ const ceoNudge = document.getElementById("ceo-nudge");
 const runBuildButton = document.getElementById("run-build");
 const sendNudgeButton = document.getElementById("send-nudge");
 const ceoResponse = document.getElementById("ceo-response");
+const toastStack = document.getElementById("toast-stack");
+
+const BUILD_BUTTON_IDLE_LABEL = "Build Business";
+const BUILD_BUTTON_ACTIVE_LABEL = "Building...";
+
+function showToast(message, tone = "info", timeoutMs = 3000) {
+  if (!toastStack || !message) {
+    return;
+  }
+  const toast = document.createElement("div");
+  toast.className = `toast ${tone}`;
+  toast.textContent = String(message);
+  toastStack.appendChild(toast);
+  window.setTimeout(() => {
+    toast.remove();
+  }, Math.max(1000, timeoutMs));
+}
 
 let currentReplay = { event_count: 0, agents: [], events: [] };
 let currentContext = defaultProjectContext("agency");
@@ -1326,6 +1343,7 @@ async function loadProviderSettings() {
 
 async function saveProviderSettings() {
   settingsStatus.textContent = "Saving provider config...";
+  showToast("Saving provider config...", "info", 1800);
   const activeProvider = providerSelect.value;
   const providerConfig = {
     base_url: providerBaseUrl.value.trim(),
@@ -1344,10 +1362,12 @@ async function saveProviderSettings() {
   const data = await response.json();
   if (!data.ok) {
     settingsStatus.textContent = `Error: ${data.error || "save failed"}`;
+    showToast(`Save failed: ${data.error || "unknown error"}`, "error", 4200);
     return;
   }
 
   settingsStatus.textContent = `Saved ${data.active_provider} provider configuration.`;
+  showToast(`Saved ${data.active_provider} provider config.`, "success", 2400);
   await loadProviderSettings();
   await loadProjectContext(activeProjectId);
 }
@@ -1356,10 +1376,12 @@ async function saveProjectLlm() {
   const activeProject = getActiveProject();
   if (!activeProject) {
     settingsStatus.textContent = "Error: No active project selected.";
+    showToast("No active project selected.", "warning", 3000);
     return;
   }
 
   settingsStatus.textContent = "Saving project LLM override...";
+  showToast("Saving project LLM override...", "info", 1800);
   const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/llm`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1371,10 +1393,12 @@ async function saveProjectLlm() {
   const data = await response.json();
   if (!data.ok) {
     settingsStatus.textContent = `Error: ${data.error || "Unable to save project LLM"}`;
+    showToast(`Project LLM save failed: ${data.error || "unknown error"}`, "error", 4200);
     return;
   }
 
   settingsStatus.textContent = "Saved project LLM override.";
+  showToast("Project LLM override saved.", "success", 2400);
   await loadProjectContext(activeProject.id);
 }
 
@@ -1382,15 +1406,18 @@ async function runBuild() {
   const activeProject = getActiveProject();
   if (!activeProject) {
     ceoResponse.textContent = "No active project selected.";
+    showToast("No active project selected.", "warning", 3000);
     return;
   }
   if (!ceoObjective.value.trim()) {
     ceoResponse.textContent = "Provide an objective before running the build.";
+    showToast("Enter an objective before building.", "warning", 3000);
     return;
   }
 
   buildInProgress = true;
   runBuildButton.disabled = true;
+  runBuildButton.textContent = BUILD_BUTTON_ACTIVE_LABEL;
   activeProjectStatus.textContent = "building";
   activeProjectStatus.className = "status-tag building";
   currentContext = {
@@ -1399,6 +1426,7 @@ async function runBuild() {
     pipeline: { steps: buildPlaceholderSteps(activeProject.name) },
   };
   ceoResponse.textContent = "Running CEO, coordinator, and specialist workflow...";
+  showToast("Build started. Routing specialists...", "info", 3200);
   renderProjectViews();
 
   try {
@@ -1428,6 +1456,7 @@ async function runBuild() {
         },
       };
       ceoResponse.textContent = `Error: ${data.error || "build failed"}`;
+      showToast(`Build failed: ${data.error || "unknown error"}`, "error", 4800);
       renderProjectViews();
       return;
     }
@@ -1440,6 +1469,7 @@ async function runBuild() {
       llm_status: nextContext.llm_status || data.llm_status || currentContext.llm_status || defaultProjectContext(activeProject.id).llm_status,
     };
     ceoResponse.textContent = currentContext.strategy?.ceo_summary || "Build completed.";
+    showToast("Build completed successfully.", "success", 2800);
     renderProjectViews();
     await loadProjectFiles();
     await loadSessions();
@@ -1463,6 +1493,13 @@ async function runBuild() {
     ceoResponse.textContent = isAbort
       ? `Build request timed out after ${Math.round(BUILD_REQUEST_TIMEOUT_MS / 1000)}s. Checking latest project state...`
       : `Error: ${error?.message || "build failed"}`;
+    showToast(
+      isAbort
+        ? `Build timed out after ${Math.round(BUILD_REQUEST_TIMEOUT_MS / 1000)}s.`
+        : `Build error: ${error?.message || "unknown failure"}`,
+      "error",
+      5200,
+    );
     if (isAbort) {
       try {
         await loadProjectContext(activeProject.id);
@@ -1474,6 +1511,7 @@ async function runBuild() {
   } finally {
     syncProjectHeader();
     runBuildButton.disabled = false;
+    runBuildButton.textContent = BUILD_BUTTON_IDLE_LABEL;
   }
 }
 
@@ -1481,14 +1519,17 @@ async function sendNudge() {
   const activeProject = getActiveProject();
   if (!activeProject) {
     ceoResponse.textContent = "No active project selected.";
+    showToast("No active project selected.", "warning", 3000);
     return;
   }
   if (!ceoNudge.value.trim()) {
     ceoResponse.textContent = "Write a nudge before sending it to the CEO.";
+    showToast("Write a nudge before sending.", "warning", 3000);
     return;
   }
 
   ceoResponse.textContent = "Sending nudge to CEO...";
+  showToast("Sending nudge to CEO...", "info", 2200);
   const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}/ceo-nudge`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1500,6 +1541,7 @@ async function sendNudge() {
   const data = await response.json();
   if (!data.ok) {
     ceoResponse.textContent = `Error: ${data.error || "nudge failed"}`;
+    showToast(`Nudge failed: ${data.error || "unknown error"}`, "error", 4200);
     return;
   }
 
@@ -1511,6 +1553,7 @@ async function sendNudge() {
   };
   ceoResponse.textContent = data.result?.reply || currentContext.strategy?.latest_response || "CEO nudge recorded.";
   ceoNudge.value = "";
+  showToast("CEO nudge sent.", "success", 2200);
   renderProjectViews();
 }
 
@@ -1535,6 +1578,7 @@ async function actOnApproval(approvalId, decision) {
   const data = await response.json();
   if (!data.ok) {
     ceoResponse.textContent = `Error: ${data.error || "Unable to update approval"}`;
+    showToast(`Approval update failed: ${data.error || "unknown error"}`, "error", 4200);
     return;
   }
 
@@ -1544,6 +1588,7 @@ async function actOnApproval(approvalId, decision) {
     ...nextContext,
     llm_status: nextContext.llm_status || data.llm_status || currentContext.llm_status || defaultProjectContext(activeProject.id).llm_status,
   };
+  showToast(`Approval marked ${decision}.`, "success", 2200);
   renderProjectViews();
 }
 
