@@ -27,7 +27,10 @@
         <button class="menu-item" data-view="office" type="button">Office</button>
         <button class="menu-item" data-view="launch" type="button">Launch</button>
         <button class="menu-item" data-view="files" type="button">Files</button>
-        <button class="menu-item" data-view="approvals" type="button">Approvals</button>
+        <button class="menu-item menu-item-with-badge" data-view="approvals" type="button">
+          <span>Approvals</span>
+          <span id="approvals-menu-badge" class="menu-badge is-hidden" aria-label="Pending approvals">0</span>
+        </button>
         <button class="menu-item" data-view="marketplace" type="button">Agent Marketplace</button>
         <button class="menu-item" data-view="settings" type="button">Settings</button>
       </nav>

@@ -17,6 +17,7 @@ const timelineBody = document.getElementById("timeline-body");
 const agentKanban = document.getElementById("agent-kanban");
 const marketplaceList = document.getElementById("marketplace-list");
 const approvalsList = document.getElementById("approvals-list");
+const approvalsMenuBadge = document.getElementById("approvals-menu-badge");
 const missionBriefContent = document.getElementById("mission-brief-content");
 const launchContent = document.getElementById("launch-content");
 const ceoThread = document.getElementById("ceo-thread");
@@ -396,6 +397,18 @@ function renderApprovals() {
     li.innerHTML = `<strong>Update: ${message.sender || "Agent"}</strong><span>${message.subject || "Update"}</span><span>${message.body || ""}</span>`;
     approvalsList.appendChild(li);
   });
+}
+
+function renderApprovalsBadge() {
+  if (!approvalsMenuBadge) {
+    return;
+  }
+
+  const approvals = Array.isArray(currentContext.approvals) ? currentContext.approvals : [];
+  const pendingCount = approvals.filter((approval) => approval?.status === "pending").length;
+  approvalsMenuBadge.textContent = String(pendingCount);
+  approvalsMenuBadge.classList.toggle("is-hidden", pendingCount === 0);
+  approvalsMenuBadge.setAttribute("aria-label", `${pendingCount} pending approval${pendingCount === 1 ? "" : "s"}`);
 }
 
 function renderMissionBrief() {
@@ -1093,6 +1106,7 @@ function renderProjectViews() {
   metricAgents.textContent = String((currentContext.pipeline?.steps || []).length);
   renderThread();
   renderApprovals();
+  renderApprovalsBadge();
   renderStrategyViews();
   renderKanbanFromPipeline();
   prepareOfficeSprites();
