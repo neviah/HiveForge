@@ -695,6 +695,7 @@ async function loadSpriteSheets() {
 
   const BASE = "./assets/imports/raw";
   const PIXEL_BASE = "./assets/imports/pixel-agents";
+  const enableRawSpritePack = false;
 
   const [pixelChars, pixelFloors] = await Promise.all([
     Promise.all(Array.from({ length: 6 }, (_v, i) => loadImage(`${PIXEL_BASE}/characters/char_${i}.png`))),
@@ -703,27 +704,44 @@ async function loadSpriteSheets() {
   pixelAgentCharSheets = pixelChars.filter((img) => img !== null);
   pixelAgentFloorTiles = pixelFloors.filter((img) => img !== null);
 
-  const [
-    charImg, hairImg, shadowImg, tileImg, carpetImg,
-    outfit_pm, outfit_dev, outfit_res,
-    outfit_wr, outfit_des, outfit_an, outfit_crit,
-    svgAgents, svgTiles,
-  ] = await Promise.all([
-    loadImage(`${BASE}/metrocity/CharacterModel/Character%20Model.png`),
-    loadImage(`${BASE}/metrocity/Hair/Hairs.png`),
-    loadImage(`${BASE}/metrocity/CharacterModel/Shadow.png`),
-    loadImage(`${BASE}/interior/Home/TilesHouse.png`),
-    loadImage(`${BASE}/interior/Home/Carpet-Sheet.png`),
-    loadImage(`${BASE}/metrocity/Outfits/Suit.png`),
-    loadImage(`${BASE}/metrocity/Outfits/Outfit2.png`),
-    loadImage(`${BASE}/metrocity/Outfits/Outfit3.png`),
-    loadImage(`${BASE}/metrocity/Outfits/Outfit5.png`),
-    loadImage(`${BASE}/metrocity/Outfits/Outfit4.png`),
-    loadImage(`${BASE}/metrocity/Outfits/Outfit1.png`),
-    loadImage(`${BASE}/metrocity/Outfits/Outfit6.png`),
-    loadImage("./assets/sprites/agents.svg"),
-    loadImage("./assets/sprites/office_tiles.svg"),
-  ]);
+  let charImg = null;
+  let hairImg = null;
+  let shadowImg = null;
+  let tileImg = null;
+  let carpetImg = null;
+  let outfit_pm = null;
+  let outfit_dev = null;
+  let outfit_res = null;
+  let outfit_wr = null;
+  let outfit_des = null;
+  let outfit_an = null;
+  let outfit_crit = null;
+  let svgAgents = null;
+  let svgTiles = null;
+
+  if (enableRawSpritePack) {
+    [
+      charImg, hairImg, shadowImg, tileImg, carpetImg,
+      outfit_pm, outfit_dev, outfit_res,
+      outfit_wr, outfit_des, outfit_an, outfit_crit,
+      svgAgents, svgTiles,
+    ] = await Promise.all([
+      loadImage(`${BASE}/metrocity/CharacterModel/Character%20Model.png`),
+      loadImage(`${BASE}/metrocity/Hair/Hairs.png`),
+      loadImage(`${BASE}/metrocity/CharacterModel/Shadow.png`),
+      loadImage(`${BASE}/interior/Home/TilesHouse.png`),
+      loadImage(`${BASE}/interior/Home/Carpet-Sheet.png`),
+      loadImage(`${BASE}/metrocity/Outfits/Suit.png`),
+      loadImage(`${BASE}/metrocity/Outfits/Outfit2.png`),
+      loadImage(`${BASE}/metrocity/Outfits/Outfit3.png`),
+      loadImage(`${BASE}/metrocity/Outfits/Outfit5.png`),
+      loadImage(`${BASE}/metrocity/Outfits/Outfit4.png`),
+      loadImage(`${BASE}/metrocity/Outfits/Outfit1.png`),
+      loadImage(`${BASE}/metrocity/Outfits/Outfit6.png`),
+      loadImage("./assets/sprites/agents.svg"),
+      loadImage("./assets/sprites/office_tiles.svg"),
+    ]);
+  }
 
   characterSheet = charImg;
   hairSheet = hairImg;
@@ -1468,11 +1486,30 @@ async function runBuild() {
       ...nextContext,
       llm_status: nextContext.llm_status || data.llm_status || currentContext.llm_status || defaultProjectContext(activeProject.id).llm_status,
     };
-    ceoResponse.textContent = currentContext.strategy?.ceo_summary || "Build completed.";
-    showToast("Build completed successfully.", "success", 2800);
+
     renderProjectViews();
     await loadProjectFiles();
     await loadSessions();
+
+    const stepCount = Array.isArray(currentContext.pipeline?.steps) ? currentContext.pipeline.steps.length : 0;
+    const fileCount = Array.isArray(projectFiles) ? projectFiles.filter((entry) => entry.type === "file").length : 0;
+    const backendWarning = (data.warning || "").trim();
+
+    if (stepCount === 0 && fileCount === 0) {
+      ceoResponse.textContent = "Build returned no pipeline steps and no generated files. Check logs and provider settings.";
+      showToast("Build returned no artifacts. Check logs.", "warning", 5200);
+      if (backendWarning) {
+        showToast(`Build warning: ${backendWarning.slice(0, 180)}`, "warning", 6200);
+      }
+      return;
+    }
+
+    ceoResponse.textContent = currentContext.strategy?.ceo_summary || "Build completed.";
+    if (backendWarning) {
+      showToast(`Build completed with warning: ${backendWarning.slice(0, 180)}`, "warning", 5200);
+    } else {
+      showToast("Build completed successfully.", "success", 2800);
+    }
   } catch (error) {
     const isAbort = error && (error.name === "AbortError" || String(error).includes("AbortError"));
     buildInProgress = false;

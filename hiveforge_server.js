@@ -742,6 +742,17 @@ const server = http.createServer(async (req, res) => {
 
         const updatedContext = readProjectContext(projectId);
         const llmStatus = resolveLlmStatus(updatedContext);
+        const stepCount = Array.isArray(updatedContext?.pipeline?.steps) ? updatedContext.pipeline.steps.length : 0;
+        const artifactCount = Array.isArray(updatedContext?.artifacts) ? updatedContext.artifacts.length : 0;
+
+        if (stepCount === 0 && artifactCount === 0) {
+          sendJson(res, 500, {
+            ok: false,
+            error: "Build workflow returned no pipeline steps and no artifacts.",
+            warning: buildResult.warning || null,
+          });
+          return;
+        }
 
         sendJson(res, 200, {
           ok: true,
