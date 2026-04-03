@@ -1431,7 +1431,12 @@ async function runBuild() {
     }
 
     buildInProgress = false;
-    currentContext = data.context || currentContext;
+    const nextContext = data.context || currentContext;
+    currentContext = {
+      ...defaultProjectContext(activeProject.id),
+      ...nextContext,
+      llm_status: nextContext.llm_status || data.llm_status || currentContext.llm_status || defaultProjectContext(activeProject.id).llm_status,
+    };
     ceoResponse.textContent = currentContext.strategy?.ceo_summary || "Build completed.";
     renderProjectViews();
     await loadProjectFiles();
@@ -1495,7 +1500,12 @@ async function sendNudge() {
     return;
   }
 
-  currentContext = data.context || currentContext;
+  const nextContext = data.context || currentContext;
+  currentContext = {
+    ...defaultProjectContext(activeProject.id),
+    ...nextContext,
+    llm_status: nextContext.llm_status || data.llm_status || currentContext.llm_status || defaultProjectContext(activeProject.id).llm_status,
+  };
   ceoResponse.textContent = data.result?.reply || currentContext.strategy?.latest_response || "CEO nudge recorded.";
   ceoNudge.value = "";
   renderProjectViews();
@@ -1525,7 +1535,12 @@ async function actOnApproval(approvalId, decision) {
     return;
   }
 
-  currentContext = data.context || currentContext;
+  const nextContext = data.context || currentContext;
+  currentContext = {
+    ...defaultProjectContext(activeProject.id),
+    ...nextContext,
+    llm_status: nextContext.llm_status || data.llm_status || currentContext.llm_status || defaultProjectContext(activeProject.id).llm_status,
+  };
   renderProjectViews();
 }
 

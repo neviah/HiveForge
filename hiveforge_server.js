@@ -696,12 +696,16 @@ const server = http.createServer(async (req, res) => {
           return;
         }
 
+        const updatedContext = readProjectContext(projectId);
+        const llmStatus = resolveLlmStatus(updatedContext);
+
         sendJson(res, 200, {
           ok: true,
           project,
           result: buildResult.result,
           warning: buildResult.warning,
-          context: readProjectContext(projectId),
+          context: { ...updatedContext, llm_status: llmStatus },
+          llm_status: llmStatus,
         });
         return;
       }
@@ -721,12 +725,16 @@ const server = http.createServer(async (req, res) => {
           return;
         }
 
+        const updatedContext = readProjectContext(projectId);
+        const llmStatus = resolveLlmStatus(updatedContext);
+
         sendJson(res, 200, {
           ok: true,
           project,
           result: nudgeResult.result,
           warning: nudgeResult.warning,
-          context: readProjectContext(projectId),
+          context: { ...updatedContext, llm_status: llmStatus },
+          llm_status: llmStatus,
         });
         return;
       }
