@@ -513,7 +513,13 @@ function serveStatic(res, pathname) {
   const ext = path.extname(filePath).toLowerCase();
   const contentType = MIME[ext] || "application/octet-stream";
   const data = fs.readFileSync(filePath);
-  res.writeHead(200, { "Content-Type": contentType, "Content-Length": data.length });
+  res.writeHead(200, {
+    "Content-Type": contentType,
+    "Content-Length": data.length,
+    "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+    Pragma: "no-cache",
+    Expires: "0",
+  });
   res.end(data);
 }
 
