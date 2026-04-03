@@ -283,6 +283,11 @@ body {
   color: #8f6d06;
 }
 
+.status-tag.building {
+  background: rgba(30, 64, 175, 0.14);
+  color: #1d4ed8;
+}
+
 .status-tag.deleted {
   background: rgba(252, 108, 133, 0.15);
   color: #8d1f37;

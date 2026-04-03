@@ -17,9 +17,53 @@ class ModelProviderConfig:
         self.config: dict[str, Any] = {}
         self.load()
 
+    @staticmethod
+    def _defaults() -> dict[str, Any]:
+        return {
+            "active_provider": "openrouter",
+            "providers": {
+                "openrouter": {
+                    "base_url": "https://openrouter.ai/api/v1",
+                    "api_key_env": "OPENROUTER_API_KEY",
+                    "api_key": "",
+                    "model": "nvidia/nemotron-3-super-120b-a12b:free",
+                    "temperature": 0.2,
+                    "max_tokens": 4000,
+                },
+                "lmstudio": {
+                    "base_url": "http://127.0.0.1:1234/v1",
+                    "api_key": "lm-studio",
+                    "model": "local-model",
+                    "temperature": 0.2,
+                    "max_tokens": 4000,
+                },
+                "ollama": {
+                    "base_url": "http://127.0.0.1:11434/v1",
+                    "api_key": "ollama",
+                    "model": "llama3.1",
+                    "temperature": 0.2,
+                    "max_tokens": 4000,
+                },
+            },
+        }
+
     def load(self) -> None:
+        defaults = self._defaults()
         if self.config_path.exists():
-            self.config = json.loads(self.config_path.read_text(encoding="utf-8"))
+            loaded = json.loads(self.config_path.read_text(encoding="utf-8"))
+            self.config = {
+                **defaults,
+                **loaded,
+                "providers": {
+                    **defaults.get("providers", {}),
+                    **(loaded.get("providers", {}) if isinstance(loaded, dict) else {}),
+                },
+            }
+            return
+
+        self.config = defaults
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        self.config_path.write_text(json.dumps(self.config, indent=2), encoding="utf-8")
 
     def get_active_provider(self) -> tuple[str, dict[str, Any]]:
         """Returns (provider_name, config_dict) for the active provider."""

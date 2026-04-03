@@ -1391,6 +1391,8 @@ async function runBuild() {
 
   buildInProgress = true;
   runBuildButton.disabled = true;
+  activeProjectStatus.textContent = "building";
+  activeProjectStatus.className = "status-tag building";
   currentContext = {
     ...currentContext,
     project_id: activeProject.id,
@@ -1470,6 +1472,7 @@ async function runBuild() {
     }
     renderProjectViews();
   } finally {
+    syncProjectHeader();
     runBuildButton.disabled = false;
   }
 }

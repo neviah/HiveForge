@@ -74,13 +74,8 @@ function sanitizeProjectId(input) {
 
 function defaultProjectsRecord() {
   return {
-    active_project_id: "agency",
-    projects: [
-      { id: "agency", name: "Software Agency", icon: "A", status: "running" },
-      { id: "publishing", name: "Publishing", icon: "P", status: "running" },
-      { id: "research", name: "Research Lab", icon: "R", status: "paused" },
-      { id: "game", name: "Game Studio", icon: "G", status: "running" },
-    ],
+    active_project_id: "",
+    projects: [],
   };
 }
 
@@ -225,7 +220,50 @@ function writeProjectContext(projectId, context) {
 }
 
 function readModelsConfig() {
-  return readJsonFile(MODELS_PATH, { active_provider: "openrouter", providers: {} });
+  const defaults = {
+    active_provider: "openrouter",
+    providers: {
+      openrouter: {
+        base_url: "https://openrouter.ai/api/v1",
+        api_key_env: "OPENROUTER_API_KEY",
+        model: "nvidia/nemotron-3-super-120b-a12b:free",
+        temperature: 0.2,
+        max_tokens: 4000,
+        api_key: "",
+      },
+      lmstudio: {
+        base_url: "http://127.0.0.1:1234/v1",
+        api_key: "lm-studio",
+        model: "local-model",
+        temperature: 0.2,
+        max_tokens: 4000,
+      },
+      ollama: {
+        base_url: "http://127.0.0.1:11434/v1",
+        api_key: "ollama",
+        model: "llama3.1",
+        temperature: 0.2,
+        max_tokens: 4000,
+      },
+    },
+  };
+
+  const loaded = readJsonFile(MODELS_PATH, defaults);
+  const merged = {
+    ...defaults,
+    ...loaded,
+    providers: {
+      ...defaults.providers,
+      ...(loaded.providers || {}),
+    },
+  };
+
+  ensureDir(path.dirname(MODELS_PATH));
+  if (!fs.existsSync(MODELS_PATH)) {
+    fs.writeFileSync(MODELS_PATH, JSON.stringify(merged, null, 2), "utf-8");
+  }
+
+  return merged;
 }
 
 function modelLabel(modelName) {
@@ -857,7 +895,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && pathname === "/api/settings/provider") {
-      const models = readJsonFile(MODELS_PATH, { active_provider: "openrouter", providers: {} });
+      const models = readModelsConfig();
       sendJson(res, 200, {
         ok: true,
         active_provider: models.active_provider || "openrouter",
@@ -873,7 +911,7 @@ const server = http.createServer(async (req, res) => {
       const activeProvider = String(parsed.active_provider || "").trim();
       const providerConfig = parsed.provider_config && typeof parsed.provider_config === "object" ? parsed.provider_config : null;
 
-      const models = readJsonFile(MODELS_PATH, { active_provider: "openrouter", providers: {} });
+      const models = readModelsConfig();
       if (!activeProvider || !models.providers || !models.providers[activeProvider]) {
         sendJson(res, 400, { ok: false, error: "Unknown provider" });
         return;
