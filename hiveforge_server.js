@@ -441,8 +441,16 @@ async function runPythonJson(pythonLines, payload) {
       try {
         const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
         const parsed = JSON.parse(lines.length > 0 ? lines[lines.length - 1] : "{}");
+        // Python-side try/except returns {ok:false} when an exception is caught
+        if (parsed.ok === false) {
+          if (parsed.detail) console.error("[HiveForge] Python worker error:\n", parsed.detail);
+          finish({ ok: false, error: parsed.error || "Python worker error", detail: parsed.detail || null });
+          return;
+        }
+        if (stderr.trim()) console.error("[HiveForge] Python worker stderr:\n", stderr.trim().slice(0, 1000));
         finish({ ok: true, result: parsed, warning: stderr.trim() || null });
       } catch (_err) {
+        if (stderr.trim()) console.error("[HiveForge] Python worker stderr:\n", stderr.trim().slice(0, 1000));
         finish({ ok: false, error: stderr.trim() || "Unable to parse Python JSON response" });
       }
     });
@@ -472,11 +480,14 @@ async function runCeoChat(objective, state, budget) {
 async function runBuildWorkflow(projectId, projectName, objective, budget, nudges) {
   return runPythonJson(
     [
-      "import json",
+      "import json, traceback",
       "from hiveforge.business_builder import run_build_workflow",
       "payload = json.loads(input())",
-      "result = run_build_workflow(project_id=payload['project_id'], project_name=payload['project_name'], objective=payload['objective'], budget=payload['budget'], nudges=payload.get('nudges', []))",
-      "print(json.dumps(result, ensure_ascii=True))",
+      "try:",
+      "    result = run_build_workflow(project_id=payload['project_id'], project_name=payload['project_name'], objective=payload['objective'], budget=payload['budget'], nudges=payload.get('nudges', []))",
+      "    print(json.dumps(result, ensure_ascii=True))",
+      "except Exception as exc:",
+      "    print(json.dumps({'ok': False, 'error': str(exc), 'detail': traceback.format_exc()}, ensure_ascii=True))",
     ],
     { project_id: projectId, project_name: projectName, objective, budget, nudges: nudges || [] },
   );
@@ -485,11 +496,14 @@ async function runBuildWorkflow(projectId, projectName, objective, budget, nudge
 async function runCeoNudge(projectId, projectName, message, budget) {
   return runPythonJson(
     [
-      "import json",
+      "import json, traceback",
       "from hiveforge.business_builder import run_ceo_nudge",
       "payload = json.loads(input())",
-      "result = run_ceo_nudge(project_id=payload['project_id'], project_name=payload['project_name'], message=payload['message'], budget=payload['budget'])",
-      "print(json.dumps(result, ensure_ascii=True))",
+      "try:",
+      "    result = run_ceo_nudge(project_id=payload['project_id'], project_name=payload['project_name'], message=payload['message'], budget=payload['budget'])",
+      "    print(json.dumps(result, ensure_ascii=True))",
+      "except Exception as exc:",
+      "    print(json.dumps({'ok': False, 'error': str(exc), 'detail': traceback.format_exc()}, ensure_ascii=True))",
     ],
     { project_id: projectId, project_name: projectName, message, budget },
   );
@@ -736,7 +750,8 @@ const server = http.createServer(async (req, res) => {
 
         const buildResult = await runBuildWorkflow(projectId, project.name, objective, budget, nudges);
         if (!buildResult.ok) {
-          sendJson(res, 500, { ok: false, error: buildResult.error });
+          if (buildResult.detail) console.error("[HiveForge:build] Error detail:\n", buildResult.detail);
+          sendJson(res, 500, { ok: false, error: buildResult.error, detail: buildResult.detail || null });
           return;
         }
 
@@ -750,6 +765,7 @@ const server = http.createServer(async (req, res) => {
             ok: false,
             error: "Build workflow returned no pipeline steps and no artifacts.",
             warning: buildResult.warning || null,
+            detail: buildResult.detail || buildResult.warning || null,
           });
           return;
         }
@@ -776,7 +792,8 @@ const server = http.createServer(async (req, res) => {
 
         const nudgeResult = await runCeoNudge(projectId, project.name, message, budget);
         if (!nudgeResult.ok) {
-          sendJson(res, 500, { ok: false, error: nudgeResult.error });
+          if (nudgeResult.detail) console.error("[HiveForge:nudge] Error detail:\n", nudgeResult.detail);
+          sendJson(res, 500, { ok: false, error: nudgeResult.error, detail: nudgeResult.detail || null });
           return;
         }
 

@@ -1473,8 +1473,15 @@ async function runBuild() {
           })),
         },
       };
-      ceoResponse.textContent = `Error: ${data.error || "build failed"}`;
-      showToast(`Build failed: ${data.error || "unknown error"}`, "error", 4800);
+      const buildErrMsg = data.error || "build failed";
+      if (data.detail) {
+        console.error("[HiveForge build error]", data.detail);
+        const snippet = data.detail.split("\n").filter(Boolean).slice(-4).join("\n");
+        ceoResponse.textContent = `Error: ${buildErrMsg}\n\n[Diagnostic]\n${snippet}`;
+      } else {
+        ceoResponse.textContent = `Error: ${buildErrMsg}`;
+      }
+      showToast(`Build failed: ${buildErrMsg}`, "error", 4800);
       renderProjectViews();
       return;
     }
